@@ -30,3 +30,64 @@
 *.exe
 *.out
 *.app
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Logs
+logs/
+*.log
+*.log.*
+
+# Vue.js
+dist/
+!.env
+.env.local
+.env.*.local
+
+# WebAssembly
+src/wasm/build/
+*.wasm
+*.js.map
+
+# IDE/Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+*.bak
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.pid
+*.seed
+*.pid.lock
+
+# Compiled Object files
+*.o
+*.obj
+*.lo
+*.slo
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Compiled Static libraries
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app

@@ -1,0 +1,21 @@
+{
+    "name": "wasm-boids",
+    "version": "1.0.0",
+    "description": "Boids simulation using WebAssembly and Vue.js",
+    "main": "index.js",
+    "scripts": {
+        "build-wasm": "emcc src/wasm/main.cpp src/wasm/entry.cpp -o src/wasm/build/wasm_boids.js -s MODULARIZE=1 -s EXPORT_NAME=createBoidsModule -s ENVIRONMENT=web -s ALLOW_MEMORY_GROWTH=1 -s USE_PTHREADS=1 -s PTHREAD_POOL_SIZE=4 -O3 -sASSERTIONS=1 -O3 -s EXPORT_ES6=1 -s EXPORTED_RUNTIME_METHODS=ccall,cwrap -s EXPORTED_FUNCTIONS=_malloc,_free",
+        "serve": "concurrently \"nodemon --watch src/wasm --ext cpp,h --exec \\\"npm run build-wasm\\\"\" \"wait-on src/wasm/build/wasm_boids.js && vue-cli-service serve\"",
+        "build": "npm run build-wasm && vue-cli-service build"
+    },
+    "dependencies": {
+        "vue": "^3.3.0"
+    },
+    "devDependencies": {
+        "@vue/cli-service": "^5.0.0",
+        "copy-webpack-plugin": "^13.0.0",
+        "nodemon": "^3.1.10",
+        "npm-run-all": "^4.1.5",
+        "wait-on": "^8.0.3"
+    }
+}
