@@ -4,7 +4,7 @@
     "description": "Boids simulation using WebAssembly and Vue.js",
     "main": "index.js",
     "scripts": {
-        "build-wasm": "emcc src/wasm/main.cpp src/wasm/entry.cpp -o src/wasm/build/wasm_boids.js -s MODULARIZE=1 -s EXPORT_NAME=createBoidsModule -s ENVIRONMENT=web -s ALLOW_MEMORY_GROWTH=1 -s USE_PTHREADS=1 -s PTHREAD_POOL_SIZE=4 -O3 -sASSERTIONS=1 -O3 -s EXPORT_ES6=1 -s EXPORTED_RUNTIME_METHODS=ccall,cwrap -s EXPORTED_FUNCTIONS=_malloc,_free",
+        "build-wasm": "emcc src/wasm/main.cpp src/wasm/entry.cpp src/wasm/boids_tree.cpp -o src/wasm/build/wasm_boids.js -s MODULARIZE=1 -s EXPORT_NAME=createBoidsModule -s ENVIRONMENT=web,worker -s ALLOW_MEMORY_GROWTH=1 -s USE_PTHREADS=1 -s PTHREAD_POOL_SIZE=4 -O3 -s ASSERTIONS=1 -s EXPORT_ES6=1 -s EXPORTED_RUNTIME_METHODS=ccall,cwrap -s EXPORTED_FUNCTIONS=_malloc,_free --bind",
         "serve": "concurrently \"nodemon --watch src/wasm --ext cpp,h --exec \\\"npm run build-wasm\\\"\" \"wait-on src/wasm/build/wasm_boids.js && vue-cli-service serve\"",
         "build": "npm run build-wasm && vue-cli-service build"
     },

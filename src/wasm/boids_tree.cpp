@@ -39,7 +39,7 @@ public:
 
     BoidTree() : root(nullptr) {}
 
-    void build(std::vector<Boid> boids, int depth = 0) {
+    void build(std::vector<Boid>& boids, int depth = 0) {
         root = buildRecursive(boids, depth);
     }
 

@@ -33,16 +33,24 @@ export default {
   methods: {
     async initializeWasm() {
       if (!this.wasmModule) {
-        this.wasmModule = await Module();
-        this.boidTree = new this.wasmModule.BoidTree();
+        try {
+          this.wasmModule = await Module();
+          if (!this.wasmModule.BoidTree) {
+            throw new Error('BoidTree is not available in the WebAssembly module.');
+          }
+          this.boidTree = new this.wasmModule.BoidTree();
+        } catch (error) {
+          console.error('Failed to initialize WebAssembly module:', error);
+        }
       }
     },
     async startSimulation() {
       await this.initializeWasm();
-
-      const boids = new this.wasmModule.VectorBoid();
+console.log(Object.keys(this.wasmModule)); 
+      const boids = this.wasmModule.VectorBoid();
+      console.log(Object.keys(this.wasmModule)); 
       for (let i = 0; i < this.settings.flockSize; i++) {
-        const boid = new this.wasmModule.Boid();
+        const boid = this.wasmModule.Boid();
         boid.position = { x: Math.random() * 800, y: Math.random() * 600, z: 0 };
         boid.id = i;
         boids.push_back(boid); // VectorBoid に追加
