@@ -11,6 +11,9 @@ createBoidsModule({
     },
 }).then((Module) => {
     console.log('Wasm module initialized:', Module);
-});
 
-createApp(App).mount('#app');
+    // Vue アプリケーションに WebAssembly モジュールを渡す
+    const app = createApp(App);
+    app.provide('wasmModule', Module); // provide を使用してモジュールを渡す
+    app.mount('#app');
+});

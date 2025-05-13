@@ -9,6 +9,7 @@
         "build": "npm run build-wasm && vue-cli-service build"
     },
     "dependencies": {
+        "three": "^0.176.0",
         "vue": "^3.3.0"
     },
     "devDependencies": {

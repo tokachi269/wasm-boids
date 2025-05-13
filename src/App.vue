@@ -3,80 +3,112 @@
     <h1>Boids Simulation</h1>
     <Settings :settings="settings" />
     <div class="info">
-      <p>Boids Count: {{ boidCount }}</p>
-      <p>Simulation Time: {{ simulationTime }}s</p>
+      <p>Boids Count: {{ settings.flockSize }}</p>
     </div>
-    <canvas id="boidsCanvas" width="800" height="600"></canvas>
+    <div ref="threeContainer" class="three-container" />
   </div>
 </template>
 
-<script>
+<script setup>
+import { inject, onMounted, reactive, ref } from 'vue';
+import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import Settings from './components/Settings.vue';
-import Module from './wasm/build/wasm_boids.js'; // WebAssemblyモジュールをインポート
 
-export default {
-  components: {
-    Settings,
-  },
-  data() {
-    return {
-      settings: {
-        speed: 5,
-        flockSize: 100,
-      },
-      boidCount: 0,
-      simulationTime: 0,
-      wasmModule: null,
-      boidTree: null,
+const wasmModule = inject('wasmModule');
+if (!wasmModule) {
+  console.error('wasmModule not provided');
+}
+
+const settings = reactive({
+  speed: 5,
+  flockSize: 1000,
+});
+
+const threeContainer = ref(null);
+let scene, camera, renderer, controls;
+let boidMeshes = [];
+let boidTree = null;
+
+function initThreeJS() {
+  const width = window.innerWidth;
+  const height = window.innerHeight;
+
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
+  camera.position.set(0, 0, 500);
+  camera.lookAt(0, 0, 0);
+
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(width, height);
+  threeContainer.value.appendChild(renderer.domElement);
+
+  controls = new OrbitControls(camera, renderer.domElement);
+
+  const ambientLight = new THREE.AmbientLight(0xffffff, 1.0);
+  scene.add(ambientLight);
+
+  const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+  directionalLight.position.set(0, 0, 1).normalize();
+  scene.add(directionalLight);
+}
+
+function drawBoids(boids) {
+  const count = boids.size();
+  while (boidMeshes.length < count) {
+    const geometry = new THREE.SphereGeometry(1, 16, 16);
+    const material = new THREE.MeshStandardMaterial({ color: 0x00aaff });
+    const mesh = new THREE.Mesh(geometry, material);
+    scene.add(mesh);
+    boidMeshes.push(mesh);
+  }
+
+  for (let i = 0; i < count; i++) {
+    const boid = boids.get(i);
+    boidMeshes[i].position.set(boid.position.x, boid.position.y, boid.position.z);
+  }
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  if (boidTree) {
+    boidTree.update(1.0);
+    const boids = boidTree.getBoids();
+    drawBoids(boids);
+  }
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+function startSimulation() {
+  const BoidTree = wasmModule.BoidTree;
+  const VectorBoid = wasmModule.VectorBoid;
+  const Boid = wasmModule.Boid;
+
+  const boids = new VectorBoid();
+  for (let i = 0; i < settings.flockSize; i++) {
+    const boid = new Boid();
+    boid.position = {
+      x: Math.random() * 400 - 200,
+      y: Math.random() * 400 - 200,
+      z: Math.random() * 400 - 200,
     };
-  },
-  methods: {
-    async initializeWasm() {
-      if (!this.wasmModule) {
-        try {
-          this.wasmModule = await Module();
-          if (!this.wasmModule.BoidTree) {
-            throw new Error('BoidTree is not available in the WebAssembly module.');
-          }
-          this.boidTree = new this.wasmModule.BoidTree();
-        } catch (error) {
-          console.error('Failed to initialize WebAssembly module:', error);
-        }
-      }
-    },
-    async startSimulation() {
-      await this.initializeWasm();
-console.log(Object.keys(this.wasmModule)); 
-      const boids = this.wasmModule.VectorBoid();
-      console.log(Object.keys(this.wasmModule)); 
-      for (let i = 0; i < this.settings.flockSize; i++) {
-        const boid = this.wasmModule.Boid();
-        boid.position = { x: Math.random() * 800, y: Math.random() * 600, z: 0 };
-        boid.id = i;
-        boids.push_back(boid); // VectorBoid に追加
-      }
+    boid.velocity = { x: 0, y: 0, z: 0 };
+    boid.acceleration = { x: 0, y: 0, z: 0 };
+    boid.id = i;
+    boid.stress = 0.0;
+    boids.push_back(boid);
+  }
 
-      this.boidTree.build(boids); // VectorBoid を渡す
-      this.drawBoids(boids);
-    },
-    drawBoids(boids) {
-      const canvas = document.getElementById('boidsCanvas');
-      const ctx = canvas.getContext('2d');
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+  boidTree = new BoidTree();
+  boidTree.build(boids, 16, 0);
+  animate();
+}
 
-      boids.forEach((boid) => {
-        ctx.beginPath();
-        ctx.arc(boid.position.x, boid.position.y, 5, 0, 2 * Math.PI);
-        ctx.fillStyle = 'blue';
-        ctx.fill();
-        ctx.stroke();
-      });
-    },
-  },
-  mounted() {
-    this.startSimulation(); // コンポーネントがマウントされたらシミュレーションを開始
-  },
-};
+onMounted(() => {
+  initThreeJS();
+  startSimulation();
+});
 </script>
 
 <style>
@@ -93,10 +125,11 @@ console.log(Object.keys(this.wasmModule));
   margin-top: 20px;
 }
 
-canvas {
-  display: block;
+.three-container {
   width: 100vw;
   height: 100vh;
+  display: block;
   border: 1px solid black;
+  overflow: hidden;
 }
 </style>
