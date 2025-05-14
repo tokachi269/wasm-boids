@@ -23,6 +23,9 @@ if (!wasmModule) {
 const settings = reactive({
   speed: 5,
   flockSize: 1000,
+  cohesion: 0.01,
+  separation: 0.1,
+  alignment: 0.05,
 });
 
 const threeContainer = ref(null);
@@ -56,7 +59,7 @@ function initThreeJS() {
 function drawBoids(boids) {
   const count = boids.size();
   while (boidMeshes.length < count) {
-    const geometry = new THREE.SphereGeometry(1, 16, 16);
+    const geometry = new THREE.SphereGeometry(1, 4, 4);
     const material = new THREE.MeshStandardMaterial({ color: 0x00aaff });
     const mesh = new THREE.Mesh(geometry, material);
     scene.add(mesh);
@@ -89,19 +92,31 @@ function startSimulation() {
   for (let i = 0; i < settings.flockSize; i++) {
     const boid = new Boid();
     boid.position = {
-      x: Math.random() * 400 - 200,
-      y: Math.random() * 400 - 200,
-      z: Math.random() * 400 - 200,
+      x: Math.random() * 200 - 100,
+      y: Math.random() * 200 - 100,
+      z: Math.random() * 200 - 100,
     };
-    boid.velocity = { x: 0, y: 0, z: 0 };
+    boid.velocity = {
+      x: (Math.random() - 0.5) * 0.5,
+      y: (Math.random() - 0.5) * 0.5,
+      z: (Math.random() - 0.5) * 0.5,
+    };
     boid.acceleration = { x: 0, y: 0, z: 0 };
     boid.id = i;
     boid.stress = 0.0;
+
+    // settingsからSpeciesParamsを設定
+    boid.params = {
+      cohesion: settings.cohesion,
+      separation: settings.separation,
+      alignment: settings.alignment,
+    };
+
     boids.push_back(boid);
   }
 
   boidTree = new BoidTree();
-  boidTree.build(boids, 16, 0);
+  boidTree.build(boids, 32, 0);
   animate();
 }
 
