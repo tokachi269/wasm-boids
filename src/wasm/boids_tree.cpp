@@ -1,3 +1,4 @@
+#include "vec3.h"
 #include <vector>
 #include <cmath>
 #include <queue>
@@ -8,87 +9,14 @@
 
 using namespace emscripten;
 
-struct Vec3
-{
-    float x, y, z;
-    Vec3() : x(0), y(0), z(0) {}
-    Vec3(float x, float y, float z) : x(x), y(y), z(z) {}
-
-    float distance(const Vec3 &other) const
-    {
-        float dx = x - other.x;
-        float dy = y - other.y;
-        float dz = z - other.z;
-        return std::sqrt(dx * dx + dy * dy + dz * dz);
-    }
-
-    Vec3 operator+(const Vec3 &o) const { return Vec3(x + o.x, y + o.y, z + o.z); }
-    Vec3 operator-(const Vec3 &o) const { return Vec3(x - o.x, y - o.y, z - o.z); }
-    Vec3 operator/(float v) const { return Vec3(x / v, y / v, z / v); }
-    Vec3 operator*(float v) const { return Vec3(x * v, y * v, z * v); }
-
-    Vec3 &operator+=(const Vec3 &o)
-    {
-        x += o.x;
-        y += o.y;
-        z += o.z;
-        return *this;
-    }
-
-    Vec3 &operator-=(const Vec3 &o)
-    {
-        x -= o.x;
-        y -= o.y;
-        z -= o.z;
-        return *this;
-    }
-
-    float length() const
-    {
-        return std::sqrt(x * x + y * y + z * y);
-    }
-
-    Vec3 normalized() const
-    {
-        float len = length();
-        if (len > 1e-6f)
-            return Vec3(x / len, y / len, z / len);
-        return Vec3();
-    }
-
-    float dot(const Vec3 &o) const
-    {
-        return x * o.x + y * o.y + z * o.z;
-    }
-
-    Vec3 cross(const Vec3 &o) const
-    {
-        return Vec3(
-            y * o.z - z * o.y,
-            z * o.x - x * o.z,
-            x * o.y - y * o.x);
-    }
-
-    static Vec3 rotateVector(const Vec3 &vec, const Vec3 &axis, float angle)
-    {
-        // ロドリゲスの回転公式
-        Vec3 k = axis.normalized();
-        float cosA = std::cos(angle);
-        float sinA = std::sin(angle);
-        return vec * cosA +
-               k.cross(vec) * sinA +
-               k * (k.dot(vec)) * (1.0f - cosA);
-    }
-};
-
-struct SpeciesParams
-{
+struct SpeciesParams {
     float cohesion = 0.01f;
     float separation = 0.1f;
     float alignment = 0.05f;
 };
 
-static SpeciesParams defaultSpeciesParams;
+// グローバル共通
+SpeciesParams globalSpeciesParams;
 
 struct Boid
 {
@@ -96,7 +24,6 @@ struct Boid
     int id = 0;
     float stress = 0.0f;
     int speciesId = 0;
-    SpeciesParams params = defaultSpeciesParams;
 };
 
 struct BoidStats
@@ -208,9 +135,9 @@ public:
                 }
                 if (count > 0)
                 {
-                    a.acceleration += ((sumVelocity / count - a.velocity) * a.params.alignment);
-                    a.acceleration += ((sumPosition / count - a.position) * a.params.cohesion);
-                    a.acceleration += (separation * a.params.separation);
+                    a.acceleration += ((sumVelocity / count - a.velocity) * globalSpeciesParams.alignment);
+                    a.acceleration += ((sumPosition / count - a.position) * globalSpeciesParams.cohesion);
+                    a.acceleration += (separation * globalSpeciesParams.separation);
                 }
             }
         }
@@ -244,7 +171,7 @@ public:
                 Vec3 diff = center - other->center;
                 Vec3 separation = diff / (dist * dist);
                 Vec3 align = (other->averageVelocity - averageVelocity) * 1.0f;
-                Vec3 cohes = (other->center - center) * 1.0f;
+                Vec3 cohes = (other->center - center) * 0.5f;
 
                 // このノード配下の全Boid
                 std::vector<Boid *> allBoids;
@@ -318,13 +245,13 @@ public:
                 if (s.count > 0)
                 {
                     /** 整列 (Alignment): 他のBoidの平均速度に合わせる */
-                    align = (s.sumVelocity / s.count - b.velocity) * b.params.alignment;
+                    align = (s.sumVelocity / s.count - b.velocity) * globalSpeciesParams.alignment;
 
                     /** 結合 (Cohesion): 他のBoidの中心に向かう力 */
-                    cohes = ((s.sumPosition / s.count) - b.position) * b.params.cohesion * (1.0f - b.stress);
+                    cohes = ((s.sumPosition / s.count) - b.position) * globalSpeciesParams.cohesion * (1.0f - b.stress);
 
                     /** 集合 (Separation): 他のBoidとの距離を保つ力 */
-                    separ = s.separation * (b.params.separation + b.stress * 0.4f);
+                    separ = s.separation * (globalSpeciesParams.separation + b.stress * 0.4f);
                 }
 
                 /** ストレスに応じた加速の調整 */
@@ -471,6 +398,17 @@ public:
         return {l, r};
     }
 
+    // 親ノードから自身を分割する
+    void splitInPlace() {
+        if (!needsSplit()) return;
+        auto splits = split();
+        this->boids.clear();
+        this->children = splits;
+        for (auto* c : children) c->level = this->level + 1;
+        computeBoundingSphere();
+        // 必要なら親ノードから再帰的に統計量を更新
+    }
+
     // 結合可能か判定
     bool canMergeWith(const BoidUnit& other, float mergeDist = 60.0f, float velThresh = 0.5f, float maxRadius = 120.0f) const {
         if (center.distance(other.center) > mergeDist) return false;
@@ -488,6 +426,18 @@ public:
     void mergeWith(const BoidUnit& other) {
         boids.insert(boids.end(), other.boids.begin(), other.boids.end());
         computeBoundingSphere();
+    }
+
+    // 結合
+    void mergeWith(BoidUnit* other, BoidUnit* parent) {
+        boids.insert(boids.end(), other->boids.begin(), other->boids.end());
+        computeBoundingSphere();
+        // 親ノードのchildrenからotherを除去
+        if (parent) {
+            auto it = std::find(parent->children.begin(), parent->children.end(), other);
+            if (it != parent->children.end()) parent->children.erase(it);
+        }
+        // otherノードのdeleteも検討（メモリ管理注意）
     }
 };
 
@@ -512,9 +462,9 @@ class BoidTree
 public:
     BoidUnit *root;
     int frameCount = 0;
+    std::vector<BoidUnit*> leafCache;
     int splitIndex = 0;
     int mergeIndex = 0;
-    std::vector<BoidUnit*> leafCache; // 葉ノードキャッシュ
 
     BoidTree() : root(nullptr) {}
 
@@ -523,7 +473,7 @@ public:
         root = new BoidUnit();
         root->level = level;
         buildRecursive(root, boids, maxPerUnit, level);
-       // printTree(root); // 木構造を出力
+        printTree(root); // 木構造を出力
     }
 
     void buildRecursive(BoidUnit *node, std::vector<Boid> &boids, int maxPerUnit, int level)
@@ -534,7 +484,7 @@ public:
             node->computeBoundingSphere();
             return;
         }
-        int axis = level % 3;
+        int axis = 2;
         std::sort(boids.begin(), boids.end(), [axis](const Boid &a, const Boid &b)
                   {
             if (axis == 0) return a.position.x < b.position.x;
@@ -552,13 +502,21 @@ public:
         node->computeBoundingSphere();
     }
 
-    void update(float dt = 1.0f)
-    {
+    BoidUnit* findParent(BoidUnit* node, BoidUnit* target) {
+        if (!node || node->children.empty()) return nullptr;
+        for (auto* c : node->children) {
+            if (c == target) return node;
+            BoidUnit* res = findParent(c, target);
+            if (res) return res;
+        }
+        return nullptr;
+    }
+
+    void update(float dt = 1.0f) {
         if (root)
             root->updateRecursive(dt);
 
         frameCount++;
-        // 10フレームごとに葉ノードリストを更新
         if (frameCount % 10 == 0) {
             leafCache.clear();
             collectLeaves(root, leafCache);
@@ -566,37 +524,29 @@ public:
             mergeIndex = 0;
         }
 
-        // 毎フレーム、分割・結合を少しずつ進める
         if (!leafCache.empty()) {
-            // 1フレームで最大2ユニットだけ分割判定
-            for (int i = 0; i < 2 && splitIndex < (int)leafCache.size(); ++i, ++splitIndex) {
+            // 分割
+            for (int i = 0; i < 12 && splitIndex < (int)leafCache.size(); ++i, ++splitIndex) {
                 BoidUnit* u = leafCache[splitIndex];
                 if (u && u->needsSplit()) {
-                    auto splits = u->split();
-                    // 木構造の再構築が必要（ここでは簡易的にbuildし直し）
-                    std::vector<Boid> allBoids;
-                    for (auto* s : splits) {
-                        allBoids.insert(allBoids.end(), s->boids.begin(), s->boids.end());
-                        delete s;
-                    }
-                    build(allBoids, 16, 0);
-                    break; // 1回分割したら今フレームは終了
+                    u->splitInPlace();
+                    leafCache.clear();
+                    collectLeaves(root, leafCache);
+                    break;
                 }
             }
-            // 1フレームで最大2組だけ結合判定
-            for (int i = 0; i < 2 && mergeIndex < (int)leafCache.size(); ++i, ++mergeIndex) {
+            // 結合
+            for (int i = 0; i < 12 && mergeIndex < (int)leafCache.size(); ++i, ++mergeIndex) {
                 for (int j = mergeIndex + 1; j < (int)leafCache.size(); ++j) {
                     BoidUnit* a = leafCache[mergeIndex];
                     BoidUnit* b = leafCache[j];
                     if (a && b && a->canMergeWith(*b)) {
-                        a->mergeWith(*b);
-                        // 再構築
-                        std::vector<Boid> allBoids;
-                        for (auto* u : leafCache) {
-                            if (u != b)
-                                allBoids.insert(allBoids.end(), u->boids.begin(), u->boids.end());
+                        BoidUnit* parent = findParent(root, b);
+                        if (parent) {
+                            a->mergeWith(b, parent);
+                            leafCache.clear();
+                            collectLeaves(root, leafCache);
                         }
-                        build(allBoids, 16, 0);
                         break;
                     }
                 }
@@ -604,10 +554,13 @@ public:
         }
     }
 
-    void collectLeaves(BoidUnit* node, std::vector<BoidUnit*>& leaves) {
+    // 分割判定を局所的に適用
+    void trySplitRecursive(BoidUnit* node) {
         if (!node) return;
-        if (node->isBoidUnit()) leaves.push_back(node);
-        else for (auto* c : node->children) collectLeaves(c, leaves);
+        if (node->isBoidUnit() && node->needsSplit()) {
+            node->splitInPlace();
+        }
+        for (auto* c : node->children) trySplitRecursive(c);
     }
 
     std::vector<Boid> getBoids() const
@@ -633,6 +586,17 @@ public:
             }
         }
     }
+
+    void collectLeaves(const BoidUnit* node, std::vector<BoidUnit*>& leaves) const {
+        if (!node) return;
+        if (node->isBoidUnit()) {
+            leaves.push_back(const_cast<BoidUnit*>(node));
+        } else {
+            for (const auto* child : node->children) {
+                collectLeaves(child, leaves);
+            }
+        }
+    }
 };
 
 EMSCRIPTEN_BINDINGS(my_module)
@@ -654,8 +618,7 @@ EMSCRIPTEN_BINDINGS(my_module)
         .property("acceleration", &Boid::acceleration)
         .property("id", &Boid::id)
         .property("stress", &Boid::stress)
-        .property("speciesId", &Boid::speciesId)
-        .property("params", &Boid::params);
+        .property("speciesId", &Boid::speciesId);
 
     class_<BoidTree>("BoidTree")
         .constructor<>()

@@ -2,23 +2,23 @@
 <template>
   <div class="settings">
     <label>Speed:</label>
-    <input type="range" v-model="settings.speed" min="0" max="10" />
+    <input type="range" v-model="settings.speed" min="0" max="10" step="0.01" />
     <p>Current Speed: {{ settings.speed }}</p>
 
     <label>Flock Size:</label>
-    <input type="number" v-model="settings.flockSize" min="10" max="10000" />
+    <input type="range" v-model="settings.flockSize" min="10" max="10000" step="1" />
     <p>Current Flock Size: {{ settings.flockSize }}</p>
 
     <label>Cohesion:</label>
-    <input type="number" v-model="settings.cohesion" step="0.01" min="0" max="1" />
+    <input type="range" v-model="settings.cohesion" min="0" max="10" step="0.01" />
     <p>Current Cohesion: {{ settings.cohesion }}</p>
 
     <label>Separation:</label>
-    <input type="number" v-model="settings.separation" step="0.01" min="0" max="1" />
+    <input type="range" v-model="settings.separation" min="0" max="10" step="0.01" />
     <p>Current Separation: {{ settings.separation }}</p>
 
     <label>Alignment:</label>
-    <input type="number" v-model="settings.alignment" step="0.01" min="0" max="1" />
+    <input type="range" v-model="settings.alignment" min="0" max="10" step="0.01" />
     <p>Current Alignment: {{ settings.alignment }}</p>
   </div>
 </template>

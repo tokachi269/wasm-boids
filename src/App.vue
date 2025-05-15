@@ -10,7 +10,7 @@
 </template>
 
 <script setup>
-import { inject, onMounted, reactive, ref } from 'vue';
+import { inject, onMounted, reactive, ref, watch } from 'vue';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import Settings from './components/Settings.vue';
@@ -22,8 +22,8 @@ if (!wasmModule) {
 
 const settings = reactive({
   speed: 5,
-  flockSize: 1000,
-  cohesion: 0.01,
+  flockSize: 2000,
+  cohesion: 0.1,
   separation: 0.1,
   alignment: 0.05,
 });
@@ -32,10 +32,21 @@ const threeContainer = ref(null);
 let scene, camera, renderer, controls;
 let boidMeshes = [];
 let boidTree = null;
+let boids = null; // グローバル参照用
+
+const paused = ref(false);
+
+function handleKeydown(e) {
+  if (e.code === 'Space') {
+    paused.value = !paused.value;
+  }
+}
 
 function initThreeJS() {
-  const width = window.innerWidth;
-  const height = window.innerHeight;
+    const width = 1600;
+  const height = 1200;
+  // const width = window.innerWidth;
+  // const height = window.innerHeight;
 
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
@@ -74,7 +85,7 @@ function drawBoids(boids) {
 
 function animate() {
   requestAnimationFrame(animate);
-  if (boidTree) {
+  if (!paused.value && boidTree) {
     boidTree.update(1.0);
     const boids = boidTree.getBoids();
     drawBoids(boids);
@@ -88,7 +99,7 @@ function startSimulation() {
   const VectorBoid = wasmModule.VectorBoid;
   const Boid = wasmModule.Boid;
 
-  const boids = new VectorBoid();
+  boids = new VectorBoid();
   for (let i = 0; i < settings.flockSize; i++) {
     const boid = new Boid();
     boid.position = {
@@ -105,12 +116,8 @@ function startSimulation() {
     boid.id = i;
     boid.stress = 0.0;
 
-    // settingsからSpeciesParamsを設定
-    boid.params = {
-      cohesion: settings.cohesion,
-      separation: settings.separation,
-      alignment: settings.alignment,
-    };
+    // ここを参照にする
+    boid.params = settings; // 参照を渡す
 
     boids.push_back(boid);
   }
@@ -122,8 +129,35 @@ function startSimulation() {
 
 onMounted(() => {
   initThreeJS();
+
+  if (
+    wasmModule &&
+    wasmModule.globalSpeciesParams
+  ) {
+    wasmModule.globalSpeciesParams.cohesion = settings.cohesion;
+    wasmModule.globalSpeciesParams.separation = settings.separation;
+    wasmModule.globalSpeciesParams.alignment = settings.alignment;
+  }
+
+  window.addEventListener('keydown', handleKeydown);
+
   startSimulation();
 });
+
+// settingsの変更をwasmModuleに反映
+watch(
+  () => [settings.cohesion, settings.separation, settings.alignment],
+  ([cohesion, separation, alignment]) => {
+    if (
+      wasmModule &&
+      wasmModule.globalSpeciesParams
+    ) {
+      wasmModule.globalSpeciesParams.cohesion = cohesion;
+      wasmModule.globalSpeciesParams.separation = separation;
+      wasmModule.globalSpeciesParams.alignment = alignment;
+    }
+  }
+);
 </script>
 
 <style>
