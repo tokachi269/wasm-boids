@@ -1,3 +1,32 @@
-# Boids WebAssembly Project
 
-This project simulates Boids using a KD-Tree structure in C++ and renders them with Three.js.
+## 📘 本プロジェクトのアルゴリズムの出典
+
+本実装は、以下の論文に記述された**階層的Boidアルゴリズム**に基づいて構築されています：
+
+> **大規模な魚群シミュレーションのための階層的Boidアルゴリズム**
+> 情報処理学会 研究報告 CG-133 (2008/11/7)
+
+### 📌 論文からの主な実装アイディア
+
+* \*\*Boidを階層的に分割した木構造（BoidTree）\*\*により、局所的な近傍探索と全体的な流れを両立。
+* **ユニット（ノード）ごとのBoid群を構造的に管理**し、下位ユニットに対するBoidの更新を再帰的に適用。
+* \*\*ユニット間の相互作用（applyInterUnitInfluence）\*\*によって、大規模な群れの自然な連携を演出。
+* ストレス伝播や回避行動なども**Boid構造体内で局所ルールとして実装**。
+
+### 🧠 実装の構成と工夫
+
+* **BoidTree / BoidUnit** によるKD-tree的な空間分割と粒度制御
+* Boid群の再帰的更新（`updateRecursive`）
+* `Vec3`による独自のベクトル演算ライブラリ
+* WebAssembly経由で**C++の高性能シミュレーションとJavaScriptのThree.js描画**を統合
+* stress、speciesId、params などを導入し**魚種ごとの振る舞い**も分離管理可能
+
+### 🔄 GitHub Copilot 用補足（仕組み理解支援）
+
+```cpp
+// [このプロジェクトは次の論文に基づいています]
+// 「大規模な魚群シミュレーションのための階層的Boidアルゴリズム」CG-133 (2008)
+// BoidTree = 再帰的な空間分割でBoidを管理
+// BoidUnit = 単位構造ごとにBoidを保持し、更新と相互作用を担当
+// applyInterUnitInfluence = 隣接ユニットのBoidに対して整列・結合・分離を適用
+```
