@@ -9,14 +9,30 @@
 
 using namespace emscripten;
 
-struct SpeciesParams {
+struct SpeciesParams
+{
     float cohesion = 0.01f;
     float separation = 0.1f;
     float alignment = 0.05f;
+    float maxSpeed = 1.0f;
+    float minSpeed = 0.1f;
+    float maxTurnAngle = 0.01f;
+    float separationRange = 10.0f;
+    float alignmentRange = 30.0f;
+    float cohesionRange = 50.0f;
 };
 
 // グローバル共通
 SpeciesParams globalSpeciesParams;
+
+SpeciesParams getGlobalSpeciesParams()
+{
+    return globalSpeciesParams;
+}
+void setGlobalSpeciesParams(const SpeciesParams &params)
+{
+    globalSpeciesParams = params;
+}
 
 struct Boid
 {
@@ -162,11 +178,8 @@ public:
             float dist = center.distance(other->center);
             if (dist < 400.0f && dist > 0.01f)
             {
-                // std::cout << "[Unit-Unit] level=" << level
-                //           << " <-> " << other->level
-                //           << " | center=(" << center.x << "," << center.y << "," << center.z << ")"
-                //           << " <-> (" << other->center.x << "," << other->center.y << "," << other->center.z << ")"
-                //           << " | dist=" << dist << std::endl;
+                float influence = 1.0f / (dist * dist + 1.0f); // 距離減衰
+                float scale = influence;                       // ノードサイズ依存をやめる
 
                 Vec3 diff = center - other->center;
                 Vec3 separation = diff / (dist * dist);
@@ -212,17 +225,12 @@ public:
                     }
                 }
 
-                float scale = std::sqrt((float)allBoids.size() * otherBoids.size()) / 10.0f;
-                if (scale < 1.0f)
-                    scale = 1.0f;
-
                 // 影響を加算
                 for (Boid *b : allBoids)
                 {
                     b->acceleration += align * scale;
                     b->acceleration += cohes * scale;
                     b->acceleration += separation * 0.1f * scale;
-                    // std::cout << "[Unit-Unit-Effect] id=" << b->id << " scale=" << scale << std::endl;
                 }
                 for (Boid *b : otherBoids)
                 {
@@ -238,38 +246,72 @@ public:
     {
         if (isBoidUnit())
         {
+            // 1. まず全Boidの合計値を計算
+            Vec3 totalVelocity, totalPosition;
+            for (const auto &b : boids)
+            {
+                totalVelocity += b.velocity;
+                totalPosition += b.position;
+            }
+
+            // 2. 各Boidごとに「自分以外の合計」を使って計算
             for (auto &b : boids)
             {
-                BoidStats s = computeBoidStats(b, boids);
-                Vec3 align, cohes, separ;
-                if (s.count > 0)
+                int n = (int)boids.size() - 1;
+                if (n <= 0)
+                    continue;
+
+                Vec3 sumVelocity, sumPosition, separation;
+                int alignCount = 0, cohesCount = 0, separCount = 0;
+                float stress = b.stress;
+
+                // 距離閾値（例: separation=10, alignment=30, cohesion=50）
+                float separRange = globalSpeciesParams.separationRange;
+                float alignRange = globalSpeciesParams.alignmentRange;
+                float cohesRange = globalSpeciesParams.cohesionRange;
+
+                for (const auto &nboid : boids)
                 {
-                    /** 整列 (Alignment): 他のBoidの平均速度に合わせる */
-                    align = (s.sumVelocity / s.count - b.velocity) * globalSpeciesParams.alignment;
+                    if (nboid.id == b.id)
+                        continue;
+                    float dist = b.position.distance(nboid.position);
 
-                    /** 結合 (Cohesion): 他のBoidの中心に向かう力 */
-                    cohes = ((s.sumPosition / s.count) - b.position) * globalSpeciesParams.cohesion * (1.0f - b.stress);
-
-                    /** 集合 (Separation): 他のBoidとの距離を保つ力 */
-                    separ = s.separation * (globalSpeciesParams.separation + b.stress * 0.4f);
+                    // 分離
+                    if (dist < separRange && dist > 0.01f)
+                    {
+                        Vec3 diff = b.position - nboid.position;
+                        separation += (diff / (dist * dist));
+                        separCount++;
+                        stress += (nboid.stress - b.stress) * 0.1f;
+                    }
+                    // 整列
+                    if (dist < alignRange)
+                    {
+                        sumVelocity += nboid.velocity;
+                        alignCount++;
+                    }
+                    // 凝集
+                    if (dist < cohesRange)
+                    {
+                        sumPosition += nboid.position;
+                        cohesCount++;
+                    }
                 }
 
-                /** ストレスに応じた加速の調整 */
+                // ルール適用
+                Vec3 align = alignCount > 0 ? ((sumVelocity / alignCount - b.velocity) * globalSpeciesParams.alignment) : Vec3();
+                Vec3 cohes = cohesCount > 0 ? ((sumPosition / cohesCount - b.position) * globalSpeciesParams.cohesion * (1.0f - b.stress)) : Vec3();
+                Vec3 separ = separation * (globalSpeciesParams.separation + b.stress * 0.4f);
+
                 float boost = 1.0f + b.stress * 0.8f;
+                b.acceleration += align * boost;
+                b.acceleration += cohes * boost;
+                b.acceleration += separ * boost;
 
-                // 微小なランダム揺らぎ（5フレームに1回、Boidごとにずらす）
-                int jitterSeed = rand();
-                if ((jitterSeed + b.id) % 5 == 0)
-                {
-                    Vec3 jitter(
-                        ((rand() % 2001) - 1000) / 1000.0f,
-                        ((rand() % 2001) - 1000) / 1000.0f,
-                        ((rand() % 2001) - 1000) / 1000.0f);
-                    b.acceleration += jitter;
-                }
+                // ...（以降は既存の速度・位置更新処理）...
                 /** 速度の更新 */
                 Vec3 desiredVelocity = b.velocity + b.acceleration * dt;
-                float maxTurnAngle = 0.01f; // ラジアン/フレーム
+                float maxTurnAngle = globalSpeciesParams.maxTurnAngle;
                 float speed = desiredVelocity.length();
                 if (speed > 0.001f)
                 {
@@ -291,10 +333,17 @@ public:
                 }
 
                 /** 最大速度の制限 */
-                float maxSpeed = 1.0f;
+                float maxSpeed = globalSpeciesParams.maxSpeed;
                 if (speed > maxSpeed)
                 {
                     b.velocity = b.velocity * (maxSpeed / speed);
+                }
+
+                // ...既存の最大速度制限の直後に追加...
+                float minSpeed = globalSpeciesParams.minSpeed;
+                if (speed < minSpeed && speed > 0.0001f)
+                {
+                    b.velocity = b.velocity * (minSpeed / speed);
                 }
 
                 // 速度方向に微小な推進力
@@ -310,7 +359,7 @@ public:
                 b.stress = std::max(0.0f, b.stress - 0.005f);
             }
 
-            /** 中心位置と平均速度の再計算 */
+            // 中心・平均速度の再計算はここで一度だけ
             center = averageVelocity = Vec3();
             for (const auto &b : boids)
             {
@@ -351,91 +400,202 @@ public:
     }
 
     // 分割が必要か判定
-    bool needsSplit(float splitRadius = 80.0f, float directionVarThresh = 0.5f) const {
-        if (radius > splitRadius) return true;
+    bool needsSplit(float splitRadius = 40.0f, float directionVarThresh = 0.5f) const
+    {
+        if (radius > splitRadius)
+            return true;
         // 方向のバラつき判定
-        if (boids.size() > 1) {
+        if (boids.size() > 1)
+        {
             Vec3 avg = Vec3();
-            for (const auto& b : boids) avg += b.velocity.normalized();
+            for (const auto &b : boids)
+                avg += b.velocity.normalized();
             avg = avg / boids.size();
             float var = 0.0f;
-            for (const auto& b : boids)
+            for (const auto &b : boids)
                 var += (b.velocity.normalized() - avg).length();
             var /= boids.size();
-            if (var > directionVarThresh) return true;
+            if (var > directionVarThresh)
+                return true;
         }
         return false;
     }
 
-    // 2分割（例：最大分散軸で分割）
-    std::vector<BoidUnit*> split() {
+    // 2分割（例：最大分散軸で分割）→ 任意分割
+    std::vector<BoidUnit *> split(int numSplits = 2)
+    {
         int axis = 0;
         float maxVar = 0.0f;
-        for (int i = 0; i < 3; ++i) {
+        for (int i = 0; i < 3; ++i)
+        {
             float mean = 0, var = 0;
-            for (const auto& b : boids)
-                mean += (i==0?b.position.x:(i==1?b.position.y:b.position.z));
+            for (const auto &b : boids)
+                mean += (i == 0 ? b.position.x : (i == 1 ? b.position.y : b.position.z));
             mean /= boids.size();
-            for (const auto& b : boids) {
-                float v = (i==0?b.position.x:(i==1?b.position.y:b.position.z)) - mean;
-                var += v*v;
+            for (const auto &b : boids)
+            {
+                float v = (i == 0 ? b.position.x : (i == 1 ? b.position.y : b.position.z)) - mean;
+                var += v * v;
             }
-            if (var > maxVar) { maxVar = var; axis = i; }
+            if (var > maxVar)
+            {
+                maxVar = var;
+                axis = i;
+            }
         }
-        std::vector<Boid> left, right;
-        float mid = 0;
-        for (const auto& b : boids)
-            mid += (axis==0?b.position.x:(axis==1?b.position.y:b.position.z));
-        mid /= boids.size();
-        for (const auto& b : boids) {
-            if ((axis==0?b.position.x:(axis==1?b.position.y:b.position.z)) < mid)
-                left.push_back(b);
-            else
-                right.push_back(b);
+        // min, maxを求めて等間隔で分割
+        float minVal = std::numeric_limits<float>::max();
+        float maxVal = std::numeric_limits<float>::lowest();
+        for (const auto &b : boids)
+        {
+            float v = (axis == 0 ? b.position.x : (axis == 1 ? b.position.y : b.position.z));
+            minVal = std::min(minVal, v);
+            maxVal = std::max(maxVal, v);
         }
-        BoidUnit* l = new BoidUnit(); l->boids = left; l->computeBoundingSphere();
-        BoidUnit* r = new BoidUnit(); r->boids = right; r->computeBoundingSphere();
-        return {l, r};
+        float interval = (maxVal - minVal) / numSplits;
+        std::vector<std::vector<Boid>> groups(numSplits);
+        for (const auto &b : boids)
+        {
+            float v = (axis == 0 ? b.position.x : (axis == 1 ? b.position.y : b.position.z));
+            int idx = std::min(numSplits - 1, int((v - minVal) / interval));
+            groups[idx].push_back(b);
+        }
+        std::vector<BoidUnit *> result;
+        for (auto &group : groups)
+        {
+            if (!group.empty())
+            {
+                BoidUnit *unit = new BoidUnit();
+                unit->boids = group;
+                unit->computeBoundingSphere();
+                result.push_back(unit);
+            }
+        }
+        return result;
+    }
+
+    // k-means風クラスタリングで近いもの同士をグループ化
+    std::vector<BoidUnit *> splitByClustering(int numClusters = 4)
+    {
+        if ((int)boids.size() < numClusters)
+            numClusters = boids.size();
+        if (numClusters < 2)
+            numClusters = 2;
+
+        // 初期中心をランダム選択
+        std::vector<Vec3> centers;
+        std::vector<Boid> seeds = boids;
+        for (int i = 0; i < numClusters; ++i)
+            centers.push_back(seeds[i].position);
+
+        std::vector<int> assignments(boids.size(), 0);
+        for (int iter = 0; iter < 5; ++iter)
+        { // 反復回数少なめ
+            // 割り当て
+            for (size_t i = 0; i < boids.size(); ++i)
+            {
+                float minDist = 1e9;
+                int best = 0;
+                for (int k = 0; k < numClusters; ++k)
+                {
+                    float d = boids[i].position.distance(centers[k]);
+                    if (d < minDist)
+                    {
+                        minDist = d;
+                        best = k;
+                    }
+                }
+                assignments[i] = best;
+            }
+            // 中心再計算
+            std::vector<Vec3> newCenters(numClusters, Vec3());
+            std::vector<int> counts(numClusters, 0);
+            for (size_t i = 0; i < boids.size(); ++i)
+            {
+                newCenters[assignments[i]] += boids[i].position;
+                counts[assignments[i]]++;
+            }
+            for (int k = 0; k < numClusters; ++k)
+            {
+                if (counts[k] > 0)
+                    newCenters[k] = newCenters[k] / counts[k];
+                else
+                    newCenters[k] = centers[k];
+            }
+            centers = newCenters;
+        }
+        // グループ分け
+        std::vector<std::vector<Boid>> groups(numClusters);
+        for (size_t i = 0; i < boids.size(); ++i)
+        {
+            groups[assignments[i]].push_back(boids[i]);
+        }
+        // BoidUnit生成
+        std::vector<BoidUnit *> result;
+        for (auto &group : groups)
+        {
+            if (!group.empty())
+            {
+                BoidUnit *unit = new BoidUnit();
+                unit->boids = group;
+                unit->computeBoundingSphere();
+                result.push_back(unit);
+            }
+        }
+        return result;
     }
 
     // 親ノードから自身を分割する
-    void splitInPlace() {
-        if (!needsSplit()) return;
-        auto splits = split();
+    void splitInPlace()
+    {
+        if (!needsSplit())
+            return;
+        // 例: 近いもの同士で最大4グループに分割
+        auto splits = splitByClustering(4);
         this->boids.clear();
         this->children = splits;
-        for (auto* c : children) c->level = this->level + 1;
+        for (auto *c : children)
+            c->level = this->level + 1;
         computeBoundingSphere();
-        // 必要なら親ノードから再帰的に統計量を更新
     }
 
     // 結合可能か判定
-    bool canMergeWith(const BoidUnit& other, float mergeDist = 60.0f, float velThresh = 0.5f, float maxRadius = 120.0f) const {
-        if (center.distance(other.center) > mergeDist) return false;
-        if ((averageVelocity - other.averageVelocity).length() > velThresh) return false;
+    bool canMergeWith(const BoidUnit &other, float mergeDist = 60.0f, float velThresh = 0.5f, float maxRadius = 120.0f) const
+    {
+        if (center.distance(other.center) > mergeDist)
+            return false;
+        if ((averageVelocity - other.averageVelocity).length() > velThresh)
+            return false;
         // 結合後の半径
         Vec3 newCenter = (center * boids.size() + other.center * other.boids.size()) / (boids.size() + other.boids.size());
         float newRadius = 0.0f;
-        for (const auto& b : boids) newRadius = std::max(newRadius, newCenter.distance(b.position));
-        for (const auto& b : other.boids) newRadius = std::max(newRadius, newCenter.distance(b.position));
-        if (newRadius > maxRadius) return false;
+        for (const auto &b : boids)
+            newRadius = std::max(newRadius, newCenter.distance(b.position));
+        for (const auto &b : other.boids)
+            newRadius = std::max(newRadius, newCenter.distance(b.position));
+        if (newRadius > maxRadius)
+            return false;
         return true;
     }
 
     // 結合
-    void mergeWith(const BoidUnit& other) {
+    void mergeWith(const BoidUnit &other)
+    {
         boids.insert(boids.end(), other.boids.begin(), other.boids.end());
         computeBoundingSphere();
     }
 
     // 結合
-    void mergeWith(BoidUnit* other, BoidUnit* parent) {
+    void mergeWith(BoidUnit *other, BoidUnit *parent)
+    {
         boids.insert(boids.end(), other->boids.begin(), other->boids.end());
         computeBoundingSphere();
         // 親ノードのchildrenからotherを除去
-        if (parent) {
+        if (parent)
+        {
             auto it = std::find(parent->children.begin(), parent->children.end(), other);
-            if (it != parent->children.end()) parent->children.erase(it);
+            if (it != parent->children.end())
+                parent->children.erase(it);
         }
         // otherノードのdeleteも検討（メモリ管理注意）
     }
@@ -462,7 +622,7 @@ class BoidTree
 public:
     BoidUnit *root;
     int frameCount = 0;
-    std::vector<BoidUnit*> leafCache;
+    std::vector<BoidUnit *> leafCache;
     int splitIndex = 0;
     int mergeIndex = 0;
 
@@ -502,33 +662,43 @@ public:
         node->computeBoundingSphere();
     }
 
-    BoidUnit* findParent(BoidUnit* node, BoidUnit* target) {
-        if (!node || node->children.empty()) return nullptr;
-        for (auto* c : node->children) {
-            if (c == target) return node;
-            BoidUnit* res = findParent(c, target);
-            if (res) return res;
+    BoidUnit *findParent(BoidUnit *node, BoidUnit *target)
+    {
+        if (!node || node->children.empty())
+            return nullptr;
+        for (auto *c : node->children)
+        {
+            if (c == target)
+                return node;
+            BoidUnit *res = findParent(c, target);
+            if (res)
+                return res;
         }
         return nullptr;
     }
 
-    void update(float dt = 1.0f) {
+    void update(float dt = 1.0f)
+    {
         if (root)
             root->updateRecursive(dt);
 
         frameCount++;
-        if (frameCount % 10 == 0) {
+        if (frameCount % 10 == 0)
+        {
             leafCache.clear();
             collectLeaves(root, leafCache);
             splitIndex = 0;
             mergeIndex = 0;
         }
 
-        if (!leafCache.empty()) {
+        if (!leafCache.empty())
+        {
             // 分割
-            for (int i = 0; i < 12 && splitIndex < (int)leafCache.size(); ++i, ++splitIndex) {
-                BoidUnit* u = leafCache[splitIndex];
-                if (u && u->needsSplit()) {
+            for (int i = 0; i < 12 && splitIndex < (int)leafCache.size(); ++i, ++splitIndex)
+            {
+                BoidUnit *u = leafCache[splitIndex];
+                if (u && u->needsSplit())
+                {
                     u->splitInPlace();
                     leafCache.clear();
                     collectLeaves(root, leafCache);
@@ -536,13 +706,17 @@ public:
                 }
             }
             // 結合
-            for (int i = 0; i < 12 && mergeIndex < (int)leafCache.size(); ++i, ++mergeIndex) {
-                for (int j = mergeIndex + 1; j < (int)leafCache.size(); ++j) {
-                    BoidUnit* a = leafCache[mergeIndex];
-                    BoidUnit* b = leafCache[j];
-                    if (a && b && a->canMergeWith(*b)) {
-                        BoidUnit* parent = findParent(root, b);
-                        if (parent) {
+            for (int i = 0; i < 12 && mergeIndex < (int)leafCache.size(); ++i, ++mergeIndex)
+            {
+                for (int j = mergeIndex + 1; j < (int)leafCache.size(); ++j)
+                {
+                    BoidUnit *a = leafCache[mergeIndex];
+                    BoidUnit *b = leafCache[j];
+                    if (a && b && a->canMergeWith(*b))
+                    {
+                        BoidUnit *parent = findParent(root, b);
+                        if (parent)
+                        {
                             a->mergeWith(b, parent);
                             leafCache.clear();
                             collectLeaves(root, leafCache);
@@ -555,12 +729,16 @@ public:
     }
 
     // 分割判定を局所的に適用
-    void trySplitRecursive(BoidUnit* node) {
-        if (!node) return;
-        if (node->isBoidUnit() && node->needsSplit()) {
+    void trySplitRecursive(BoidUnit *node)
+    {
+        if (!node)
+            return;
+        if (node->isBoidUnit() && node->needsSplit())
+        {
             node->splitInPlace();
         }
-        for (auto* c : node->children) trySplitRecursive(c);
+        for (auto *c : node->children)
+            trySplitRecursive(c);
     }
 
     std::vector<Boid> getBoids() const
@@ -587,17 +765,36 @@ public:
         }
     }
 
-    void collectLeaves(const BoidUnit* node, std::vector<BoidUnit*>& leaves) const {
-        if (!node) return;
-        if (node->isBoidUnit()) {
-            leaves.push_back(const_cast<BoidUnit*>(node));
-        } else {
-            for (const auto* child : node->children) {
+    void collectLeaves(const BoidUnit *node, std::vector<BoidUnit *> &leaves) const
+    {
+        if (!node)
+            return;
+        if (node->isBoidUnit())
+        {
+            leaves.push_back(const_cast<BoidUnit *>(node));
+        }
+        else
+        {
+            for (const auto *child : node->children)
+            {
                 collectLeaves(child, leaves);
             }
         }
     }
 };
+// JSオブジェクトからグローバルパラメータをセット
+void setGlobalSpeciesParamsFromJS(val jsObj)
+{
+    std::cout << "cohesion=" << globalSpeciesParams.cohesion << std::endl;
+    globalSpeciesParams.cohesion = jsObj["cohesion"].as<float>();
+    globalSpeciesParams.separation = jsObj["separation"].as<float>();
+    globalSpeciesParams.alignment = jsObj["alignment"].as<float>();
+    globalSpeciesParams.maxSpeed = jsObj["maxSpeed"].as<float>();
+    globalSpeciesParams.maxTurnAngle = jsObj["maxTurnAngle"].as<float>();
+    globalSpeciesParams.separationRange = jsObj["separationRange"].as<float>();
+    globalSpeciesParams.alignmentRange = jsObj["alignmentRange"].as<float>();
+    globalSpeciesParams.cohesionRange = jsObj["cohesionRange"].as<float>();
+}
 
 EMSCRIPTEN_BINDINGS(my_module)
 {
@@ -609,7 +806,13 @@ EMSCRIPTEN_BINDINGS(my_module)
     value_object<SpeciesParams>("SpeciesParams")
         .field("cohesion", &SpeciesParams::cohesion)
         .field("separation", &SpeciesParams::separation)
-        .field("alignment", &SpeciesParams::alignment);
+        .field("alignment", &SpeciesParams::alignment)
+        .field("maxSpeed", &SpeciesParams::maxSpeed)
+        .field("minSpeed", &SpeciesParams::minSpeed)
+        .field("maxTurnAngle", &SpeciesParams::maxTurnAngle)
+        .field("separationRange", &SpeciesParams::separationRange)
+        .field("alignmentRange", &SpeciesParams::alignmentRange)
+        .field("cohesionRange", &SpeciesParams::cohesionRange);
 
     class_<Boid>("Boid")
         .constructor<>()
@@ -624,7 +827,18 @@ EMSCRIPTEN_BINDINGS(my_module)
         .constructor<>()
         .function("build", &BoidTree::build)
         .function("update", &BoidTree::update)
-        .function("getBoids", &BoidTree::getBoids);
+        .function("getBoids", &BoidTree::getBoids)
+        .property("root", &BoidTree::root, allow_raw_pointers());
+
+    class_<BoidUnit>("BoidUnit")
+        .property("center", &BoidUnit::center)
+        .property("radius", &BoidUnit::radius)
+        .property("children", &BoidUnit::children, allow_raw_pointers());
 
     register_vector<Boid>("VectorBoid");
+    register_vector<BoidUnit *>("VectorBoidUnit");
+
+    function("getGlobalSpeciesParams", &getGlobalSpeciesParams);
+    function("setGlobalSpeciesParams", &setGlobalSpeciesParams);
+    function("setGlobalSpeciesParamsFromJS", &setGlobalSpeciesParamsFromJS);
 }

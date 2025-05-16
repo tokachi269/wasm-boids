@@ -4,8 +4,24 @@
 struct Vec3
 {
     float x, y, z;
-    Vec3() : x(0), y(0), z(0) {}
+
+    // Default constructor
+    Vec3() : x(0.0f), y(0.0f), z(0.0f) {}
+
+    // Parameterized constructor
     Vec3(float x, float y, float z) : x(x), y(y), z(z) {}
+
+    // Assignment operator
+    Vec3 &operator=(const Vec3 &other)
+    {
+        if (this != &other)
+        {
+            x = other.x;
+            y = other.y;
+            z = other.z;
+        }
+        return *this;
+    }
 
     float distance(const Vec3 &other) const
     {

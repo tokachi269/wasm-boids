@@ -5,12 +5,30 @@
     <div class="info">
       <p>Boids Count: {{ settings.flockSize }}</p>
     </div>
+    <div>
+      <label>
+        <input type="checkbox" v-model="showUnits" />
+        Unit可視化
+      </label>
+      <label style="margin-left:1em;">
+        <input type="checkbox" v-model="showUnitSpheres" />
+        スフィアのみ表示
+      </label>
+      <label style="margin-left:1em;">
+        <input type="checkbox" v-model="showUnitLines" />
+        線のみ表示
+      </label>
+      <label style="margin-left:1em;">
+        表示レイヤ下限: <input type="range" min="1" max="20" v-model="unitLayer" />
+        {{ unitLayer }}
+      </label>
+    </div>
     <div ref="threeContainer" class="three-container" />
   </div>
 </template>
 
 <script setup>
-import { inject, onMounted, reactive, ref, watch } from 'vue';
+import { inject, onMounted, reactive, ref, watch, toRaw } from 'vue';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import Settings from './components/Settings.vue';
@@ -21,11 +39,16 @@ if (!wasmModule) {
 }
 
 const settings = reactive({
-  speed: 5,
-  flockSize: 2000,
-  cohesion: 0.1,
+  cohesion: 0.01,
   separation: 0.1,
   alignment: 0.05,
+  maxSpeed: 1.0,
+  maxTurnAngle: 0.01,
+  separationRange: 10.0,
+  alignmentRange: 30.0,
+  cohesionRange: 50.0,
+  speed: 5,
+  flockSize: 2000,
 });
 
 const threeContainer = ref(null);
@@ -36,6 +59,30 @@ let boids = null; // グローバル参照用
 
 const paused = ref(false);
 
+// --- 追加: unit可視化制御 ---
+const showUnits = ref(true);
+const showUnitSpheres = ref(false); // 追加: デフォルトoff
+const showUnitLines = ref(false);   // 追加: デフォルトoff
+const unitLayer = ref(1); // デフォルト1に（最下層のみ表示）
+
+let unitSpheres = [];
+let unitLines = [];
+
+let maxDepth = 1;
+
+// ツリーの最大深さを計算
+function calcMaxDepth(unit, depth = 0) {
+  if (!unit || !unit.children || typeof unit.children.size !== 'function' || unit.children.size() === 0) {
+    return depth;
+  }
+  let max = depth;
+  for (let i = 0; i < unit.children.size(); i++) {
+    const child = unit.children.get(i);
+    max = Math.max(max, calcMaxDepth(child, depth + 1));
+  }
+  return max;
+}
+
 function handleKeydown(e) {
   if (e.code === 'Space') {
     paused.value = !paused.value;
@@ -43,7 +90,7 @@ function handleKeydown(e) {
 }
 
 function initThreeJS() {
-    const width = 1600;
+  const width = 1600;
   const height = 1200;
   // const width = window.innerWidth;
   // const height = window.innerHeight;
@@ -83,12 +130,73 @@ function drawBoids(boids) {
   }
 }
 
+function clearUnitVisuals() {
+  for (const mesh of unitSpheres) scene.remove(mesh);
+  for (const line of unitLines) scene.remove(line);
+  unitSpheres = [];
+  unitLines = [];
+}
+
+// レイヤ制限付き再帰描画
+function drawUnitTree(unit, layer = 0) {
+  // スフィア: スライダで制御（最下層も含めて正しく描画）
+  if (
+    showUnitSpheres.value &&
+    layer >= (maxDepth - unitLayer.value + 1) &&
+    (unit.children == null || unit.children.size() === 0 || layer === maxDepth)
+  ) {
+    // 最下層 or 指定レイヤ以上のノード
+    const color = new THREE.Color().setHSL(0.1, 1, 0.7 - 0.4 * (layer / maxDepth)); // オレンジ系グラデ
+    const geometry = new THREE.SphereGeometry(unit.radius, 16, 16);
+    const material = new THREE.MeshBasicMaterial({
+      color: color,
+      wireframe: true,
+      opacity: 0.3,
+      transparent: true,
+    });
+    const sphere = new THREE.Mesh(geometry, material);
+    sphere.position.set(unit.center.x, unit.center.y, unit.center.z);
+    scene.add(sphere);
+    unitSpheres.push(sphere);
+  }
+
+  // 線: チェックボックスで全て表示、色は深さでグラデ
+  if (showUnitLines.value && unit.children && typeof unit.children.size === 'function' && unit.children.size() > 0) {
+    for (let i = 0; i < unit.children.size(); i++) {
+      const child = unit.children.get(i);
+      const points = [
+        new THREE.Vector3(unit.center.x, unit.center.y, unit.center.z),
+        new THREE.Vector3(child.center.x, child.center.y, child.center.z)
+      ];
+      // 線の色も深さでグラデーション
+      const color = new THREE.Color().setHSL(0.35, 1, 0.7 - 0.4 * (layer / maxDepth)); // 緑系グラデ
+      const lineGeometry = new THREE.BufferGeometry().setFromPoints(points);
+      const line = new THREE.Line(lineGeometry, new THREE.LineBasicMaterial({ color: color }));
+      scene.add(line);
+      unitLines.push(line);
+    }
+  }
+
+  // 再帰
+  if (unit.children && typeof unit.children.size === 'function' && unit.children.size() > 0) {
+    for (let i = 0; i < unit.children.size(); i++) {
+      const child = unit.children.get(i);
+      drawUnitTree(child, layer + 1);
+    }
+  }
+}
+
 function animate() {
   requestAnimationFrame(animate);
   if (!paused.value && boidTree) {
     boidTree.update(1.0);
     const boids = boidTree.getBoids();
     drawBoids(boids);
+    clearUnitVisuals();
+    if (showUnits.value && boidTree.root) {
+      maxDepth = calcMaxDepth(boidTree.root, 0); // 毎フレーム計算でもOK
+      drawUnitTree(boidTree.root, 0);
+    }
   }
   controls.update();
   renderer.render(scene, camera);
@@ -127,6 +235,19 @@ function startSimulation() {
   animate();
 }
 
+function updateParamsFromUI(settings) {
+  const params = new Module.SpeciesParams();
+  params.cohesion = settings.cohesion;
+  params.separation = settings.separation;
+  params.alignment = settings.alignment;
+  params.maxSpeed = settings.maxSpeed;
+  params.maxTurnAngle = settings.maxTurnAngle;
+  params.separationRange = settings.separationRange;
+  params.alignmentRange = settings.alignmentRange;
+  params.cohesionRange = settings.cohesionRange;
+  Module.setGlobalSpeciesParams(params);
+}
+
 onMounted(() => {
   initThreeJS();
 
@@ -146,15 +267,45 @@ onMounted(() => {
 
 // settingsの変更をwasmModuleに反映
 watch(
-  () => [settings.cohesion, settings.separation, settings.alignment],
-  ([cohesion, separation, alignment]) => {
+  () => [
+    settings.cohesion,
+    settings.separation,
+    settings.alignment,
+    settings.maxSpeed,
+    settings.maxTurnAngle,
+    settings.separationRange,
+    settings.alignmentRange,
+    settings.cohesionRange,
+  ],
+  () => {
     if (
       wasmModule &&
-      wasmModule.globalSpeciesParams
+      wasmModule.setGlobalSpeciesParamsFromJS
     ) {
-      wasmModule.globalSpeciesParams.cohesion = cohesion;
-      wasmModule.globalSpeciesParams.separation = separation;
-      wasmModule.globalSpeciesParams.alignment = alignment;
+      // プレーンなオブジェクトを作る
+      const raw = toRaw(settings);
+      console.log('setGlobalSpeciesParamsFromJSに渡す値', raw);
+
+      // 値がundefinedでないかチェック
+      if (
+        [
+          raw.cohesion, raw.separation, raw.alignment, raw.maxSpeed,
+          raw.maxTurnAngle, raw.separationRange, raw.alignmentRange, raw.cohesionRange
+        ].some(v => typeof v === 'undefined')
+      ) {
+        console.error('パラメータがundefinedです', raw);
+        return;
+      }
+      wasmModule.setGlobalSpeciesParamsFromJS({
+        cohesion: Number(raw.cohesion),
+        separation: Number(raw.separation),
+        alignment: Number(raw.alignment),
+        maxSpeed: Number(raw.maxSpeed),
+        maxTurnAngle: Number(raw.maxTurnAngle),
+        separationRange: Number(raw.separationRange),
+        alignmentRange: Number(raw.alignmentRange),
+        cohesionRange: Number(raw.cohesionRange),
+      });
     }
   }
 );
