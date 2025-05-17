@@ -6,7 +6,8 @@
     "scripts": {
         "build-wasm": "emcc src/wasm/main.cpp src/wasm/entry.cpp src/wasm/boids_tree.cpp -o src/wasm/build/wasm_boids.js -s MODULARIZE=1 -s EXPORT_NAME=createBoidsModule -s ENVIRONMENT=web,worker -s ALLOW_MEMORY_GROWTH=1 -s USE_PTHREADS=1 -s PTHREAD_POOL_SIZE=4 -Oz -s ASSERTIONS=1 -s EXPORT_ES6=1 -s EXPORTED_RUNTIME_METHODS=ccall,cwrap -s EXPORTED_FUNCTIONS=_malloc,_free --bind",
         "serve": "concurrently \"nodemon --watch src/wasm --ext cpp,h --exec \\\"npm run build-wasm\\\"\" \"wait-on src/wasm/build/wasm_boids.js && vue-cli-service serve\"",
-        "build": "npm run build-wasm && vue-cli-service build"
+        "build": "npm run build-wasm && vue-cli-service build",
+        "deploy": "npm run build && gh-pages -d dist"
     },
     "dependencies": {
         "three": "^0.176.0",
@@ -15,6 +16,7 @@
     "devDependencies": {
         "@vue/cli-service": "^5.0.0",
         "copy-webpack-plugin": "^13.0.0",
+        "gh-pages": "^6.3.0",
         "nodemon": "^3.1.10",
         "npm-run-all": "^4.1.5",
         "wait-on": "^8.0.3"

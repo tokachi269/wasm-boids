@@ -5,7 +5,8 @@ import createBoidsModule from './wasm/build/wasm_boids.js';
 createBoidsModule({
     locateFile: (path) => {
         if (path.endsWith('.wasm')) {
-            return `/static/js/${path}`;
+            // 本番環境では '/wasm-boids/' を付与
+            return (process.env.NODE_ENV === 'production' ? '/wasm-boids' : '') + `/static/js/${path}`;
         }
         return path;
     },

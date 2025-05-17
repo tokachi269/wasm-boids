@@ -50,8 +50,6 @@ dist/
 
 # WebAssembly
 src/wasm/build/
-*.wasm
-*.js.map
 
 # IDE/Editor
 .vscode/

@@ -19,7 +19,7 @@ module.exports = defineConfig({
                 patterns: [
                     {
                         from: path.resolve(__dirname, 'src/wasm/build/wasm_boids.wasm'),
-                         to: 'static/js/'
+                         to: 'static/js/wasm_boids.wasm'
                     },
                 ],
             }),
@@ -33,4 +33,7 @@ module.exports = defineConfig({
     }
 },
     assetsDir: 'static',
+    publicPath: process.env.NODE_ENV === 'production'
+    ? '/wasm-boids/'
+    : '/'
 })
