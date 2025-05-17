@@ -19,7 +19,7 @@ module.exports = defineConfig({
                 patterns: [
                     {
                         from: path.resolve(__dirname, 'src/wasm/build/wasm_boids.wasm'),
-                         to: 'static/js/wasm_boids.wasm'
+                         to: 'static/js/'
                     },
                 ],
             }),
