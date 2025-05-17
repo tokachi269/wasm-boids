@@ -1,8 +1,10 @@
 import { createApp } from 'vue';
 import App from './App.vue';
-import createBoidsModule from './wasm/build/wasm_boids.js';
+import * as BoidsModule from './wasm/build/wasm_boids.js';
 
-createBoidsModule({
+let wasmModule = null;
+
+BoidsModule.default({
     locateFile: (path) => {
         if (path.endsWith('.wasm')) {
             // 本番環境では '/wasm-boids/' を付与
@@ -10,7 +12,8 @@ createBoidsModule({
         }
         return path;
     },
-}).then((Module) => {
+}).then(Module => {
+    wasmModule = Module;
     console.log('Wasm module initialized:', Module);
 
     // Vue アプリケーションに WebAssembly モジュールを渡す

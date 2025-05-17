@@ -1,27 +1,32 @@
 <template>
   <div id="app">
-    <h1>Boids Simulation</h1>
-    <Settings :settings="settings" />
-    <div class="info">
-      <p>Boids Count: {{ settings.flockSize }}</p>
-    </div>
-    <div>
-      <label>
-        <input type="checkbox" v-model="showUnits" />
-        Unit可視化
-      </label>
-      <label style="margin-left:1em;">
-        <input type="checkbox" v-model="showUnitSpheres" />
-        スフィアのみ表示
-      </label>
-      <label style="margin-left:1em;">
-        <input type="checkbox" v-model="showUnitLines" />
-        線のみ表示
-      </label>
-      <label style="margin-left:1em;">
-        表示レイヤ下限: <input type="range" min="1" max="20" v-model="unitLayer" />
-        {{ unitLayer }}
-      </label>
+    <div class="ui-overlay">
+      <h1>Boids Simulation</h1>
+      <details>
+        <summary>Settings</summary>
+        <Settings :settings="settings" />
+        <div>
+          <label>
+            <input type="checkbox" v-model="showUnits" />
+            Unit可視化
+          </label>
+          <label style="margin-left:1em;">
+            <input type="checkbox" v-model="showUnitSpheres" />
+            スフィアのみ表示
+          </label>
+          <label style="margin-left:1em;">
+            <input type="checkbox" v-model="showUnitLines" />
+            線のみ表示
+          </label>
+          <label style="margin-left:1em;">
+            表示レイヤ下限: <input type="range" min="1" max="20" v-model="unitLayer" />
+            {{ unitLayer }}
+          </label>
+        </div>
+      </details>
+      <div class="info">
+        <p>Boids Count: {{ settings.flockSize }}</p>
+      </div>
     </div>
     <div ref="threeContainer" class="three-container" />
   </div>
@@ -48,7 +53,7 @@ const settings = reactive({
   alignmentRange: 30.0,
   cohesionRange: 171.0,
   speed: 5,
-  flockSize: 3000,
+  flockSize: 2000,
 });
 
 const threeContainer = ref(null);
@@ -90,56 +95,98 @@ function handleKeydown(e) {
 }
 
 function initThreeJS() {
-  const width = 1600;
-  const height = 1200;
+  const width = window.innerWidth;
+  const height = window.innerHeight;
+
 
   scene = new THREE.Scene();
-  // 背景を青色に
-  scene.background = new THREE.Color(0x0a1e3a); // 魚の色に近い深い青
-
-  // 深くなるほど暗くする（zが大きいほど暗くなるイメージ）
-  scene.fog = new THREE.Fog(0x0a1e3a, 10, 300); 
+  scene.background = new THREE.Color(0x0a1e3a);
+  scene.fog = new THREE.Fog(0x0a1e3a, 300, 900);
 
   camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
-  camera.position.set(0, 0, 500);
+  camera.position.set(0, 0, 250);
   camera.lookAt(0, 0, 0);
-  scene.fog = new THREE.Fog(0x0a1e3a, 300, 900); // 近くは青、遠くはさらに暗い青
+
   renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setSize(width, height);
+  renderer.shadowMap.enabled = true; // ★影を有効化
   threeContainer.value.appendChild(renderer.domElement);
 
   controls = new OrbitControls(camera, renderer.domElement);
 
-  const ambientLight = new THREE.AmbientLight(0xffffff, 1.0);
+  // 地面メッシュ追加
+  const groundGeo = new THREE.PlaneGeometry(1000, 1000);
+  const groundMat = new THREE.MeshStandardMaterial({ color: 0x183050, roughness: 0.8 });
+  const ground = new THREE.Mesh(groundGeo, groundMat);
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.y = -200; // 水面より下に
+  ground.receiveShadow = true; // ★影を受ける
+  scene.add(ground);
+
+  // ライト
+  const ambientLight = new THREE.AmbientLight(0xffffff, 1.5);
   scene.add(ambientLight);
 
-  const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
-  directionalLight.position.set(0, 0, 1).normalize();
-  scene.add(directionalLight);
+  // 太陽光（やや暖色のDirectionalLight）
+  const dirLight = new THREE.DirectionalLight(0xfff2cc, 1.3); // 暖色＆強め
+  dirLight.position.set(300, 500, 200); // 高い位置から照らす
+  dirLight.castShadow = true;
+
+  // 影カメラの範囲を広げる
+  dirLight.shadow.camera.left = -500;
+  dirLight.shadow.camera.right = 500;
+  dirLight.shadow.camera.top = 500;
+  dirLight.shadow.camera.bottom = -500;
+  dirLight.shadow.camera.near = 1;
+  dirLight.shadow.camera.far = 2000;
+
+  dirLight.shadow.mapSize.width = 2048;
+  dirLight.shadow.mapSize.height = 2048;
+  dirLight.shadow.bias = -0.001;
+  dirLight.shadow.normalBias = 0.01;
+
+  scene.add(dirLight);
+
+  // ウィンドウリサイズ対応
+  window.addEventListener('resize', onWindowResize);
+}
+
+function onWindowResize() {
+  const width = window.innerWidth;
+  const height = window.innerHeight;
+  camera.aspect = width / height;
+  camera.updateProjectionMatrix();
+  renderer.setSize(width, height);
 }
 
 function drawBoids(boids) {
   const count = boids.size();
+
+  // メッシュが多い場合は余分なものを削除
+  while (boidMeshes.length > count) {
+    const mesh = boidMeshes.pop();
+    scene.remove(mesh);
+  }
+
+  // メッシュが足りない場合は追加
   while (boidMeshes.length < count) {
-    // 球を細長い楕円体に
     const geometry = new THREE.SphereGeometry(1, 8, 8);
-    const material = new THREE.MeshStandardMaterial({ color: 0x00aaff });
+    const material = new THREE.MeshStandardMaterial({ color: 0x1fb5ff });
     const mesh = new THREE.Mesh(geometry, material);
-    // Z方向に2倍、X/Y方向は0.5倍で細長く
     mesh.scale.set(0.5, 0.5, 2.0);
+    mesh.castShadow = true; // ★影を落とす
     scene.add(mesh);
     boidMeshes.push(mesh);
   }
 
+  // 位置・向きを更新
   for (let i = 0; i < count; i++) {
     const boid = boids.get(i);
     boidMeshes[i].position.set(boid.position.x, boid.position.y, boid.position.z);
 
-    // 進行方向（velocity）に向けて回転
     const v = boid.velocity;
     const dir = new THREE.Vector3(v.x, v.y, v.z);
     if (dir.lengthSq() > 0.0001) {
-      // Z軸正方向を進行方向に合わせる
       boidMeshes[i].quaternion.setFromUnitVectors(
         new THREE.Vector3(0, 0, 1),
         dir.clone().normalize()
@@ -204,50 +251,35 @@ function drawUnitTree(unit, layer = 0) {
   }
 }
 
+let animationTimer = null;
+const FRAME_INTERVAL = 1000 / 60; // 60FPS
+
 function animate() {
-  requestAnimationFrame(animate);
   if (!paused.value && boidTree) {
     boidTree.update(1.0);
     const boids = boidTree.getBoids();
     drawBoids(boids);
     clearUnitVisuals();
     if (showUnits.value && boidTree.root) {
-      maxDepth = calcMaxDepth(boidTree.root, 0); // 毎フレーム計算でもOK
+      maxDepth = calcMaxDepth(boidTree.root, 0);
       drawUnitTree(boidTree.root, 0);
     }
   }
   controls.update();
   renderer.render(scene, camera);
+
+  // 30FPSで次のフレームを呼ぶ
+  animationTimer = setTimeout(animate, FRAME_INTERVAL);
 }
+
+// 停止時はclearTimeout(animationTimer)を呼ぶと良いです
 
 function startSimulation() {
   const BoidTree = wasmModule.BoidTree;
   const VectorBoid = wasmModule.VectorBoid;
   const Boid = wasmModule.Boid;
-
-  boids = new VectorBoid();
-  for (let i = 0; i < settings.flockSize; i++) {
-    const boid = new Boid();
-    boid.position = {
-      x: Math.random() * 200 - 100,
-      y: Math.random() * 200 - 100,
-      z: Math.random() * 200 - 100,
-    };
-    boid.velocity = {
-      x: (Math.random() - 0.5) * 0.5,
-      y: (Math.random() - 0.5) * 0.5,
-      z: (Math.random() - 0.5) * 0.5,
-    };
-    boid.acceleration = { x: 0, y: 0, z: 0 };
-    boid.id = i;
-    boid.stress = 0.0;
-
-    // ここを参照にする
-    boid.params = settings; // 参照を渡す
-
-    boids.push_back(boid);
-  }
-
+  // 初期化時
+  boids = wasmModule.BoidTree.generateRandomBoids(settings.flockSize, 100, 0.25);
   boidTree = new BoidTree();
   boidTree.build(boids, 32, 0);
   animate();
@@ -311,7 +343,6 @@ watch(
     ) {
       // プレーンなオブジェクトを作る
       const raw = toRaw(settings);
-      console.log('setGlobalSpeciesParamsFromJSに渡す値', raw);
 
       // 値がundefinedでないかチェック
       if (
@@ -336,12 +367,26 @@ watch(
     }
   }
 );
+
+// flockSizeの変更を監視
+watch(
+  () => settings.flockSize,
+  (newSize) => {
+    if (boidTree && boidTree.setFlockSize) {
+      // flockSize変更時
+      boidTree.setFlockSize(newSize, 100, 0.25);
+    }
+  }
+);
 </script>
 
 <style>
 #app {
   font-family: Arial, sans-serif;
-  padding: 20px;
+  padding: 0;
+  margin: 0;
+  position: relative;
+  z-index: 1;
 }
 
 .settings {
@@ -353,10 +398,26 @@ watch(
 }
 
 .three-container {
+  position: fixed;
+  left: 0;
+  top: 0;
   width: 100vw;
   height: 100vh;
+  z-index: 0;
   display: block;
-  border: 1px solid black;
+  border: none;
   overflow: hidden;
+  background: #0a1e3a;
+}
+
+.ui-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  padding: 20px;
+  box-sizing: border-box;
+  color: #fff;
+  z-index: 2;
 }
 </style>

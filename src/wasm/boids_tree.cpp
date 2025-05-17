@@ -4,6 +4,7 @@
 #include <queue>
 #include <algorithm>
 #include <unordered_map>
+#include <random>
 #include <emscripten/bind.h>
 #include <iostream>
 
@@ -185,7 +186,7 @@ public:
                 Vec3 separation = diff / (dist * dist) * globalSpeciesParams.separation;
                 Vec3 align = (other->averageVelocity - averageVelocity) * globalSpeciesParams.alignment;
                 Vec3 cohes = (other->center - center) * globalSpeciesParams.cohesion;
-                
+
                 // このノード配下の全Boid
                 std::vector<Boid *> allBoids;
                 std::queue<BoidUnit *> q;
@@ -306,17 +307,21 @@ public:
                 float boost = 1.0f + b.stress * 0.8f;
                 Vec3 separ = separation * (globalSpeciesParams.separation + b.stress * 0.4f);
 
-                if (cohesCount > 0 && forward.length() > 0.001f) {
+                if (cohesCount > 0 && forward.length() > 0.001f)
+                {
                     float maxCohesionAngle = 0.01f; // 最大で何ラジアン曲げるか（例: 0.2 ≒ 11度）
                     float angle = acos(std::clamp(forward.dot(cohesTarget), -1.0f, 1.0f));
-                    if (angle > maxCohesionAngle) {
+                    if (angle > maxCohesionAngle)
+                    {
                         Vec3 axis = forward.cross(cohesTarget).normalized();
                         cohesTarget = Vec3::rotateVector(forward, axis, maxCohesionAngle);
                     }
                     // 進行方向に一定角度だけ中心方向に寄せたベクトルをcohesionとして加える
                     Vec3 cohes = (cohesTarget - forward) * globalSpeciesParams.cohesion * (1.0f - b.stress);
                     b.acceleration += cohes * boost;
-                } else {
+                }
+                else
+                {
                     // 通常のcohesion
                     Vec3 cohes = cohesCount > 0 ? ((sumPosition / cohesCount - b.position) * globalSpeciesParams.cohesion * (1.0f - b.stress)) : Vec3();
                     b.acceleration += cohes * boost;
@@ -332,7 +337,7 @@ public:
                 {
                     flatForward = flatForward.normalized();
                     // 上下方向（y成分）を減らす補正ベクトル
-                    Vec3 flatten = (flatForward - forwardVec) * 0.05f; // 係数は調整
+                    Vec3 flatten = (flatForward - forwardVec) * 0.1f; // 係数は調整
                     b.acceleration += flatten;
                 }
 
@@ -665,6 +670,10 @@ public:
     int mergeIndex = 0;
 
     BoidTree() : root(nullptr) {}
+    // BoidTreeクラス内に追加
+    static std::vector<Boid> generateRandomBoids(int count, float posRange, float velRange);
+    void setFlockSize(int newSize, float posRange, float velRange);
+    // BoidTreeクラス内に追加ここまで
 
     void build(std::vector<Boid> &boids, int maxPerUnit = 16, int level = 0)
     {
@@ -706,7 +715,8 @@ public:
             return nullptr;
         for (auto *c : node->children)
         {
-            if (!c) continue; // 追加
+            if (!c)
+                continue; // 追加
             if (c == target)
                 return node;
             BoidUnit *res = findParent(c, target);
@@ -722,7 +732,7 @@ public:
             root->updateRecursive(dt);
 
         frameCount++;
-        if (frameCount % 10 == 0)
+        if (frameCount % 5 == 0)
         {
             leafCache.clear();
             collectLeaves(root, leafCache);
@@ -733,7 +743,7 @@ public:
         if (!leafCache.empty())
         {
             // 分割
-            for (int i = 0; i < 12 && splitIndex < (int)leafCache.size(); ++i, ++splitIndex)
+            for (int i = 0; i < 5 && splitIndex < (int)leafCache.size(); ++i, ++splitIndex)
             {
                 BoidUnit *u = leafCache[splitIndex];
                 if (u && u->needsSplit())
@@ -745,7 +755,7 @@ public:
                 }
             }
             // 結合
-            for (int i = 0; i < 12 && mergeIndex < (int)leafCache.size(); ++i, ++mergeIndex)
+            for (int i = 0; i < 5 && mergeIndex < (int)leafCache.size(); ++i, ++mergeIndex)
             {
                 for (int j = mergeIndex + 1; j < (int)leafCache.size(); ++j)
                 {
@@ -838,6 +848,50 @@ void setGlobalSpeciesParamsFromJS(val jsObj)
     globalSpeciesParams.cohesionRange = jsObj["cohesionRange"].as<float>();
 }
 
+std::vector<Boid> BoidTree::generateRandomBoids(int count, float posRange, float velRange)
+{
+    std::vector<Boid> boids;
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<float> posDist(-posRange, posRange);
+    std::uniform_real_distribution<float> velDist(-velRange, velRange);
+
+    for (int i = 0; i < count; ++i)
+    {
+        Boid b;
+        b.position = Vec3(posDist(gen), posDist(gen), posDist(gen));
+        b.velocity = Vec3(velDist(gen), velDist(gen), velDist(gen));
+        b.acceleration = Vec3(0, 0, 0);
+        b.id = i;
+        b.stress = 0.0f;
+        b.speciesId = 0;
+        boids.push_back(b);
+    }
+    return boids;
+}
+
+void BoidTree::setFlockSize(int newSize, float posRange, float velRange)
+{
+    std::vector<Boid> currentBoids = getBoids();
+    int current = static_cast<int>(currentBoids.size());
+
+    if (newSize < current)
+    {
+        // ランダムに減らす
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::shuffle(currentBoids.begin(), currentBoids.end(), gen);
+        currentBoids.resize(newSize);
+    }
+    else if (newSize > current)
+    {
+        // ランダムに追加
+        auto added = BoidTree::generateRandomBoids(newSize - current, posRange, velRange);
+        currentBoids.insert(currentBoids.end(), added.begin(), added.end());
+    }
+    build(currentBoids, 32, 0);
+}
+
 EMSCRIPTEN_BINDINGS(my_module)
 {
     value_object<Vec3>("Vec3")
@@ -870,6 +924,8 @@ EMSCRIPTEN_BINDINGS(my_module)
         .function("build", &BoidTree::build)
         .function("update", &BoidTree::update)
         .function("getBoids", &BoidTree::getBoids)
+        .function("setFlockSize", &BoidTree::setFlockSize)
+        .class_function("generateRandomBoids", &BoidTree::generateRandomBoids)
         .property("root", &BoidTree::root, allow_raw_pointers());
 
     class_<BoidUnit>("BoidUnit")

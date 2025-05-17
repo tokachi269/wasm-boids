@@ -14,12 +14,19 @@ module.exports = defineConfig({
     },
     configureWebpack: {
         devtool: 'source-map',
+        experiments: {
+            asyncWebAssembly: true,
+        },
         plugins: [
             new CopyWebpackPlugin({
                 patterns: [
                     {
                         from: path.resolve(__dirname, 'src/wasm/build/wasm_boids.wasm'),
-                         to: 'static/js/'
+                        to: 'static/js/[name].[contenthash:8][ext]', // 例: wasm_boids.abcdef12.wasm
+                    },
+                    {
+                        from: path.resolve(__dirname, 'src/wasm/build/wasm_boids.js'),
+                        to: 'static/js/[name].[contenthash:8][ext]', // js側も同様に
                     },
                 ],
             }),
