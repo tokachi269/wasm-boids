@@ -141,7 +141,7 @@ public:
                     if (dist < 40.0f && dist > 0.01f)
                     {
                         // 例: 葉ノード同士の影響計算
-                        float influence = std::max(0.0f, 1.0f - (dist / 40.0f)); // 40.0fは最大影響距離
+                        float influence = std::max(0.0f, 1.0f - (dist / 40.0f));
                         sumVelocity += b.velocity * influence;
                         sumPosition += b.position * influence;
                         Vec3 diff = a.position - b.position;
@@ -179,13 +179,13 @@ public:
             if (dist < 400.0f && dist > 0.01f)
             {
                 float influence = 1.0f / (dist * dist + 1.0f); // 距離減衰
-                float scale = influence;                       // ノードサイズ依存をやめる
+                float scale = influence;
 
                 Vec3 diff = center - other->center;
-                Vec3 separation = diff / (dist * dist);
-                Vec3 align = (other->averageVelocity - averageVelocity) * 1.0f;
-                Vec3 cohes = (other->center - center) * 0.5f;
-
+                Vec3 separation = diff / (dist * dist) * globalSpeciesParams.separation;
+                Vec3 align = (other->averageVelocity - averageVelocity) * globalSpeciesParams.alignment;
+                Vec3 cohes = (other->center - center) * globalSpeciesParams.cohesion;
+                
                 // このノード配下の全Boid
                 std::vector<Boid *> allBoids;
                 std::queue<BoidUnit *> q;
@@ -230,13 +230,13 @@ public:
                 {
                     b->acceleration += align * scale;
                     b->acceleration += cohes * scale;
-                    b->acceleration += separation * 0.1f * scale;
+                    b->acceleration += separation * scale;
                 }
                 for (Boid *b : otherBoids)
                 {
                     b->acceleration -= align * scale;
                     b->acceleration -= cohes * scale;
-                    b->acceleration -= separation * 0.1f * scale;
+                    b->acceleration -= separation * scale;
                 }
             }
         }
@@ -300,15 +300,52 @@ public:
 
                 // ルール適用
                 Vec3 align = alignCount > 0 ? ((sumVelocity / alignCount - b.velocity) * globalSpeciesParams.alignment) : Vec3();
-                Vec3 cohes = cohesCount > 0 ? ((sumPosition / cohesCount - b.position) * globalSpeciesParams.cohesion * (1.0f - b.stress)) : Vec3();
-                Vec3 separ = separation * (globalSpeciesParams.separation + b.stress * 0.4f);
+                Vec3 cohesTarget = cohesCount > 0 ? ((sumPosition / cohesCount - b.position).normalized()) : Vec3();
+                Vec3 forward = b.velocity.normalized();
 
                 float boost = 1.0f + b.stress * 0.8f;
+                Vec3 separ = separation * (globalSpeciesParams.separation + b.stress * 0.4f);
+
+                if (cohesCount > 0 && forward.length() > 0.001f) {
+                    float maxCohesionAngle = 0.01f; // 最大で何ラジアン曲げるか（例: 0.2 ≒ 11度）
+                    float angle = acos(std::clamp(forward.dot(cohesTarget), -1.0f, 1.0f));
+                    if (angle > maxCohesionAngle) {
+                        Vec3 axis = forward.cross(cohesTarget).normalized();
+                        cohesTarget = Vec3::rotateVector(forward, axis, maxCohesionAngle);
+                    }
+                    // 進行方向に一定角度だけ中心方向に寄せたベクトルをcohesionとして加える
+                    Vec3 cohes = (cohesTarget - forward) * globalSpeciesParams.cohesion * (1.0f - b.stress);
+                    b.acceleration += cohes * boost;
+                } else {
+                    // 通常のcohesion
+                    Vec3 cohes = cohesCount > 0 ? ((sumPosition / cohesCount - b.position) * globalSpeciesParams.cohesion * (1.0f - b.stress)) : Vec3();
+                    b.acceleration += cohes * boost;
+                }
                 b.acceleration += align * boost;
-                b.acceleration += cohes * boost;
                 b.acceleration += separ * boost;
 
-                // ...（以降は既存の速度・位置更新処理）...
+                // 進行方向ベクトル
+                Vec3 forwardVec = b.velocity.normalized();
+                // XZ平面上の進行方向
+                Vec3 flatForward = Vec3(forwardVec.x, 0.0f, forwardVec.z);
+                if (flatForward.length() > 0.001f)
+                {
+                    flatForward = flatForward.normalized();
+                    // 上下方向（y成分）を減らす補正ベクトル
+                    Vec3 flatten = (flatForward - forwardVec) * 0.05f; // 係数は調整
+                    b.acceleration += flatten;
+                }
+
+                // 画面中心に戻る力
+                Vec3 toOrigin = (Vec3(0, 0, 0) - b.position) * 0.01f;
+                b.acceleration += toOrigin;
+
+                // jitter（微小なランダムノイズ）を加える
+                float jitterStrength = 0.1f;
+                b.acceleration.x += ((float)rand() / float(RAND_MAX) - 0.5f) * jitterStrength;
+                b.acceleration.y += ((float)rand() / RAND_MAX - 0.5f) * jitterStrength;
+                b.acceleration.z += ((float)rand() / RAND_MAX - 0.5f) * jitterStrength;
+
                 /** 速度の更新 */
                 Vec3 desiredVelocity = b.velocity + b.acceleration * dt;
                 float maxTurnAngle = globalSpeciesParams.maxTurnAngle;
@@ -597,7 +634,8 @@ public:
             if (it != parent->children.end())
                 parent->children.erase(it);
         }
-        // otherノードのdeleteも検討（メモリ管理注意）
+        // メモリ解放
+        delete other;
     }
 };
 
@@ -668,6 +706,7 @@ public:
             return nullptr;
         for (auto *c : node->children)
         {
+            if (!c) continue; // 追加
             if (c == target)
                 return node;
             BoidUnit *res = findParent(c, target);
@@ -717,8 +756,9 @@ public:
                         BoidUnit *parent = findParent(root, b);
                         if (parent)
                         {
-                            a->mergeWith(b, parent);
+                            // ここでleafCacheをクリアしてからmergeWith
                             leafCache.clear();
+                            a->mergeWith(b, parent);
                             collectLeaves(root, leafCache);
                         }
                         break;
@@ -769,6 +809,7 @@ public:
     {
         if (!node)
             return;
+        // children配列の中身がnullptrでないかチェック
         if (node->isBoidUnit())
         {
             leaves.push_back(const_cast<BoidUnit *>(node));
@@ -777,7 +818,8 @@ public:
         {
             for (const auto *child : node->children)
             {
-                collectLeaves(child, leaves);
+                if (child) // 追加
+                    collectLeaves(child, leaves);
             }
         }
     }
