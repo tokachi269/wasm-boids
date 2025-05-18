@@ -1,16 +1,16 @@
 import { createApp } from 'vue';
 import App from './App.vue';
 import * as BoidsModule from './wasm/build/wasm_boids.js';
+import wasmUrl from './wasm/build/wasm_boids.wasm';
 
 let wasmModule = null;
 
 BoidsModule.default({
     locateFile: (path) => {
         if (path.endsWith('.wasm')) {
-            // 本番環境では '/wasm-boids/' を付与
-            return (process.env.NODE_ENV === 'production' ? '/wasm-boids' : '') + `/static/js/${path}`;
+            return wasmUrl; // ハッシュ付きの正しいURLを返す
         }
-        return path;
+        return `/static/js/${path}`;
     },
 }).then(Module => {
     wasmModule = Module;
@@ -18,6 +18,6 @@ BoidsModule.default({
 
     // Vue アプリケーションに WebAssembly モジュールを渡す
     const app = createApp(App);
-    app.provide('wasmModule', Module); // provide を使用してモジュールを渡す
+    app.provide('wasmModule', Module);
     app.mount('#app');
 });

@@ -7,6 +7,7 @@ module.exports = defineConfig({
     transpileDependencies: true,
     devServer: {
         https: true,
+        // COOP/COEPでSharedArrayBuffer等を有効化
         headers: {
             'Cross-Origin-Opener-Policy': 'same-origin',
             'Cross-Origin-Embedder-Policy': 'require-corp',
@@ -15,18 +16,27 @@ module.exports = defineConfig({
     configureWebpack: {
         devtool: 'source-map',
         experiments: {
-            asyncWebAssembly: true,
+            asyncWebAssembly: true, // wasmのasync importを有効化
+        },
+        module: {
+            rules: [
+                {
+                    test: /\.wasm$/,
+                    type: 'asset/resource' // wasmファイルをリソースとして扱う
+                }
+            ]
         },
         plugins: [
+            // wasm/jsビルド成果物をビルド時にコピー
             new CopyWebpackPlugin({
                 patterns: [
                     {
                         from: path.resolve(__dirname, 'src/wasm/build/wasm_boids.wasm'),
-                        to: 'static/js/[name].[contenthash:8][ext]', // 例: wasm_boids.abcdef12.wasm
+                        to: 'static/js/[name].[contenthash:8][ext]',
                     },
                     {
                         from: path.resolve(__dirname, 'src/wasm/build/wasm_boids.js'),
-                        to: 'static/js/[name].[contenthash:8][ext]', // js側も同様に
+                        to: 'static/js/[name].[contenthash:8][ext]',
                     },
                 ],
             }),
@@ -34,13 +44,13 @@ module.exports = defineConfig({
     },
 
     pages: {
-    index: {
-        entry: 'src/main.js', // ここは変えないで
-        title: 'TimeLeaf', // 好きな文字列をいれてください
-    }
-},
+        index: {
+            entry: 'src/main.js', // ここは変えないで
+            title: 'wasm-boids', // 好きな文字列をいれる
+        }
+    },
     assetsDir: 'static',
     publicPath: process.env.NODE_ENV === 'production'
-    ? '/wasm-boids/'
-    : '/'
+        ? '/wasm-boids/'
+        : '/'
 })

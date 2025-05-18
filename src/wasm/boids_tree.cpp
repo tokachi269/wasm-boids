@@ -471,13 +471,18 @@ public:
         for (int i = 0; i < 3; ++i)
         {
             float mean = 0, var = 0;
-            for (const auto &b : boids)
-                mean += (i == 0 ? b.position.x : (i == 1 ? b.position.y : b.position.z));
-            mean /= boids.size();
+            std::vector<float> vals;
+            vals.reserve(boids.size());
             for (const auto &b : boids)
             {
-                float v = (i == 0 ? b.position.x : (i == 1 ? b.position.y : b.position.z)) - mean;
-                var += v * v;
+                float v = (i == 0 ? b.position.x : (i == 1 ? b.position.y : b.position.z));
+                mean += v;
+                vals.push_back(v);
+            }
+            mean /= boids.size();
+            for (float v : vals)
+            {
+                var += (v - mean) * (v - mean);
             }
             if (var > maxVar)
             {

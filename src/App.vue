@@ -268,7 +268,7 @@ function animate() {
   controls.update();
   renderer.render(scene, camera);
 
-  // 30FPSで次のフレームを呼ぶ
+  // 60FPSで次のフレームを呼ぶ
   animationTimer = setTimeout(animate, FRAME_INTERVAL);
 }
 
@@ -283,19 +283,6 @@ function startSimulation() {
   boidTree = new BoidTree();
   boidTree.build(boids, 32, 0);
   animate();
-}
-
-function updateParamsFromUI(settings) {
-  const params = new Module.SpeciesParams();
-  params.cohesion = settings.cohesion;
-  params.separation = settings.separation;
-  params.alignment = settings.alignment;
-  params.maxSpeed = settings.maxSpeed;
-  params.maxTurnAngle = settings.maxTurnAngle;
-  params.separationRange = settings.separationRange;
-  params.alignmentRange = settings.alignmentRange;
-  params.cohesionRange = settings.cohesionRange;
-  Module.setGlobalSpeciesParams(params);
 }
 
 onMounted(() => {
