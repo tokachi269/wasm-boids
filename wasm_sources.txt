@@ -1,0 +1,5 @@
+src/wasm/main.cpp
+src/wasm/entry.cpp
+src/wasm/boid_unit.cpp
+src/wasm/boids_tree.cpp
+src/wasm/wasm_bindings.cpp

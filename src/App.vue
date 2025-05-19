@@ -37,6 +37,7 @@ import { inject, onMounted, reactive, ref, watch, toRaw } from 'vue';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import Settings from './components/Settings.vue';
+import Stats from 'three/examples/jsm/libs/stats.module'
 
 const wasmModule = inject('wasmModule');
 if (!wasmModule) {
@@ -49,16 +50,17 @@ const settings = reactive({
   alignment: 1.0,
   maxSpeed: 1.0,
   maxTurnAngle: 0.281,
-  separationRange: 12.0,
+  separationRange: 6.0,
   alignmentRange: 30.0,
   cohesionRange: 171.0,
   speed: 5,
   flockSize: 2000,
+  maxNeighbors: 7,
+  lambda: 0.05,
 });
 
 const threeContainer = ref(null);
 let scene, camera, renderer, controls;
-let boidMeshes = [];
 let boidTree = null;
 let boids = null;
 
@@ -73,6 +75,7 @@ let unitSpheres = [];
 let unitLines = [];
 
 let maxDepth = 1;
+let stats = null;
 
 // ツリーの最大深さを計算
 function calcMaxDepth(unit, depth = 0) {
@@ -97,13 +100,12 @@ function initThreeJS() {
   const width = window.innerWidth;
   const height = window.innerHeight;
 
-
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x0a1e3a);
   scene.fog = new THREE.Fog(0x0a1e3a, 300, 900);
 
   camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
-  camera.position.set(0, 0, 250);
+  camera.position.set(0, 0, 150);
   camera.lookAt(0, 0, 0);
 
   renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -158,38 +160,63 @@ function onWindowResize() {
   renderer.setSize(width, height);
 }
 
+let instancedMesh = null; // 使わないので削除してもOK
+let boidLODs = []; // LOD用配列
+
+// LOD用ジオメトリ・マテリアルを使い回す
+const boidGeometryHigh = new THREE.SphereGeometry(1, 8, 8);
+const boidGeometryLow = new THREE.SphereGeometry(1, 3, 2);
+const boidMaterial = new THREE.MeshStandardMaterial({ color: 0x1fb5ff });
+
+function initBoidLODs(count) {
+  // 既存LODをクリア
+  for (const lod of boidLODs) scene.remove(lod);
+  boidLODs = [];
+
+  for (let i = 0; i < count; i++) {
+    const lod = new THREE.LOD();
+
+    // 近距離: 高ポリ
+    const meshHigh = new THREE.Mesh(boidGeometryHigh, boidMaterial);
+    meshHigh.castShadow = true; // 影を落とす
+    meshHigh.scale.set(0.5, 0.5, 2.0);
+    lod.addLevel(meshHigh, 0);
+
+    // 遠距離: 低ポリ
+    const meshLow = new THREE.Mesh(boidGeometryLow, boidMaterial);
+    meshLow.castShadow = true; // 影を落とす
+    meshLow.scale.set(0.5, 0.5, 2.0);
+    lod.addLevel(meshLow, 100);
+
+    scene.add(lod);
+    boidLODs.push(lod);
+  }
+}
+
 function drawBoids(boids) {
   const count = boids.size();
 
-  // メッシュが多い場合は余分なものを削除
-  while (boidMeshes.length > count) {
-    const mesh = boidMeshes.pop();
-    scene.remove(mesh);
+  // 初回または数が変わったらLODを再生成
+  if (boidLODs.length !== count) {
+    initBoidLODs(count);
   }
 
-  // メッシュが足りない場合は追加
-  while (boidMeshes.length < count) {
-    const geometry = new THREE.SphereGeometry(1, 8, 8);
-    const material = new THREE.MeshStandardMaterial({ color: 0x1fb5ff });
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.scale.set(0.5, 0.5, 2.0);
-    mesh.castShadow = true; // 影を落とす
-    scene.add(mesh);
-    boidMeshes.push(mesh);
-  }
-
-  // 位置・向きを更新
   for (let i = 0; i < count; i++) {
     const boid = boids.get(i);
-    boidMeshes[i].position.set(boid.position.x, boid.position.y, boid.position.z);
+    const lod = boidLODs[i];
 
+    lod.position.set(boid.position.x, boid.position.y, boid.position.z);
+
+    // 進行方向に向ける
     const v = boid.velocity;
     const dir = new THREE.Vector3(v.x, v.y, v.z);
     if (dir.lengthSq() > 0.0001) {
-      boidMeshes[i].quaternion.setFromUnitVectors(
+      lod.quaternion.setFromUnitVectors(
         new THREE.Vector3(0, 0, 1),
         dir.clone().normalize()
       );
+    } else {
+      lod.quaternion.identity();
     }
   }
 }
@@ -254,10 +281,44 @@ let animationTimer = null;
 const FRAME_INTERVAL = 1000 / 60; // 60FPS
 
 function animate() {
+  if (stats) stats.begin();
+
   if (!paused.value && boidTree) {
     boidTree.update(1.0);
-    const boids = boidTree.getBoids();
-    drawBoids(boids);
+    boidTree.updatePositionBuffer();
+    boidTree.updateVelocityBuffer();
+    const ptr = boidTree.getPositionBufferPtr();
+    const vptr = boidTree.getVelocityBufferPtr();
+    const count = boidTree.getBoidCount();
+    const positions = new Float32Array(wasmModule.HEAPF32.buffer, ptr, count * 3);
+    const velocities = new Float32Array(wasmModule.HEAPF32.buffer, vptr, count * 3);
+
+    if (boidLODs.length !== count) {
+      initBoidLODs(count);
+    }
+    for (let i = 0; i < count; i++) {
+      const lod = boidLODs[i];
+      lod.position.set(
+        positions[i * 3 + 0],
+        positions[i * 3 + 1],
+        positions[i * 3 + 2]
+      );
+      // 進行方向に向ける
+      const dir = new THREE.Vector3(
+        velocities[i * 3 + 0],
+        velocities[i * 3 + 1],
+        velocities[i * 3 + 2]
+      );
+      if (dir.lengthSq() > 0.0001) {
+        lod.quaternion.setFromUnitVectors(
+          new THREE.Vector3(0, 0, 1),
+          dir.clone().normalize()
+        );
+      } else {
+        lod.quaternion.identity();
+      }
+    }
+
     clearUnitVisuals();
     if (showUnits.value && boidTree.root) {
       maxDepth = calcMaxDepth(boidTree.root, 0);
@@ -267,11 +328,10 @@ function animate() {
   controls.update();
   renderer.render(scene, camera);
 
-  // 60FPSで次のフレームを呼ぶ
+  if (stats) stats.end();
+
   animationTimer = setTimeout(animate, FRAME_INTERVAL);
 }
-
-// 停止時はclearTimeout(animationTimer)を呼ぶと良いです
 
 function startSimulation() {
   const BoidTree = wasmModule.BoidTree;
@@ -286,6 +346,17 @@ function startSimulation() {
 
 onMounted(() => {
   initThreeJS();
+
+  // stats.jsの初期化とDOM追加
+  stats = new Stats();
+  stats.showPanel(0);
+  document.body.appendChild(stats.dom);
+  // 右上に移動させる
+  stats.dom.style.position = 'fixed';
+  stats.dom.style.right = '0px';
+  stats.dom.style.top = '0px';
+  stats.dom.style.left = 'auto';
+  stats.dom.style.zIndex = 1000;
 
   // 初期値をwasmに反映
   if (
@@ -321,6 +392,8 @@ watch(
     settings.separationRange,
     settings.alignmentRange,
     settings.cohesionRange,
+    settings.maxNeighbors, // 追加
+    settings.lambda,       // 追加
   ],
   () => {
     if (
@@ -330,16 +403,6 @@ watch(
       // プレーンなオブジェクトを作る
       const raw = toRaw(settings);
 
-      // 値がundefinedでないかチェック
-      if (
-        [
-          raw.cohesion, raw.separation, raw.alignment, raw.maxSpeed,
-          raw.maxTurnAngle, raw.separationRange, raw.alignmentRange, raw.cohesionRange
-        ].some(v => typeof v === 'undefined')
-      ) {
-        console.error('パラメータがundefinedです', raw);
-        return;
-      }
       wasmModule.setGlobalSpeciesParamsFromJS({
         cohesion: Number(raw.cohesion),
         separation: Number(raw.separation),
@@ -349,6 +412,8 @@ watch(
         separationRange: Number(raw.separationRange),
         alignmentRange: Number(raw.alignmentRange),
         cohesionRange: Number(raw.cohesionRange),
+        maxNeighbors: Number(raw.maxNeighbors),
+        lambda: Number(raw.lambda),
       });
     }
   }

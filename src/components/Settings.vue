@@ -46,6 +46,16 @@
       <input type="range" v-model.number="settings.maxTurnAngle" min="0.001" max="1" step="0.001" />
       <span>{{ settings.maxTurnAngle }}</span>
     </div>
+    <div class="setting-row">
+      <label>最大近傍数<br>(Max Neighbors):</label>
+      <input type="range" v-model.number="settings.maxNeighbors" min="1" max="32" step="1" />
+      <span>{{ settings.maxNeighbors }}</span>
+    </div>
+    <div class="setting-row">
+      <label>吸引減衰λ<br>(Lambda):</label>
+      <input type="range" v-model.number="settings.lambda" min="0.001" max="0.2" step="0.001" />
+      <span>{{ settings.lambda }}</span>
+    </div>
   </div>
 </template>
 
