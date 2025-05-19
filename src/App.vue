@@ -60,15 +60,14 @@ const threeContainer = ref(null);
 let scene, camera, renderer, controls;
 let boidMeshes = [];
 let boidTree = null;
-let boids = null; // グローバル参照用
+let boids = null;
 
 const paused = ref(false);
 
-// --- 追加: unit可視化制御 ---
 const showUnits = ref(true);
-const showUnitSpheres = ref(false); // 追加: デフォルトoff
-const showUnitLines = ref(false);   // 追加: デフォルトoff
-const unitLayer = ref(1); // デフォルト1に（最下層のみ表示）
+const showUnitSpheres = ref(false);
+const showUnitLines = ref(false);
+const unitLayer = ref(1);
 
 let unitSpheres = [];
 let unitLines = [];
@@ -109,7 +108,7 @@ function initThreeJS() {
 
   renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setSize(width, height);
-  renderer.shadowMap.enabled = true; // ★影を有効化
+  renderer.shadowMap.enabled = true;
   threeContainer.value.appendChild(renderer.domElement);
 
   controls = new OrbitControls(camera, renderer.domElement);
@@ -119,8 +118,8 @@ function initThreeJS() {
   const groundMat = new THREE.MeshStandardMaterial({ color: 0x183050, roughness: 0.8 });
   const ground = new THREE.Mesh(groundGeo, groundMat);
   ground.rotation.x = -Math.PI / 2;
-  ground.position.y = -200; // 水面より下に
-  ground.receiveShadow = true; // ★影を受ける
+  ground.position.y = -200;
+  ground.receiveShadow = true; // 影を受ける
   scene.add(ground);
 
   // ライト
@@ -174,7 +173,7 @@ function drawBoids(boids) {
     const material = new THREE.MeshStandardMaterial({ color: 0x1fb5ff });
     const mesh = new THREE.Mesh(geometry, material);
     mesh.scale.set(0.5, 0.5, 2.0);
-    mesh.castShadow = true; // ★影を落とす
+    mesh.castShadow = true; // 影を落とす
     scene.add(mesh);
     boidMeshes.push(mesh);
   }
@@ -204,7 +203,7 @@ function clearUnitVisuals() {
 
 // レイヤ制限付き再帰描画
 function drawUnitTree(unit, layer = 0) {
-  // スフィア: スライダで制御（最下層も含めて正しく描画）
+  // スフィア: スライダで制御
   if (
     showUnitSpheres.value &&
     layer >= (maxDepth - unitLayer.value + 1) &&
