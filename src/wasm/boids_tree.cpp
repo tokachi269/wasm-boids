@@ -110,6 +110,13 @@ void BoidTree::update(float dt)
         mergeIndex = 0;
     }
 
+    // 再構築カウンタ
+    if (frameCount% 59 == 0) { // 60フレームごとに再構築
+        std::vector<Boid> allBoids = getBoids();
+        build(allBoids, maxBoidsPerUnit, 0);
+        return;
+    }
+
     if (!leafCache.empty())
     {
         // 分割

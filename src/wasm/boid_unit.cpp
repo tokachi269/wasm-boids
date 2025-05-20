@@ -1,5 +1,5 @@
 #include "boid_unit.h"
-#include "boids_tree.h" // ← 追加
+#include "boids_tree.h"
 #include <algorithm>
 #include <queue>
 #include <iostream>
@@ -112,7 +112,6 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other)
                 float dist = a.position.distance(b.position);
                 if (dist < 40.0f && dist > 0.01f)
                 {
-                    // 例: 葉ノード同士の影響計算
                     float influence = std::max(0.0f, 1.0f - (dist / 40.0f));
                     sumVelocity += b.velocity * influence;
                     sumPosition += b.position * influence;
@@ -148,16 +147,24 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other)
     {
         // 両方とも中間ノード → 代表値で近似計算
         float dist = center.distance(other->center);
+
+        // 代表値近似の影響をunitサイズで減衰
+        float rangeA = globalSpeciesParams.cohesionRange;
+        float rangeB = globalSpeciesParams.cohesionRange;
+        if (radius > rangeA || other->radius > rangeB)
+            return; // 大きすぎるunitは代表値近似を適用しない
+
         if (dist < 400.0f && dist > 0.01f)
         {
-            float influence = 1.0f / (dist * dist + 1.0f); // 距離減衰
-            float scale = influence;
+            float influence = 1.0f / (dist * dist + 1.0f);
+            // unitが大きいほど影響を急激に減衰
+            float scaleA = std::clamp(1.0f - (radius / rangeA) * (radius / rangeA), 0.0f, 1.0f);
+            float scaleB = std::clamp(1.0f - (other->radius / rangeB) * (other->radius / rangeB), 0.0f, 1.0f);
+            float scale = influence * scaleA * scaleB * 0.3f;
 
-            Vec3 diff = center - other->center;
-            Vec3 separation = diff / (dist * dist) * globalSpeciesParams.separation;
             Vec3 align = (other->averageVelocity - averageVelocity) * globalSpeciesParams.alignment;
             Vec3 cohes = (other->center - center) * globalSpeciesParams.cohesion;
-
+            Vec3 separation = (other->center - center) * globalSpeciesParams.separation;
             // このノード配下の全Boid
             std::vector<Boid *> allBoids;
             std::queue<BoidUnit *> q;
@@ -237,7 +244,7 @@ void BoidUnit::updateRecursive(float dt)
             int alignCount = 0, cohesCount = 0, separCount = 0;
             float stress = b.stress;
 
-            // 距離閾値（例: separation=10, alignment=30, cohesion=50）
+            // 距離閾値
             float separRange = globalSpeciesParams.separationRange;
             float alignRange = globalSpeciesParams.alignmentRange;
             float cohesRange = globalSpeciesParams.cohesionRange;
@@ -280,7 +287,7 @@ void BoidUnit::updateRecursive(float dt)
 
             if (cohesCount > 0 && forward.length() > 0.001f)
             {
-                float maxCohesionAngle = 0.01f; // 最大で何ラジアン曲げるか（例: 0.2 ≒ 11度）
+                float maxCohesionAngle = 0.1f; // 最大で何ラジアン曲げるか（例: 0.2 ≒ 11度）
                 float angle = acos(std::clamp(forward.dot(cohesTarget), -1.0f, 1.0f));
                 if (angle > maxCohesionAngle)
                 {
@@ -312,10 +319,12 @@ void BoidUnit::updateRecursive(float dt)
                 b.acceleration += flatten;
             }
 
-            // 画面中心に戻る力
-            Vec3 toOrigin = (Vec3(0, 0, 0) - b.position) * 0.01f;
-            b.acceleration += toOrigin;
-
+            float boundary = 200.0f;
+            if (b.position.length() > boundary)
+            {
+                Vec3 toOrigin = (Vec3(0, 0, 0) - b.position) * 0.002f;
+                b.acceleration += toOrigin;
+            }
             // jitter（微小なランダムノイズ）を加える
             float jitterStrength = 0.1f;
             b.acceleration.x += ((float)rand() / float(RAND_MAX) - 0.5f) * jitterStrength;
@@ -418,6 +427,10 @@ bool BoidUnit::needsSplit(float splitRadius, float directionVarThresh, int maxBo
     if ((int)boids.size() > maxBoids)
         return true;
     if (radius > splitRadius)
+        return true;
+    // 密度基準を追加
+    float density = boids.size() / (4.0f / 3.0f * M_PI * std::max(radius, 1e-3f) * std::max(radius, 1e-3f) * std::max(radius, 1e-3f));
+    if (density < 0.01f) // 密度が低すぎる場合も分割
         return true;
     // 方向のバラつき判定
     if (boids.size() > 1)
