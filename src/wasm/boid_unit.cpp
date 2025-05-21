@@ -1,5 +1,5 @@
 #include "boid_unit.h"
-#include "boids_tree.h" // ← 追加
+#include "boids_tree.h"
 #include <algorithm>
 #include <queue>
 #include <iostream>
@@ -200,12 +200,47 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other)
             // 影響を加算
             for (Boid *b : allBoids)
             {
+                // 方向ベクトルを直接回転させる（トルク的な影響を加速度加算ではなく回転で表現）
+                Vec3 fwd = b->velocity.normalized();
+                Vec3 target = (other->center - center).normalized();
+                float dot = std::clamp(fwd.dot(target), -1.0f, 1.0f);
+                float angle = acos(dot);
+                if (angle > 1e-4f) {
+                    Vec3 axis = fwd.cross(target);
+                    float axisLen = axis.length();
+                    if (axisLen > 1e-4f) {
+                        axis = axis / axisLen;
+                        // 距離減衰とパラメータで回転量を調整
+                        float torqueStrength = 0.02f; // 必要に応じて調整
+                        float rotateAngle = std::min(angle, torqueStrength * scale);
+                        rotateAngle = std::min(rotateAngle, globalSpeciesParams.maxTurnAngle);
+                        Vec3 newDir = Vec3::rotateVector(fwd, axis, rotateAngle);
+                        b->velocity = newDir * b->velocity.length();
+                    }
+                }
+                // 既存の加速度加算も残す場合（必要なら削除可）
                 b->acceleration += align * scale;
                 b->acceleration += cohes * scale;
                 b->acceleration += separation * scale;
             }
             for (Boid *b : otherBoids)
             {
+                Vec3 fwd = b->velocity.normalized();
+                Vec3 target = (center - other->center).normalized();
+                float dot = std::clamp(fwd.dot(target), -1.0f, 1.0f);
+                float angle = acos(dot);
+                if (angle > 1e-4f) {
+                    Vec3 axis = fwd.cross(target);
+                    float axisLen = axis.length();
+                    if (axisLen > 1e-4f) {
+                        axis = axis / axisLen;
+                        float torqueStrength = 0.02f;
+                        float rotateAngle = std::min(angle, torqueStrength * scale);
+                        rotateAngle = std::min(rotateAngle, globalSpeciesParams.maxTurnAngle);
+                        Vec3 newDir = Vec3::rotateVector(fwd, axis, rotateAngle);
+                        b->velocity = newDir * b->velocity.length();
+                    }
+                }
                 b->acceleration -= align * scale;
                 b->acceleration -= cohes * scale;
                 b->acceleration -= separation * scale;
@@ -241,6 +276,12 @@ void BoidUnit::updateRecursive(float dt)
             float separRange = globalSpeciesParams.separationRange;
             float alignRange = globalSpeciesParams.alignmentRange;
             float cohesRange = globalSpeciesParams.cohesionRange;
+            float tau = globalSpeciesParams.tau;
+
+            // --- cohesionMemory: τ秒持続管理 ---
+            // 近傍Boidのidを記録
+            std::vector<int> visibleIds;
+            visibleIds.reserve(boids.size());
 
             for (const auto &nboid : boids)
             {
@@ -267,60 +308,69 @@ void BoidUnit::updateRecursive(float dt)
                 {
                     sumPosition += nboid.position;
                     cohesCount++;
+                    visibleIds.push_back(nboid.id);
+                    b.cohesionMemory[nboid.id].timer = 0.0f; // 見えていればリセット
+                }
+            }
+            // 見えなかったBoidのtimerを増加、τ超過で削除
+            if (!b.cohesionMemory.empty()) {
+                for (auto it = b.cohesionMemory.begin(); it != b.cohesionMemory.end(); ) {
+                    if (std::find(visibleIds.begin(), visibleIds.end(), it->first) == visibleIds.end()) {
+                        it->second.timer += dt;
+                        if (it->second.timer > tau) {
+                            it = b.cohesionMemory.erase(it);
+                            continue;
+                        }
+                    }
+                    ++it;
                 }
             }
 
+            // cohesionMemoryを使った吸引
+            Vec3 memSumPosition;
+            int memCount = 0;
+            for (const auto &mem : b.cohesionMemory) {
+                if (mem.second.timer <= tau) {
+                    // idからBoidを検索（O(N)だが通常は少数）
+                    auto found = std::find_if(boids.begin(), boids.end(), [&](const Boid &nb){ return nb.id == mem.first; });
+                    if (found != boids.end()) {
+                        memSumPosition += found->position;
+                        memCount++;
+                    }
+                }
+            }
+            // 通常cohesionとmemory吸引を合算
+            int totalCohesCount = cohesCount + memCount;
+            Vec3 totalSumPosition = sumPosition + memSumPosition;
+
             // ルール適用
             Vec3 align = alignCount > 0 ? ((sumVelocity / alignCount - b.velocity) * globalSpeciesParams.alignment) : Vec3();
-            Vec3 cohesTarget = cohesCount > 0 ? ((sumPosition / cohesCount - b.position).normalized()) : Vec3();
+            Vec3 cohesTarget = totalCohesCount > 0 ? ((totalSumPosition / totalCohesCount - b.position).normalized()) : Vec3();
             Vec3 forward = b.velocity.normalized();
 
             float boost = 1.0f + b.stress * 0.8f;
             Vec3 separ = separation * (globalSpeciesParams.separation + b.stress * 0.4f);
 
-            if (cohesCount > 0 && forward.length() > 0.001f)
+            if (totalCohesCount > 0 && forward.length() > 0.001f)
             {
-                float maxCohesionAngle = 0.01f; // 最大で何ラジアン曲げるか（例: 0.2 ≒ 11度）
+                float maxCohesionAngle = 0.01f;
                 float angle = acos(std::clamp(forward.dot(cohesTarget), -1.0f, 1.0f));
                 if (angle > maxCohesionAngle)
                 {
                     Vec3 axis = forward.cross(cohesTarget).normalized();
                     cohesTarget = Vec3::rotateVector(forward, axis, maxCohesionAngle);
                 }
-                // 進行方向に一定角度だけ中心方向に寄せたベクトルをcohesionとして加える
                 Vec3 cohes = (cohesTarget - forward) * globalSpeciesParams.cohesion * (1.0f - b.stress);
                 b.acceleration += cohes * boost;
             }
             else
             {
-                // 通常のcohesion
-                Vec3 cohes = cohesCount > 0 ? ((sumPosition / cohesCount - b.position) * globalSpeciesParams.cohesion * (1.0f - b.stress)) : Vec3();
+                Vec3 cohes = totalCohesCount > 0 ? ((totalSumPosition / totalCohesCount - b.position) * globalSpeciesParams.cohesion * (1.0f - b.stress)) : Vec3();
                 b.acceleration += cohes * boost;
             }
             b.acceleration += align * boost;
             b.acceleration += separ * boost;
 
-            // 進行方向ベクトル
-            Vec3 forwardVec = b.velocity.normalized();
-            // XZ平面上の進行方向
-            Vec3 flatForward = Vec3(forwardVec.x, 0.0f, forwardVec.z);
-            if (flatForward.length() > 0.001f)
-            {
-                flatForward = flatForward.normalized();
-                // 上下方向（y成分）を減らす補正ベクトル
-                Vec3 flatten = (flatForward - forwardVec) * 0.1f; // 係数は調整
-                b.acceleration += flatten;
-            }
-
-            // 画面中心に戻る力
-            Vec3 toOrigin = (Vec3(0, 0, 0) - b.position) * 0.01f;
-            b.acceleration += toOrigin;
-
-            // jitter（微小なランダムノイズ）を加える
-            float jitterStrength = 0.1f;
-            b.acceleration.x += ((float)rand() / float(RAND_MAX) - 0.5f) * jitterStrength;
-            b.acceleration.y += ((float)rand() / 2147483647.0f - 0.5f) * jitterStrength;
-            b.acceleration.z += ((float)rand() / 2147483647.0f - 0.5f) * jitterStrength;
 
             /** 速度の更新 */
             Vec3 desiredVelocity = b.velocity + b.acceleration * dt;

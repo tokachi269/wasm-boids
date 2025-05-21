@@ -8,6 +8,10 @@ struct Vec3
     // Default constructor
     Vec3() : x(0.0f), y(0.0f), z(0.0f) {}
 
+    float lengthSq() const
+    {
+        return x * x + y * y + z * z;
+    }
     // Parameterized constructor
     Vec3(float x, float y, float z) : x(x), y(y), z(z) {}
 
@@ -87,5 +91,14 @@ struct Vec3
         return vec * cosA +
                k.cross(vec) * sinA +
                k * (k.dot(vec)) * (1.0f - cosA);
+    }
+    float distanceSquared(const Vec3 &v) const
+    {
+        float dx = x - v.x, dy = y - v.y, dz = z - v.z;
+        return dx * dx + dy * dy + dz * dz;
+    }
+    float lengthSquared() const
+    {
+        return x * x + y * y + z * z;
     }
 };

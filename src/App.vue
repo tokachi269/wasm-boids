@@ -5,6 +5,7 @@
       <details>
         <summary>Settings</summary>
         <Settings :settings="settings" />
+        <button @click="resetSettings" style="margin-bottom:1em;">リセット</button>
         <div>
           <label>
             <input type="checkbox" v-model="showUnits" />
@@ -44,20 +45,34 @@ if (!wasmModule) {
   console.error('wasmModule not provided');
 }
 
-const settings = reactive({
-  cohesion: 6.8,
-  separation: 2,
-  alignment: 1.0,
-  maxSpeed: 1.0,
-  maxTurnAngle: 0.281,
+const DEFAULT_SETTINGS = {
+  cohesion: 5.8,
+  separation: 1.0,
+  alignment: 3.0,
+  maxSpeed: 0.5,
+  maxTurnAngle: 0.1,
   separationRange: 6.0,
-  alignmentRange: 30.0,
-  cohesionRange: 171.0,
+  alignmentRange: 56.0,
+  cohesionRange: 100.0,
   speed: 5,
-  flockSize: 2000,
-  maxNeighbors: 7,
-  lambda: 0.05,
-});
+  flockSize: 3000,
+  maxNeighbors: 15,
+  lambda: 0.1,
+};
+
+function loadSettings() {
+  const saved = localStorage.getItem('boids_settings');
+  if (saved) {
+    try {
+      return { ...DEFAULT_SETTINGS, ...JSON.parse(saved) };
+    } catch {
+      return { ...DEFAULT_SETTINGS };
+    }
+  }
+  return { ...DEFAULT_SETTINGS };
+}
+
+const settings = reactive(loadSettings());
 
 const threeContainer = ref(null);
 let scene, camera, renderer, controls;
@@ -76,6 +91,9 @@ let unitLines = [];
 
 let maxDepth = 1;
 let stats = null;
+
+let animationTimer = null;
+const FRAME_INTERVAL = 1000 / 60; // 60FPS
 
 // ツリーの最大深さを計算
 function calcMaxDepth(unit, depth = 0) {
@@ -193,34 +211,6 @@ function initBoidLODs(count) {
   }
 }
 
-function drawBoids(boids) {
-  const count = boids.size();
-
-  // 初回または数が変わったらLODを再生成
-  if (boidLODs.length !== count) {
-    initBoidLODs(count);
-  }
-
-  for (let i = 0; i < count; i++) {
-    const boid = boids.get(i);
-    const lod = boidLODs[i];
-
-    lod.position.set(boid.position.x, boid.position.y, boid.position.z);
-
-    // 進行方向に向ける
-    const v = boid.velocity;
-    const dir = new THREE.Vector3(v.x, v.y, v.z);
-    if (dir.lengthSq() > 0.0001) {
-      lod.quaternion.setFromUnitVectors(
-        new THREE.Vector3(0, 0, 1),
-        dir.clone().normalize()
-      );
-    } else {
-      lod.quaternion.identity();
-    }
-  }
-}
-
 function clearUnitVisuals() {
   for (const mesh of unitSpheres) scene.remove(mesh);
   for (const line of unitLines) scene.remove(line);
@@ -276,9 +266,6 @@ function drawUnitTree(unit, layer = 0) {
     }
   }
 }
-
-let animationTimer = null;
-const FRAME_INTERVAL = 1000 / 60; // 60FPS
 
 function animate() {
   if (stats) stats.begin();
@@ -338,9 +325,9 @@ function startSimulation() {
   const VectorBoid = wasmModule.VectorBoid;
   const Boid = wasmModule.Boid;
   // 初期化時
-  boids = wasmModule.BoidTree.generateRandomBoids(settings.flockSize, 100, 0.25);
+  boids = wasmModule.BoidTree.generateRandomBoids(settings.flockSize, 30, 0.25);
   boidTree = new BoidTree();
-  boidTree.build(boids, 32, 0);
+  boidTree.build(boids, 16, 0);
   animate();
 }
 
@@ -425,10 +412,22 @@ watch(
   (newSize) => {
     if (boidTree && boidTree.setFlockSize) {
       // flockSize変更時
-      boidTree.setFlockSize(newSize, 100, 0.25);
+      boidTree.setFlockSize(newSize, 40, 0.25);
     }
   }
 );
+
+watch(
+  settings,
+  (val) => {
+    localStorage.setItem('boids_settings', JSON.stringify(toRaw(val)));
+  },
+  { deep: true }
+);
+
+function resetSettings() {
+  Object.assign(settings, DEFAULT_SETTINGS);
+}
 </script>
 
 <style>
@@ -470,5 +469,9 @@ watch(
   box-sizing: border-box;
   color: #fff;
   z-index: 2;
+  pointer-events: none;
+}
+.ui-overlay * {
+  pointer-events: auto;
 }
 </style>

@@ -11,7 +11,8 @@ public:
     Vec3 center, averageVelocity;
     float radius = 0.0f;
     int level = 0;
-
+    Vec3 influence; // 追加: 他ユニットからの影響を蓄積
+    
     bool isBoidUnit() const;
     void computeBoundingSphere();
     BoidStats computeBoidStats(Boid &self, const std::vector<Boid> &others) const;

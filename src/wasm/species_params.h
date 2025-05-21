@@ -13,4 +13,5 @@ struct SpeciesParams
     float cohesionRange = 50.0f;
     int maxNeighbors = 7;
     float lambda = 0.05f;
+    float tau = 0.5f;
 };

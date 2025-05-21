@@ -22,7 +22,6 @@ void setGlobalSpeciesParams(const SpeciesParams &params)
     globalSpeciesParams = params;
 }
 
-// printTreeの実装（デフォルト引数はヘッダのみ！）
 void printTree(const BoidUnit *node, int depth)
 {
     if (!node)
@@ -59,12 +58,29 @@ void BoidTree::buildRecursive(BoidUnit *node, std::vector<Boid> &boids, int maxP
         node->computeBoundingSphere();
         return;
     }
-    int axis = 2;
+    // --- 最大分散軸を求める ---
+    float mean[3] = {0,0,0}, var[3] = {0,0,0};
+    for (const auto &b : boids) {
+        mean[0] += b.position.x;
+        mean[1] += b.position.y;
+        mean[2] += b.position.z;
+    }
+    mean[0] /= boids.size(); mean[1] /= boids.size(); mean[2] /= boids.size();
+    for (const auto &b : boids) {
+        var[0] += (b.position.x - mean[0]) * (b.position.x - mean[0]);
+        var[1] += (b.position.y - mean[1]) * (b.position.y - mean[1]);
+        var[2] += (b.position.z - mean[2]) * (b.position.z - mean[2]);
+    }
+    int axis = 0;
+    if (var[1] > var[0]) axis = 1;
+    if (var[2] > var[axis]) axis = 2;
+
     std::sort(boids.begin(), boids.end(), [axis](const Boid &a, const Boid &b)
-              {
-            if (axis == 0) return a.position.x < b.position.x;
-            if (axis == 1) return a.position.y < b.position.y;
-            return a.position.z < b.position.z; });
+    {
+        if (axis == 0) return a.position.x < b.position.x;
+        if (axis == 1) return a.position.y < b.position.y;
+        return a.position.z < b.position.z;
+    });
     size_t mid = boids.size() / 2;
     std::vector<Boid> left(boids.begin(), boids.begin() + mid);
     std::vector<Boid> right(boids.begin() + mid, boids.end());
@@ -109,7 +125,12 @@ void BoidTree::update(float dt)
         splitIndex = 0;
         mergeIndex = 0;
     }
-
+    // 再構築カウンタ
+    if (frameCount% 59 == 0) { // 60フレームごとに再構築
+        std::vector<Boid> allBoids = getBoids();
+        build(allBoids, maxBoidsPerUnit, 0);
+        return;
+    }
     if (!leafCache.empty())
     {
         // 分割
