@@ -2,7 +2,7 @@
 #include "vec3.h"
 #include <unordered_map>
 
-static constexpr int COHESION_MEM_SIZE = 8;
+static constexpr int COHESION_MEM_SIZE = 256;
 struct CohesionEntry { int id = -1; float timer = 0.0f; };
 
 struct Boid

@@ -249,35 +249,56 @@ void BoidUnit::updateRecursive(float dt)
             float alignRange = globalSpeciesParams.alignmentRange;
             float cohesRange = globalSpeciesParams.cohesionRange;
 
+            // --- ここから最適化 ---
+            // 近傍候補を距離付きで収集
+            std::vector<std::pair<float, const Boid*>> neighbors;
             for (const auto &nboid : boids)
             {
-                if (nboid.id == b.id)
-                    continue;
+                if (nboid.id == b.id) continue;
                 float dist = b.position.distance(nboid.position);
+                neighbors.emplace_back(dist, &nboid);
+            }
+
+            // 最大近傍数と減衰パラメータ
+            int Nu = globalSpeciesParams.maxNeighbors;
+            float lambda = globalSpeciesParams.lambda;
+
+            // 近い順にNu個だけ使う
+            if ((int)neighbors.size() > Nu) {
+                std::partial_sort(neighbors.begin(), neighbors.begin() + Nu, neighbors.end(),
+                    [](const auto &a, const auto &b) { return a.first < b.first; });
+                neighbors.resize(Nu);
+            }
+
+            for (const auto &[dist, nPtr] : neighbors)
+            {
+                const Boid &nboid = *nPtr;
+                float weight = std::exp(-lambda * dist);
 
                 // 分離
                 if (dist < separRange && dist > 0.01f)
                 {
                     Vec3 diff = b.position - nboid.position;
-                    separation += (diff / (dist * dist));
+                    separation += (diff / (dist * dist)) * weight;
                     separCount++;
-                    stress += (nboid.stress - b.stress) * 0.1f;
+                    stress += (nboid.stress - b.stress) * 0.1f * weight;
                 }
                 // 整列
                 if (dist < alignRange)
                 {
-                    sumVelocity += nboid.velocity;
+                    sumVelocity += nboid.velocity * weight;
                     alignCount++;
                 }
                 // 凝集
                 if (dist < cohesRange)
                 {
-                    sumPosition += nboid.position;
+                    sumPosition += nboid.position * weight;
                     cohesCount++;
                 }
             }
+            // --- ここまで最適化 ---
 
-            // ルール適用
+            // ルール適用（既存のまま）
             Vec3 align = alignCount > 0 ? ((sumVelocity / alignCount - b.velocity) * globalSpeciesParams.alignment) : Vec3();
             Vec3 cohesTarget = cohesCount > 0 ? ((sumPosition / cohesCount - b.position).normalized()) : Vec3();
             Vec3 forward = b.velocity.normalized();
@@ -285,37 +306,56 @@ void BoidUnit::updateRecursive(float dt)
             float boost = 1.0f + b.stress * 0.8f;
             Vec3 separ = separation * (globalSpeciesParams.separation + b.stress * 0.4f);
 
-            if (cohesCount > 0 && forward.length() > 0.001f)
+            // --- 既存コードの一部を最適化 ---
+
+            // 例：進行方向ベクトルの正規化と長さ判定
+            float forwardLenSq = forward.lengthSq();
+            Vec3 forwardNorm;
+            if (forwardLenSq > 0.000001f) {
+                forwardNorm = forward / std::sqrt(forwardLenSq);
+            } else {
+                forwardNorm = Vec3();
+            }
+
+            // 以降は forwardNorm を使い回す
+            if (cohesCount > 0 && forwardLenSq > 0.000001f)
             {
-                float maxCohesionAngle = 0.1f; // 最大で何ラジアン曲げるか（例: 0.2 ≒ 11度）
-                float angle = acos(std::clamp(forward.dot(cohesTarget), -1.0f, 1.0f));
+                float maxCohesionAngle = 0.1f;
+                float dot = forwardNorm.dot(cohesTarget);
+                float angle = acos(std::clamp(dot, -1.0f, 1.0f));
                 if (angle > maxCohesionAngle)
                 {
-                    Vec3 axis = forward.cross(cohesTarget).normalized();
-                    cohesTarget = Vec3::rotateVector(forward, axis, maxCohesionAngle);
+                    Vec3 axis = forwardNorm.cross(cohesTarget).normalized();
+                    cohesTarget = Vec3::rotateVector(forwardNorm, axis, maxCohesionAngle);
                 }
-                // 進行方向に一定角度だけ中心方向に寄せたベクトルをcohesionとして加える
-                Vec3 cohes = (cohesTarget - forward) * globalSpeciesParams.cohesion * (1.0f - b.stress);
+                Vec3 cohes = (cohesTarget - forwardNorm) * globalSpeciesParams.cohesion * (1.0f - b.stress);
                 b.acceleration += cohes * boost;
             }
             else
             {
-                // 通常のcohesion
                 Vec3 cohes = cohesCount > 0 ? ((sumPosition / cohesCount - b.position) * globalSpeciesParams.cohesion * (1.0f - b.stress)) : Vec3();
                 b.acceleration += cohes * boost;
             }
-            b.acceleration += align * boost;
-            b.acceleration += separ * boost;
+
+            // ...他の箇所も .normalized() や .length() を複数回呼ばず、変数にキャッシュして使い回す...
 
             // 進行方向ベクトル
-            Vec3 forwardVec = b.velocity.normalized();
+            Vec3 forwardVec = b.velocity;
+            float forwardVecLenSq = forwardVec.lengthSq();
+            Vec3 forwardVecNorm;
+            if (forwardVecLenSq > 0.000001f) {
+                forwardVecNorm = forwardVec / std::sqrt(forwardVecLenSq);
+            } else {
+                forwardVecNorm = Vec3();
+            }
             // XZ平面上の進行方向
-            Vec3 flatForward = Vec3(forwardVec.x, 0.0f, forwardVec.z);
-            if (flatForward.length() > 0.001f)
+            Vec3 flatForward = Vec3(forwardVecNorm.x, 0.0f, forwardVecNorm.z);
+            float flatForwardLenSq = flatForward.lengthSq();
+            if (flatForwardLenSq > 0.000001f)
             {
-                flatForward = flatForward.normalized();
+                flatForward = flatForward / std::sqrt(flatForwardLenSq);
                 // 上下方向（y成分）を減らす補正ベクトル
-                Vec3 flatten = (flatForward - forwardVec) * 0.1f; // 係数は調整
+                Vec3 flatten = (flatForward - forwardVecNorm) * 0.1f; // 係数は調整
                 b.acceleration += flatten;
             }
 
