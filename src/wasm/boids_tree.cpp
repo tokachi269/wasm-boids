@@ -131,6 +131,7 @@ void BoidTree::update(float dt)
         build(allBoids, maxBoidsPerUnit, 0);
         return;
     }
+    
     if (!leafCache.empty())
     {
         // 分割

@@ -12,7 +12,7 @@ public:
     float radius = 0.0f;
     int level = 0;
     Vec3 influence; // 追加: 他ユニットからの影響を蓄積
-    
+
     bool isBoidUnit() const;
     void computeBoundingSphere();
     BoidStats computeBoidStats(Boid &self, const std::vector<Boid> &others) const;
@@ -25,6 +25,7 @@ public:
     bool canMergeWith(const BoidUnit &other, float mergeDist = 60.0f, float velThresh = 0.5f, float maxRadius = 120.0f, int maxBoids = 32) const;
     void mergeWith(const BoidUnit &other);
     void mergeWith(BoidUnit *other, BoidUnit *parent);
+    void addRepulsionToAllBoids(BoidUnit* unit, const Vec3& repulsion);
 };
 
 void printTree(const BoidUnit *node, int depth = 0);

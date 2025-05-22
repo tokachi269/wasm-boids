@@ -26,7 +26,9 @@ struct Vec3
         }
         return *this;
     }
-
+Vec3 operator-() const {
+    return Vec3(-x, -y, -z);
+}
     float distance(const Vec3 &other) const
     {
         float dx = x - other.x;

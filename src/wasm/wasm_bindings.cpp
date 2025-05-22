@@ -31,6 +31,12 @@ void setGlobalSpeciesParamsFromJS(val jsObj)
         params.maxNeighbors = jsObj["maxNeighbors"].as<int>();
     if (!jsObj["lambda"].isUndefined())
         params.lambda = jsObj["lambda"].as<float>();
+    if (!jsObj["horizontalTorque"].isUndefined())
+        params.horizontalTorque = jsObj["horizontalTorque"].as<float>();
+    if (!jsObj["velocityEpsilon"].isUndefined())
+        params.velocityEpsilon = jsObj["velocityEpsilon"].as<float>();
+    if (!jsObj["torqueStrength"].isUndefined())
+        params.torqueStrength = jsObj["torqueStrength"].as<float>();
     setGlobalSpeciesParams(params);
 }
 
@@ -52,7 +58,10 @@ EMSCRIPTEN_BINDINGS(my_module)
         .field("alignmentRange", &SpeciesParams::alignmentRange)
         .field("cohesionRange", &SpeciesParams::cohesionRange)
         .field("maxNeighbors", &SpeciesParams::maxNeighbors)
-        .field("lambda", &SpeciesParams::lambda);
+        .field("lambda", &SpeciesParams::lambda)
+        .field("horizontalTorque", &SpeciesParams::horizontalTorque)
+        .field("velocityEpsilon", &SpeciesParams::velocityEpsilon)
+        .field("torqueStrength", &SpeciesParams::torqueStrength);
 
     class_<Boid>("Boid")
         .constructor<>()

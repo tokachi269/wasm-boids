@@ -19,13 +19,21 @@ void BoidUnit::computeBoundingSphere()
         for (const auto &b : boids)
             center = center + b.position;
         center = center / boids.size();
-        radius = 0.0f;
+
+        // 平均距離と分散を計算
+        float sum = 0.0f, sum2 = 0.0f;
         for (const auto &b : boids)
         {
             float d = center.distance(b.position);
-            if (d > radius)
-                radius = d;
+            sum += d;
+            sum2 += d * d;
         }
+        float mean = sum / boids.size();
+        float var = sum2 / boids.size() - mean * mean;
+        float stddev = var > 0.0f ? std::sqrt(var) : 0.0f;
+
+        // 平均+α×標準偏差（例: α=1.5）でradiusを決定
+        radius = mean + 1.5f * stddev;
     }
     else
     {
@@ -33,13 +41,20 @@ void BoidUnit::computeBoundingSphere()
         for (const auto &c : children)
             center = center + c->center;
         center = center / children.size();
-        radius = 0.0f;
+
+        // 子ノード中心までの平均距離＋子ノードの半径の平均＋α×標準偏差
+        float sum = 0.0f, sum2 = 0.0f;
         for (const auto &c : children)
         {
             float d = center.distance(c->center) + c->radius;
-            if (d > radius)
-                radius = d;
+            sum += d;
+            sum2 += d * d;
         }
+        float mean = sum / children.size();
+        float var = sum2 / children.size() - mean * mean;
+        float stddev = var > 0.0f ? std::sqrt(var) : 0.0f;
+
+        radius = mean + 1.5f * stddev;
     }
 }
 
@@ -110,7 +125,7 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other)
             for (const Boid &b : other->boids)
             {
                 float dist = a.position.distance(b.position);
-                if (dist < 40.0f && dist > 0.01f)
+                if (dist < 140.0f && dist > 0.01f)
                 {
                     // 例: 葉ノード同士の影響計算
                     float influence = std::max(0.0f, 1.0f - (dist / 40.0f));
@@ -205,19 +220,30 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other)
                 Vec3 target = (other->center - center).normalized();
                 float dot = std::clamp(fwd.dot(target), -1.0f, 1.0f);
                 float angle = acos(dot);
-                if (angle > 1e-4f) {
-                    Vec3 axis = fwd.cross(target);
+                Vec3 axis = fwd.cross(target);
+                float torqueStrength = globalSpeciesParams.torqueStrength; // 必要に応じて調整
+
+                if (angle > 1e-4f)
+                {
                     float axisLen = axis.length();
-                    if (axisLen > 1e-4f) {
+                    if (axisLen > 1e-4f)
+                    {
                         axis = axis / axisLen;
+
                         // 距離減衰とパラメータで回転量を調整
-                        float torqueStrength = 0.02f; // 必要に応じて調整
                         float rotateAngle = std::min(angle, torqueStrength * scale);
                         rotateAngle = std::min(rotateAngle, globalSpeciesParams.maxTurnAngle);
+
+                        // 回転トルクを適用
                         Vec3 newDir = Vec3::rotateVector(fwd, axis, rotateAngle);
                         b->velocity = newDir * b->velocity.length();
                     }
                 }
+
+                // 回転トルクに基づく加速度の調整
+                Vec3 torque = axis * angle * torqueStrength;
+                b->acceleration += torque;
+
                 // 既存の加速度加算も残す場合（必要なら削除可）
                 b->acceleration += align * scale;
                 b->acceleration += cohes * scale;
@@ -229,10 +255,12 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other)
                 Vec3 target = (center - other->center).normalized();
                 float dot = std::clamp(fwd.dot(target), -1.0f, 1.0f);
                 float angle = acos(dot);
-                if (angle > 1e-4f) {
+                if (angle > 1e-4f)
+                {
                     Vec3 axis = fwd.cross(target);
                     float axisLen = axis.length();
-                    if (axisLen > 1e-4f) {
+                    if (axisLen > 1e-4f)
+                    {
                         axis = axis / axisLen;
                         float torqueStrength = 0.02f;
                         float rotateAngle = std::min(angle, torqueStrength * scale);
@@ -313,11 +341,15 @@ void BoidUnit::updateRecursive(float dt)
                 }
             }
             // 見えなかったBoidのtimerを増加、τ超過で削除
-            if (!b.cohesionMemory.empty()) {
-                for (auto it = b.cohesionMemory.begin(); it != b.cohesionMemory.end(); ) {
-                    if (std::find(visibleIds.begin(), visibleIds.end(), it->first) == visibleIds.end()) {
+            if (!b.cohesionMemory.empty())
+            {
+                for (auto it = b.cohesionMemory.begin(); it != b.cohesionMemory.end();)
+                {
+                    if (std::find(visibleIds.begin(), visibleIds.end(), it->first) == visibleIds.end())
+                    {
                         it->second.timer += dt;
-                        if (it->second.timer > tau) {
+                        if (it->second.timer > tau)
+                        {
                             it = b.cohesionMemory.erase(it);
                             continue;
                         }
@@ -329,11 +361,15 @@ void BoidUnit::updateRecursive(float dt)
             // cohesionMemoryを使った吸引
             Vec3 memSumPosition;
             int memCount = 0;
-            for (const auto &mem : b.cohesionMemory) {
-                if (mem.second.timer <= tau) {
+            for (const auto &mem : b.cohesionMemory)
+            {
+                if (mem.second.timer <= tau)
+                {
                     // idからBoidを検索（O(N)だが通常は少数）
-                    auto found = std::find_if(boids.begin(), boids.end(), [&](const Boid &nb){ return nb.id == mem.first; });
-                    if (found != boids.end()) {
+                    auto found = std::find_if(boids.begin(), boids.end(), [&](const Boid &nb)
+                                              { return nb.id == mem.first; });
+                    if (found != boids.end())
+                    {
                         memSumPosition += found->position;
                         memCount++;
                     }
@@ -351,26 +387,8 @@ void BoidUnit::updateRecursive(float dt)
             float boost = 1.0f + b.stress * 0.8f;
             Vec3 separ = separation * (globalSpeciesParams.separation + b.stress * 0.4f);
 
-            if (totalCohesCount > 0 && forward.length() > 0.001f)
-            {
-                float maxCohesionAngle = 0.01f;
-                float angle = acos(std::clamp(forward.dot(cohesTarget), -1.0f, 1.0f));
-                if (angle > maxCohesionAngle)
-                {
-                    Vec3 axis = forward.cross(cohesTarget).normalized();
-                    cohesTarget = Vec3::rotateVector(forward, axis, maxCohesionAngle);
-                }
-                Vec3 cohes = (cohesTarget - forward) * globalSpeciesParams.cohesion * (1.0f - b.stress);
-                b.acceleration += cohes * boost;
-            }
-            else
-            {
-                Vec3 cohes = totalCohesCount > 0 ? ((totalSumPosition / totalCohesCount - b.position) * globalSpeciesParams.cohesion * (1.0f - b.stress)) : Vec3();
-                b.acceleration += cohes * boost;
-            }
             b.acceleration += align * boost;
             b.acceleration += separ * boost;
-
 
             /** 速度の更新 */
             Vec3 desiredVelocity = b.velocity + b.acceleration * dt;
@@ -401,8 +419,7 @@ void BoidUnit::updateRecursive(float dt)
             {
                 b.velocity = b.velocity * (maxSpeed / speed);
             }
-
-            // ...既存の最大速度制限の直後に追加...
+            /** 最小速度の制限 */
             float minSpeed = globalSpeciesParams.minSpeed;
             if (speed < minSpeed && speed > 0.0001f)
             {
@@ -414,7 +431,25 @@ void BoidUnit::updateRecursive(float dt)
             {
                 b.acceleration += (b.velocity / speed) * 0.01f;
             }
+            // 水平化トルク（XZ平面に近づける）
+            Vec3 velDir = b.velocity.normalized();
+            Vec3 up(0, 1, 0);
+            float tilt = velDir.dot(up); // Y成分
+            if (std::abs(tilt) > 1e-4f)
+            {
+                // XZ平面への投影方向
+                Vec3 flatDir = Vec3(velDir.x, 0, velDir.z).normalized();
+                Vec3 axis = velDir.cross(flatDir);
+                float angle = acos(std::clamp(velDir.dot(flatDir), -1.0f, 1.0f));
+                float horizontalTorque = globalSpeciesParams.horizontalTorque;
 
+                if (angle > 1e-4f && axis.length() > 1e-4f)
+                {
+                    axis = axis.normalized();
+                    Vec3 newDir = Vec3::rotateVector(velDir, axis, std::min(angle, horizontalTorque));
+                    b.velocity = newDir * b.velocity.length();
+                }
+            }
             /** 位置の更新 */
             b.position += b.velocity * dt;
 
@@ -443,8 +478,24 @@ void BoidUnit::updateRecursive(float dt)
         {
             for (size_t j = i + 1; j < children.size(); ++j)
             {
-                children[i]->applyInterUnitInfluence(children[j]);
-                children[j]->applyInterUnitInfluence(children[i]);
+                auto *a = children[i];
+                auto *b = children[j];
+
+                // 通常の相互作用
+                a->applyInterUnitInfluence(b);
+                b->applyInterUnitInfluence(a);
+                // BoundingSphere が重なっていたら反発（兄弟反発）
+                float dist = a->center.distance(b->center);
+                float overlap = (a->radius + b->radius) - dist;
+                if (overlap > 5.0f)
+                {
+                    Vec3 dir = (a->center - b->center).normalized();
+                    Vec3 repulsion = dir * overlap * globalSpeciesParams.separation * globalSpeciesParams.velocityEpsilon;
+
+                    // a側に+repulsion, b側に-repulsionを再帰的に加算
+                    addRepulsionToAllBoids(a, repulsion);
+                    addRepulsionToAllBoids(b, -repulsion);
+                }
             }
         }
         center = averageVelocity = Vec3();
@@ -668,4 +719,19 @@ void BoidUnit::mergeWith(BoidUnit *other, BoidUnit *parent)
     }
     // メモリ解放
     delete other;
+}
+
+// 兄弟ノード配下の全Boidに反発を加算するユーティリティ
+void BoidUnit::addRepulsionToAllBoids(BoidUnit* unit, const Vec3& repulsion) {
+    if (unit->isBoidUnit()) {
+        for (auto& b : unit->boids) {
+            float d = (b.position - unit->center).length();
+            float w = 0.5f + 0.5f * (d / (unit->radius + 1e-5f)); // 端ほど1.0、中心0.5
+            b.acceleration += repulsion * w;
+        }
+    } else {
+        for (auto* c : unit->children) {
+            addRepulsionToAllBoids(c, repulsion);
+        }
+    }
 }

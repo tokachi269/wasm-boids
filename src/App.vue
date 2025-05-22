@@ -58,6 +58,9 @@ const DEFAULT_SETTINGS = {
   flockSize: 3000,
   maxNeighbors: 15,
   lambda: 0.1,
+  horizontalTorque: 0.1,
+  velocityEpsilon: 0.01,
+  torqueStrength: 0.1,
 };
 
 function loadSettings() {
@@ -93,7 +96,7 @@ let maxDepth = 1;
 let stats = null;
 
 let animationTimer = null;
-const FRAME_INTERVAL = 1000 / 60; // 60FPS
+const FRAME_INTERVAL = 1;//1000 / 60; // 60FPS
 
 // ツリーの最大深さを計算
 function calcMaxDepth(unit, depth = 0) {
@@ -197,12 +200,15 @@ function initBoidLODs(count) {
     // 近距離: 高ポリ
     const meshHigh = new THREE.Mesh(boidGeometryHigh, boidMaterial);
     meshHigh.castShadow = true; // 影を落とす
+    meshHigh.receiveShadow = true; // 影を受ける
+
     meshHigh.scale.set(0.5, 0.5, 2.0);
     lod.addLevel(meshHigh, 0);
 
     // 遠距離: 低ポリ
     const meshLow = new THREE.Mesh(boidGeometryLow, boidMaterial);
     meshLow.castShadow = true; // 影を落とす
+    meshLow.receiveShadow = true; // 影を受ける
     meshLow.scale.set(0.5, 0.5, 2.0);
     lod.addLevel(meshLow, 100);
 
@@ -327,7 +333,7 @@ function startSimulation() {
   // 初期化時
   boids = wasmModule.BoidTree.generateRandomBoids(settings.flockSize, 30, 0.25);
   boidTree = new BoidTree();
-  boidTree.build(boids, 16, 0);
+  boidTree.build(boids, 8, 0);
   animate();
 }
 
@@ -381,15 +387,16 @@ watch(
     settings.cohesionRange,
     settings.maxNeighbors, // 追加
     settings.lambda,       // 追加
+    settings.horizontalTorque,
+    settings.velocityEpsilon,
+    settings.torqueStrength,
   ],
   () => {
     if (
       wasmModule &&
       wasmModule.setGlobalSpeciesParamsFromJS
     ) {
-      // プレーンなオブジェクトを作る
       const raw = toRaw(settings);
-
       wasmModule.setGlobalSpeciesParamsFromJS({
         cohesion: Number(raw.cohesion),
         separation: Number(raw.separation),
@@ -401,6 +408,9 @@ watch(
         cohesionRange: Number(raw.cohesionRange),
         maxNeighbors: Number(raw.maxNeighbors),
         lambda: Number(raw.lambda),
+        horizontalTorque: Number(raw.horizontalTorque),
+        velocityEpsilon: Number(raw.velocityEpsilon),
+        torqueStrength: Number(raw.torqueStrength),
       });
     }
   }
@@ -471,6 +481,7 @@ function resetSettings() {
   z-index: 2;
   pointer-events: none;
 }
+
 .ui-overlay * {
   pointer-events: auto;
 }

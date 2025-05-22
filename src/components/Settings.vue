@@ -56,6 +56,22 @@
       <input type="range" v-model.number="settings.lambda" min="0.001" max="0.2" step="0.001" />
       <span>{{ settings.lambda }}</span>
     </div>
+    <div class="setting-row">
+      <label>水平化トルク<br>(Horizontal Torque):</label>
+      <input type="range" v-model.number="settings.horizontalTorque" min="0.001" max="0.2" step="0.001" />
+      <span>{{ settings.horizontalTorque }}</span>
+    </div>
+    <div class="setting-row">
+      <label>速度閾値ε<br>(Velocity Epsilon):</label>
+      <input type="range" v-model.number="settings.velocityEpsilon" min="0.00001" max="0.01" step="0.00001" />
+      <span>{{ settings.velocityEpsilon }}</span>
+    </div>
+    <div class="setting-row">
+      <label>回転トルク強度<br>(Torque Strength):</label>
+      <input type="range" v-model.number="settings.torqueStrength" min="0.001" max="0.2" step="0.001" />
+      <span>{{ settings.torqueStrength }}</span>
+    </div>
+    
   </div>
 </template>
 
