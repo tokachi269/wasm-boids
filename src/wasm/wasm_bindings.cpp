@@ -2,6 +2,9 @@
 #include "boids_tree.h"
 #include "boid.h"
 #include "species_params.h"
+#include <glm/glm.hpp>
+#include <glm/gtx/norm.hpp>
+#include <glm/gtx/rotate_vector.hpp>
 
 using namespace emscripten;
 
@@ -42,10 +45,10 @@ void setGlobalSpeciesParamsFromJS(val jsObj)
 
 EMSCRIPTEN_BINDINGS(my_module)
 {
-    value_object<Vec3>("Vec3")
-        .field("x", &Vec3::x)
-        .field("y", &Vec3::y)
-        .field("z", &Vec3::z);
+    value_object<glm::vec3>("Vec3")
+        .field("x", &glm::vec3::x)
+        .field("y", &glm::vec3::y)
+        .field("z", &glm::vec3::z);
 
     value_object<SpeciesParams>("SpeciesParams")
         .field("cohesion", &SpeciesParams::cohesion)

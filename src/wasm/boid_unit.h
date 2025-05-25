@@ -1,21 +1,24 @@
 #pragma once
+#define GLM_ENABLE_EXPERIMENTAL
 #include <vector>
 #include "vec3.h"
 #include "boid.h"
 #include "species_params.h"
+#include <glm/glm.hpp>
+#include <glm/gtx/norm.hpp>
+#include <glm/gtx/rotate_vector.hpp>
 
 class BoidUnit {
 public:
     std::vector<Boid> boids;
     std::vector<BoidUnit *> children;
-    Vec3 center, averageVelocity;
+    glm::vec3 center, averageVelocity;
     float radius = 0.0f;
     int level = 0;
-    Vec3 influence; // 追加: 他ユニットからの影響を蓄積
+    glm::vec3 influence; // 追加: 他ユニットからの影響を蓄積
 
     bool isBoidUnit() const;
     void computeBoundingSphere();
-    BoidStats computeBoidStats(Boid &self, const std::vector<Boid> &others) const;
     void applyInterUnitInfluence(BoidUnit *other);
     void updateRecursive(float dt = 1.0f);
     bool needsSplit(float splitRadius = 40.0f, float directionVarThresh = 0.5f, int maxBoids = 64) const;
@@ -25,7 +28,7 @@ public:
     bool canMergeWith(const BoidUnit &other, float mergeDist = 60.0f, float velThresh = 0.5f, float maxRadius = 120.0f, int maxBoids = 32) const;
     void mergeWith(const BoidUnit &other);
     void mergeWith(BoidUnit *other, BoidUnit *parent);
-    void addRepulsionToAllBoids(BoidUnit* unit, const Vec3& repulsion);
+    void addRepulsionToAllBoids(BoidUnit* unit, const glm::vec3& repulsion);
 };
 
 void printTree(const BoidUnit *node, int depth = 0);

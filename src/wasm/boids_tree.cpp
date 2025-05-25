@@ -1,3 +1,4 @@
+#define GLM_ENABLE_EXPERIMENTAL
 #include "boids_tree.h"
 #include "vec3.h"
 #include <vector>
@@ -9,6 +10,9 @@
 #include <iostream>
 #include "species_params.h"
 #include "boid.h"
+#include <glm/glm.hpp>
+#include <glm/gtx/norm.hpp>
+#include <glm/gtx/rotate_vector.hpp>
 
 // グローバル共通
 SpeciesParams globalSpeciesParams;
@@ -59,28 +63,33 @@ void BoidTree::buildRecursive(BoidUnit *node, std::vector<Boid> &boids, int maxP
         return;
     }
     // --- 最大分散軸を求める ---
-    float mean[3] = {0,0,0}, var[3] = {0,0,0};
-    for (const auto &b : boids) {
+    float mean[3] = {0, 0, 0}, var[3] = {0, 0, 0};
+    for (const auto &b : boids)
+    {
         mean[0] += b.position.x;
         mean[1] += b.position.y;
         mean[2] += b.position.z;
     }
-    mean[0] /= boids.size(); mean[1] /= boids.size(); mean[2] /= boids.size();
-    for (const auto &b : boids) {
+    mean[0] /= boids.size();
+    mean[1] /= boids.size();
+    mean[2] /= boids.size();
+    for (const auto &b : boids)
+    {
         var[0] += (b.position.x - mean[0]) * (b.position.x - mean[0]);
         var[1] += (b.position.y - mean[1]) * (b.position.y - mean[1]);
         var[2] += (b.position.z - mean[2]) * (b.position.z - mean[2]);
     }
     int axis = 0;
-    if (var[1] > var[0]) axis = 1;
-    if (var[2] > var[axis]) axis = 2;
+    if (var[1] > var[0])
+        axis = 1;
+    if (var[2] > var[axis])
+        axis = 2;
 
     std::sort(boids.begin(), boids.end(), [axis](const Boid &a, const Boid &b)
-    {
+              {
         if (axis == 0) return a.position.x < b.position.x;
         if (axis == 1) return a.position.y < b.position.y;
-        return a.position.z < b.position.z;
-    });
+        return a.position.z < b.position.z; });
     size_t mid = boids.size() / 2;
     std::vector<Boid> left(boids.begin(), boids.begin() + mid);
     std::vector<Boid> right(boids.begin() + mid, boids.end());
@@ -126,12 +135,13 @@ void BoidTree::update(float dt)
         mergeIndex = 0;
     }
     // 再構築カウンタ
-    if (frameCount% 59 == 0) { // 60フレームごとに再構築
+    if (frameCount % 59 == 0)
+    {
         std::vector<Boid> allBoids = getBoids();
         build(allBoids, maxBoidsPerUnit, 0);
         return;
     }
-    
+
     if (!leafCache.empty())
     {
         // 分割
@@ -237,9 +247,9 @@ std::vector<Boid> BoidTree::generateRandomBoids(int count, float posRange, float
     for (int i = 0; i < count; ++i)
     {
         Boid b;
-        b.position = Vec3(posDist(gen), posDist(gen), posDist(gen));
-        b.velocity = Vec3(velDist(gen), velDist(gen), velDist(gen));
-        b.acceleration = Vec3(0, 0, 0);
+        b.position = glm::vec3(posDist(gen), posDist(gen), posDist(gen));
+        b.velocity = glm::vec3(velDist(gen), velDist(gen), velDist(gen));
+        b.acceleration = glm::vec3(0, 0, 0);
         b.id = i;
         b.stress = 0.0f;
         b.speciesId = 0;
@@ -270,34 +280,41 @@ void BoidTree::setFlockSize(int newSize, float posRange, float velRange)
     build(currentBoids, 32, 0);
 }
 
-void BoidTree::updatePositionBuffer() {
+void BoidTree::updatePositionBuffer()
+{
     std::vector<Boid> boids = getBoids();
     positionBuffer.resize(boids.size() * 3);
-    for (size_t i = 0; i < boids.size(); ++i) {
+    for (size_t i = 0; i < boids.size(); ++i)
+    {
         positionBuffer[i * 3 + 0] = boids[i].position.x;
         positionBuffer[i * 3 + 1] = boids[i].position.y;
         positionBuffer[i * 3 + 2] = boids[i].position.z;
     }
 }
 
-uintptr_t BoidTree::getPositionBufferPtr() {
+uintptr_t BoidTree::getPositionBufferPtr()
+{
     return reinterpret_cast<uintptr_t>(positionBuffer.data());
 }
 
-int BoidTree::getBoidCount() const {
+int BoidTree::getBoidCount() const
+{
     return (int)positionBuffer.size() / 3;
 }
 
-void BoidTree::updateVelocityBuffer() {
+void BoidTree::updateVelocityBuffer()
+{
     std::vector<Boid> boids = getBoids();
     velocityBuffer.resize(boids.size() * 3);
-    for (size_t i = 0; i < boids.size(); ++i) {
+    for (size_t i = 0; i < boids.size(); ++i)
+    {
         velocityBuffer[i * 3 + 0] = boids[i].velocity.x;
         velocityBuffer[i * 3 + 1] = boids[i].velocity.y;
         velocityBuffer[i * 3 + 2] = boids[i].velocity.z;
     }
 }
 
-uintptr_t BoidTree::getVelocityBufferPtr() {
+uintptr_t BoidTree::getVelocityBufferPtr()
+{
     return reinterpret_cast<uintptr_t>(velocityBuffer.data());
 }

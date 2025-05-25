@@ -96,7 +96,7 @@ let maxDepth = 1;
 let stats = null;
 
 let animationTimer = null;
-const FRAME_INTERVAL = 1;//1000 / 60; // 60FPS
+const FRAME_INTERVAL = 1000 / 60;//1000 / 60; // 60FPS
 
 // ツリーの最大深さを計算
 function calcMaxDepth(unit, depth = 0) {

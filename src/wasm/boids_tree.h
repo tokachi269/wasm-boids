@@ -29,9 +29,9 @@ public:
 
     // バッファ更新
     void updatePositionBuffer();
-    void updateVelocityBuffer();       // 追加
+    void updateVelocityBuffer();
     uintptr_t getPositionBufferPtr();
-    uintptr_t getVelocityBufferPtr();  // 追加
+    uintptr_t getVelocityBufferPtr();
     int getBoidCount() const;
 };
 
