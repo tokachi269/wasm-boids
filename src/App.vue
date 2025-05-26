@@ -46,21 +46,21 @@ if (!wasmModule) {
 }
 
 const DEFAULT_SETTINGS = {
-  cohesion: 5.8,
-  separation: 1.0,
-  alignment: 3.0,
-  maxSpeed: 0.5,
-  maxTurnAngle: 0.1,
-  separationRange: 6.0,
-  alignmentRange: 56.0,
-  cohesionRange: 100.0,
+  cohesion: 3.07,
+  separation: 4.95,
+  alignment: 4.39,
+  maxSpeed: 0.48,
+  maxTurnAngle: 0.12,
+  separationRange: 10,
+  alignmentRange: 25,
+  cohesionRange: 128,
   speed: 5,
-  flockSize: 3000,
-  maxNeighbors: 15,
-  lambda: 0.1,
-  horizontalTorque: 0.1,
-  velocityEpsilon: 0.01,
-  torqueStrength: 0.1,
+  flockSize: 1300,
+  maxNeighbors: 4,
+  lambda: 0.068,
+  horizontalTorque: 0.07,
+  velocityEpsilon: 0.00448,
+  torqueStrength: 0.554,
 };
 
 function loadSettings() {
@@ -126,7 +126,7 @@ function initThreeJS() {
   scene.fog = new THREE.Fog(0x0a1e3a, 300, 900);
 
   camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
-  camera.position.set(0, 0, 150);
+  camera.position.set(20, 40, 40);
   camera.lookAt(0, 0, 0);
 
   renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -366,6 +366,7 @@ onMounted(() => {
       separationRange: Number(raw.separationRange),
       alignmentRange: Number(raw.alignmentRange),
       cohesionRange: Number(raw.cohesionRange),
+      horizontalTorque: Number(raw.horizontalTorque), // 追加
     });
   }
 

@@ -135,7 +135,7 @@ void BoidTree::update(float dt)
         mergeIndex = 0;
     }
     // 再構築カウンタ
-    if (frameCount % 59 == 0)
+    if (frameCount % 17 == 0)
     {
         std::vector<Boid> allBoids = getBoids();
         build(allBoids, maxBoidsPerUnit, 0);

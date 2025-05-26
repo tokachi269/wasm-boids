@@ -16,9 +16,11 @@ public:
     float radius = 0.0f;
     int level = 0;
     glm::vec3 influence; // 追加: 他ユニットからの影響を蓄積
+    int frameCount = 0;
 
     bool isBoidUnit() const;
     void computeBoundingSphere();
+    void computeBoidInteraction(Boid &b, const std::vector<Boid> &boids, float dt);
     void applyInterUnitInfluence(BoidUnit *other);
     void updateRecursive(float dt = 1.0f);
     bool needsSplit(float splitRadius = 40.0f, float directionVarThresh = 0.5f, int maxBoids = 64) const;

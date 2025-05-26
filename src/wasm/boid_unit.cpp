@@ -5,12 +5,15 @@
 #include <queue>
 #include <iostream>
 #include <random>
+#include <unordered_set>
 #include <limits>
 #include <cmath>
 #include <glm/glm.hpp>
 #include <glm/gtx/norm.hpp>
 #include <glm/gtx/rotate_vector.hpp>
 #include <glm/gtx/string_cast.hpp>
+#include <glm/gtc/random.hpp>
+#include <random>
 
 bool BoidUnit::isBoidUnit() const { return children.empty(); }
 
@@ -278,12 +281,38 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other)
  */
 void BoidUnit::updateRecursive(float dt)
 {
-    const int watch_id = 90;
-    static int frameCount = 0;
     frameCount++;
     // static変数で現在時刻を管理
-    static float currentTime = 0.0f;
     std::stack<BoidUnit *> stack;
+    stack.push(this);
+
+    // 第一段階: acceleration をすべて計算
+    while (!stack.empty())
+    {
+        BoidUnit *current = stack.top();
+        stack.pop();
+
+        if (current->isBoidUnit())
+        {
+            for (size_t i = 0; i < current->boids.size(); ++i)
+            {
+                computeBoidInteraction(current->boids[i], current->boids, dt);
+            }
+        }
+        else
+        {
+            for (auto &child : current->children)
+                stack.push(child);
+
+            for (auto &other : current->children)
+                if (current != other)
+                    current->applyInterUnitInfluence(other);
+
+            current->computeBoundingSphere();
+        }
+    }
+
+    // 第二段階: acceleration 適用 → velocity/position 更新
     stack.push(this);
     while (!stack.empty())
     {
@@ -292,146 +321,152 @@ void BoidUnit::updateRecursive(float dt)
 
         if (current->isBoidUnit())
         {
-            // 同じユニット内のBoid同士の相互作用を計算
-            for (size_t i = 0; i <  current->boids.size(); ++i)
+            for (Boid &b : current->boids)
             {
-                Boid &b = current->boids[i];
-                b.acceleration = glm::vec3(0.0f); // 加速度を初期化
-
-                glm::vec3 separation = glm::vec3(0.0f);
-                glm::vec3 alignment = glm::vec3(0.0f);
-                glm::vec3 cohesion = glm::vec3(0.0f);
-                int count = 0;
-
-                for (size_t j = 0; j < current->boids.size(); ++j)
-                {
-                    if (i == j)
-                        continue; // 自分自身は無視
-
-                    Boid &other = current->boids[j];
-                    float distSq = glm::distance2(b.position, other.position);
-
-                    if (distSq < 2500.0f && distSq > 0.0001f) // 50.0f^2 = 2500.0f
-                    {
-                        float dist = std::sqrt(distSq); // 必要な場合のみ平方根を計算
-
-                        // 分離
-                        glm::vec3 diff = b.position - other.position;
-                        float separationWeight = glm::clamp(1.0f - (dist / 50.0f), 0.0f, 1.0f); // 距離に応じた減衰
-                        separation += diff * separationWeight * globalSpeciesParams.separation;
-
-                        // 凝集
-                        float cohesionWeight = glm::clamp(dist / 50.0f, 0.0f, 1.0f); // 距離に応じた増加
-                        cohesion += other.position * cohesionWeight;
-
-                        // 整列
-                        alignment += other.velocity;
-
-                        count++;
-                    }
-                }
-
-                if (count > 0)
-                {
-                    // 平均化して影響を加算
-                    separation = glm::normalize(separation) * globalSpeciesParams.separation * 0.8f; // 分離の影響を少し弱める
-                    alignment = (alignment / static_cast<float>(count) - b.velocity) * globalSpeciesParams.alignment;
-                    cohesion = ((cohesion / static_cast<float>(count)) - b.position);
-                    if (glm::length(cohesion) > 0.0f)
-                    {
-                        cohesion = glm::normalize(cohesion) * globalSpeciesParams.cohesion * 1.2f; // 凝集の影響を少し強める
-                    }
-
-                    b.acceleration += separation + alignment + cohesion;
-                }
-
-                /** 速度の更新 */
                 glm::vec3 desiredVelocity = b.velocity + b.acceleration * dt;
-                float maxTurnAngle = globalSpeciesParams.maxTurnAngle;
-                float speed = glm::length(b.velocity);
-
-                // 最大速度の制限
-                if (speed > globalSpeciesParams.maxSpeed)
-                {
-                    b.velocity = glm::normalize(b.velocity) * globalSpeciesParams.maxSpeed;
-                }
-
-                // 最小速度の制限
-                if (speed < globalSpeciesParams.minSpeed && speed > 0.0001f)
-                {
-                    b.velocity = glm::normalize(b.velocity) * globalSpeciesParams.minSpeed;
-                }
                 glm::vec3 oldDir = glm::normalize(b.velocity);
+                glm::vec3 newDir = glm::normalize(desiredVelocity);
+                float speed = glm::length(desiredVelocity);
 
-                if (speed > 0.001f)
+                float angle = acosf(glm::clamp(glm::dot(oldDir, newDir), -1.0f, 1.0f));
+                if (angle > globalSpeciesParams.maxTurnAngle)
                 {
-                    glm::vec3 newDir = glm::normalize(desiredVelocity);
-                    float angle = acos(std::clamp(glm::dot(oldDir, newDir), -1.0f, 1.0f));
-                    if (angle > maxTurnAngle)
-                    {
-                        glm::vec3 axis = glm::normalize(glm::cross(oldDir, newDir));
-
-                        // 最大旋回角に dt を反映
-                        float rotateAngle = std::min(angle, maxTurnAngle * dt); // dt を掛ける
-                        newDir = glm::rotate(oldDir, rotateAngle, axis);
-                        b.velocity = newDir * speed;
-                    }
-                    else
-                    {
-                        b.velocity = desiredVelocity;
-                    }
-                }
-                // 水平化トルク（XZ平面に近づける）
-                glm::vec3 up(0, 1, 0);
-                float tilt = glm::dot(oldDir, up); // Y成分
-                if (std::abs(tilt) > 1e-4f)
-                {
-                    glm::vec3 flatDir = glm::normalize(glm::vec3(oldDir.x, 0, oldDir.z));
-                    glm::vec3 axis = glm::cross(oldDir, flatDir);
-                    float angle = acos(std::clamp(glm::dot(oldDir, flatDir), -1.0f, 1.0f));
-                    float horizontalTorque = globalSpeciesParams.horizontalTorque;
-
-                    if (angle > 1e-4f && axis.length() > 1e-4f)
+                    glm::vec3 axis = glm::cross(oldDir, newDir);
+                    if (glm::length2(axis) > 1e-8f)
                     {
                         axis = glm::normalize(axis);
-
-                        // 回転角度に dt を反映
-                        float rotateAngle = std::min(angle, horizontalTorque * dt);
-                        glm::vec3 newDir = glm::rotate(oldDir, rotateAngle, axis);
-                        b.velocity = newDir * glm::length(b.velocity);
+                        float rotateAngle = glm::min(angle, globalSpeciesParams.maxTurnAngle * dt);
+                        newDir = glm::rotate(oldDir, rotateAngle, axis);
                     }
                 }
 
-                speed = glm::length(desiredVelocity);
-                b.position += b.velocity * dt;
-
-                // 最大速度の制限
-                if (speed > globalSpeciesParams.maxSpeed)
+                float tilt = newDir.y;
+                if (fabsf(tilt) > 1e-4f)
                 {
-                    b.velocity = glm::normalize(b.velocity) * globalSpeciesParams.maxSpeed;
-                }
-                else if (speed < globalSpeciesParams.minSpeed && speed > 0.001f)
-                {
-                    b.velocity = glm::normalize(b.velocity) * globalSpeciesParams.minSpeed;
+                    glm::vec3 flatDir = glm::normalize(glm::vec3(newDir.x, 0, newDir.z));
+                    glm::vec3 axis = glm::cross(newDir, flatDir);
+                    float flatAngle = acosf(glm::clamp(glm::dot(newDir, flatDir), -1.0f, 1.0f));
+                    if (flatAngle > 1e-4f && glm::length2(axis) > 1e-8f)
+                    {
+                        axis = glm::normalize(axis);
+                        float rotateAngle = glm::min(flatAngle, globalSpeciesParams.horizontalTorque * dt);
+                        newDir = glm::rotate(newDir, rotateAngle, axis);
+                    }
                 }
 
-                // 位置を更新
+                float finalSpeed = glm::clamp(speed, globalSpeciesParams.minSpeed, globalSpeciesParams.maxSpeed);
+                b.velocity = newDir * finalSpeed;
                 b.position += b.velocity * dt;
-
-                // ストレスの減少
-                b.stress = std::max(0.0f, b.stress - 0.005f);
+                b.stress = glm::max(0.0f, b.stress - 0.005f);
             }
         }
         else
         {
-            // 中間ノードの場合、子ノードを再帰的に更新
-            for (auto &child : children)
-            {
-                child->updateRecursive(dt);
-            }
-            // 子ノードが変更された場合にバウンディングスフィアを更新
-            computeBoundingSphere();
+            for (auto &child : current->children)
+                stack.push(child);
         }
+    }
+}
+
+void BoidUnit::computeBoidInteraction(Boid &b, const std::vector<Boid> &boids, float dt)
+{
+    glm::vec3 separation = glm::vec3(0.0f);
+    glm::vec3 alignment = glm::vec3(0.0f);
+    glm::vec3 cohesion = glm::vec3(0.0f);
+    glm::vec3 memCohesion = glm::vec3(0.0f);
+
+    int count = 0;
+    int memCount = 0;
+
+    // visibleIds を std::unordered_set に変更
+    std::unordered_set<int> visibleIds;
+    visibleIds.reserve(boids.size());
+
+    for (const auto &other : boids)
+    {
+        if (b.id == other.id)
+            continue;
+
+        glm::vec3 diff = b.position - other.position;
+        float distSq = glm::dot(diff, diff);
+
+        if (distSq < 2500.0f && distSq > 0.0001f)
+        {
+            float dist = sqrtf(distSq);
+
+            float separationWeight = glm::clamp(1.0f - (dist / 50.0f), 0.0f, 1.0f);
+            separation += diff * (separationWeight * globalSpeciesParams.separation);
+
+            float cohesionWeight = glm::clamp(dist / 50.0f, 0.0f, 1.0f);
+            cohesion += other.position * cohesionWeight;
+
+            alignment += other.velocity;
+            count++;
+
+            visibleIds.insert(other.id);
+            b.cohesionMemory[other.id] = 0.0f;
+        }
+    }
+
+    // cohesionMemory の更新を隔フレームで実行
+    if (frameCount % 5 == 0)
+    {
+        for (auto it = b.cohesionMemory.begin(); it != b.cohesionMemory.end();)
+        {
+            if (visibleIds.find(it->first) == visibleIds.end())
+            {
+                it->second += dt;
+                if (it->second > globalSpeciesParams.tau)
+                {
+                    it = b.cohesionMemory.erase(it);
+                    continue;
+                }
+            }
+            ++it;
+        }
+    }
+
+    // cohesionMemory のサイズを制限 (LRU風)
+    const size_t maxCohesionMemorySize = 100;
+    if (b.cohesionMemory.size() > maxCohesionMemorySize)
+    {
+        auto oldest = std::min_element(
+            b.cohesionMemory.begin(), b.cohesionMemory.end(),
+            [](const auto &a, const auto &b)
+            { return a.second > b.second; });
+        if (oldest != b.cohesionMemory.end())
+        {
+            b.cohesionMemory.erase(oldest);
+        }
+    }
+
+    for (const auto &mem : b.cohesionMemory)
+    {
+        auto found = std::find_if(boids.begin(), boids.end(), [&](const Boid &other)
+                                  { return other.id == mem.first; });
+        if (found != boids.end())
+        {
+            memCohesion += found->position;
+            memCount++;
+        }
+    }
+
+    if (count + memCount > 0)
+    {
+        glm::vec3 totalCohesion = cohesion + memCohesion;
+        totalCohesion = (totalCohesion / static_cast<float>(count + memCount)) - b.position;
+        if (glm::length2(totalCohesion) > 0.0f)
+        {
+            totalCohesion = glm::normalize(totalCohesion) * globalSpeciesParams.cohesion * 1.2f;
+        }
+
+        if (count > 0)
+        {
+            separation = glm::normalize(separation) * globalSpeciesParams.separation * 0.8f;
+            alignment = (alignment / static_cast<float>(count) - b.velocity) * globalSpeciesParams.alignment;
+        }
+
+        b.acceleration += separation + alignment + totalCohesion;
     }
 }
 
@@ -536,6 +571,7 @@ std::vector<BoidUnit *> BoidUnit::splitByClustering(int numClusters)
     for (int iter = 0; iter < 5; ++iter)
     { // 反復回数少なめ
         // 割り当て
+
         for (size_t i = 0; i < boids.size(); ++i)
         {
             float minDist = 1e9;
