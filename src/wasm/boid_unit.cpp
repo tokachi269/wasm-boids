@@ -261,6 +261,12 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other)
     }
 }
 
+inline glm::vec3 approxRotate(const glm::vec3 &v, const glm::vec3 &axis, float angle)
+{
+    // 小角度近似: sinθ ≈ θ, cosθ ≈ 1
+    return v + angle * glm::cross(axis, v);
+}
+
 /**
  * 再帰的にユニット内の Boid の動きを更新する。
  *
@@ -282,7 +288,6 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other)
 void BoidUnit::updateRecursive(float dt)
 {
     frameCount++;
-    // static変数で現在時刻を管理
     std::stack<BoidUnit *> stack;
     stack.push(this);
 
@@ -336,7 +341,7 @@ void BoidUnit::updateRecursive(float dt)
                     {
                         axis = glm::normalize(axis);
                         float rotateAngle = glm::min(angle, globalSpeciesParams.maxTurnAngle * dt);
-                        newDir = glm::rotate(oldDir, rotateAngle, axis);
+                        newDir = approxRotate(oldDir, axis, rotateAngle); // glm::rotate を approxRotate に置き換え
                     }
                 }
 
@@ -350,7 +355,7 @@ void BoidUnit::updateRecursive(float dt)
                     {
                         axis = glm::normalize(axis);
                         float rotateAngle = glm::min(flatAngle, globalSpeciesParams.horizontalTorque * dt);
-                        newDir = glm::rotate(newDir, rotateAngle, axis);
+                        newDir = approxRotate(newDir, axis, rotateAngle); // glm::rotate を approxRotate に置き換え
                     }
                 }
 
