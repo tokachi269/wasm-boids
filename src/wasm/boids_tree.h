@@ -18,7 +18,7 @@ public:
     BoidTree();
     void setFlockSize(int newSize, float posRange, float velRange);
     void build(int maxPerUnit = 16, int level = 0);
-    void buildRecursive(BoidUnit *node, std::vector<Boid> &boids, int maxPerUnit, int level);
+    void buildRecursive(BoidUnit *node, const std::vector<int> &indices, int maxPerUnit, int level);
     BoidUnit *findParent(BoidUnit *node, BoidUnit *target);
     void update(float dt = 1.0f);
     void trySplitRecursive(BoidUnit *node);

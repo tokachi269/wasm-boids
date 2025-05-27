@@ -11,7 +11,10 @@ struct Boid
     int id = 0;
     float stress = 0.0f;
     int speciesId = 0;
+
+    // 近傍BoidのIDとその経過時間（τ管理）
     std::unordered_map<int, float> cohesionMemory;
-    bool attractionEnabled = false;                              // 引力がONかどうか
-    float attractionStartTime = -1.0f;                           // ONになった時刻（無効時は -1）
+
+    bool attractionEnabled = false;
+    float attractionStartTime = -1.0f;
 };

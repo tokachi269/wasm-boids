@@ -8,9 +8,18 @@
 #include <glm/gtx/norm.hpp>
 #include <glm/gtx/rotate_vector.hpp>
 
-class BoidUnit {
+class BoidUnit
+{
 public:
-    std::vector<Boid> boids;
+    // SOA形式のデータ
+    std::vector<glm::vec3> positions;
+    std::vector<glm::vec3> velocities;
+    std::vector<glm::vec3> accelerations;
+    std::vector<int> ids;
+    std::vector<float> stresses;
+    std::vector<int> speciesIds;
+    std::unordered_map<int, std::unordered_map<int, float>> cohesionMemory;
+
     std::vector<BoidUnit *> children;
     glm::vec3 center, averageVelocity;
     float radius = 0.0f;
@@ -20,7 +29,7 @@ public:
 
     bool isBoidUnit() const;
     void computeBoundingSphere();
-    void computeBoidInteraction(Boid &b, const std::vector<Boid> &boids, float dt);
+    void computeBoidInteraction(size_t index, float dt);
     void applyInterUnitInfluence(BoidUnit *other);
     void updateRecursive(float dt = 1.0f);
     bool needsSplit(float splitRadius = 40.0f, float directionVarThresh = 0.5f, int maxBoids = 64) const;
@@ -30,7 +39,7 @@ public:
     bool canMergeWith(const BoidUnit &other, float mergeDist = 60.0f, float velThresh = 0.5f, float maxRadius = 120.0f, int maxBoids = 32) const;
     void mergeWith(const BoidUnit &other);
     void mergeWith(BoidUnit *other, BoidUnit *parent);
-    void addRepulsionToAllBoids(BoidUnit* unit, const glm::vec3& repulsion);
+    void addRepulsionToAllBoids(BoidUnit *unit, const glm::vec3 &repulsion);
 };
 
 void printTree(const BoidUnit *node, int depth = 0);
