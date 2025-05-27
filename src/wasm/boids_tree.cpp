@@ -1,5 +1,6 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #include "boids_tree.h"
+#include "boid_factory.h"
 #include "vec3.h"
 #include <vector>
 #include <cmath>
@@ -45,13 +46,15 @@ void printTree(const BoidUnit *node, int depth)
 // BoidTreeのメンバ関数実装
 BoidTree::BoidTree() : root(nullptr) {}
 
-void BoidTree::build(std::vector<Boid> &boids, int maxPerUnit, int level)
+void BoidTree::build(int maxPerUnit, int level)
 {
+    std::cout << "Building BoidTree with maxPerUnit: " << maxPerUnit << " at level: " << level << std::endl;
     maxBoidsPerUnit = maxPerUnit;
-    root = new BoidUnit();
+    if (!root) {
+        root = new BoidUnit(); // 初回のみ新しいルートノードを作成
+    }
     root->level = level;
-    buildRecursive(root, boids, maxPerUnit, level);
-    // printTree(root); // 木構造を出力
+    buildRecursive(root, root->boids, maxPerUnit, level);
 }
 
 void BoidTree::buildRecursive(BoidUnit *node, std::vector<Boid> &boids, int maxPerUnit, int level)
@@ -137,8 +140,8 @@ void BoidTree::update(float dt)
     // 再構築カウンタ
     if (frameCount % 17 == 0)
     {
-        std::vector<Boid> allBoids = getBoids();
-        build(allBoids, maxBoidsPerUnit, 0);
+        root->boids = getBoids();  // 最新化
+        build(maxBoidsPerUnit, 0);       // 正しく再構築
         return;
     }
 
@@ -236,50 +239,33 @@ void BoidTree::collectLeaves(const BoidUnit *node, std::vector<BoidUnit *> &leav
     }
 }
 
-std::vector<Boid> BoidTree::generateRandomBoids(int count, float posRange, float velRange)
-{
-    std::vector<Boid> boids;
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_real_distribution<float> posDist(-posRange, posRange);
-    std::uniform_real_distribution<float> velDist(-velRange, velRange);
-
-    for (int i = 0; i < count; ++i)
-    {
-        Boid b;
-        b.position = glm::vec3(posDist(gen), posDist(gen), posDist(gen));
-        b.velocity = glm::vec3(velDist(gen), velDist(gen), velDist(gen));
-        b.acceleration = glm::vec3(0, 0, 0);
-        b.id = i;
-        b.stress = 0.0f;
-        b.speciesId = 0;
-        boids.push_back(b);
+void BoidTree::initializeBoids(int count, float posRange, float velRange) {
+    if (!root) {
+        root = new BoidUnit();
     }
-    return boids;
+    // BoidFactory を使用して Boid を生成
+    root->boids = BoidFactory::generateRandomBoids(count, posRange, velRange);
+    build(maxBoidsPerUnit, 0);
 }
 
-void BoidTree::setFlockSize(int newSize, float posRange, float velRange)
-{
-    std::vector<Boid> currentBoids = getBoids();
-    int current = static_cast<int>(currentBoids.size());
+void BoidTree::setFlockSize(int newSize, float posRange, float velRange) {
+    int current = static_cast<int>(root->boids.size());
 
-    if (newSize < current)
-    {
+    if (newSize < current) {
         // ランダムに減らす
         std::random_device rd;
         std::mt19937 gen(rd());
-        std::shuffle(currentBoids.begin(), currentBoids.end(), gen);
-        currentBoids.resize(newSize);
+        std::shuffle(root->boids.begin(), root->boids.end(), gen);
+        root->boids.resize(newSize);
+    } else if (newSize > current) {
+        // BoidFactory を使用して追加の Boid を生成
+        auto added = BoidFactory::generateRandomBoids(newSize - current, posRange, velRange);
+        root->boids.insert(root->boids.end(), added.begin(), added.end());
     }
-    else if (newSize > current)
-    {
-        // ランダムに追加
-        auto added = BoidTree::generateRandomBoids(newSize - current, posRange, velRange);
-        currentBoids.insert(currentBoids.end(), added.begin(), added.end());
-    }
-    build(currentBoids, 32, 0);
-}
 
+    // ツリーを再構築
+    build(maxBoidsPerUnit, 0);
+}
 void BoidTree::updatePositionBuffer()
 {
     std::vector<Boid> boids = getBoids();

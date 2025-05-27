@@ -1,3 +1,4 @@
+#define GLM_ENABLE_EXPERIMENTAL
 #include <emscripten/bind.h>
 #include "boids_tree.h"
 #include "boid.h"
@@ -81,12 +82,12 @@ EMSCRIPTEN_BINDINGS(my_module)
         .function("update", &BoidTree::update)
         .function("getBoids", &BoidTree::getBoids)
         .function("setFlockSize", &BoidTree::setFlockSize)
-        .class_function("generateRandomBoids", &BoidTree::generateRandomBoids)
         .function("updatePositionBuffer", &BoidTree::updatePositionBuffer)
         .function("updateVelocityBuffer", &BoidTree::updateVelocityBuffer) // 追加
         .function("getPositionBufferPtr", &BoidTree::getPositionBufferPtr)
         .function("getVelocityBufferPtr", &BoidTree::getVelocityBufferPtr) // 追加
         .function("getBoidCount", &BoidTree::getBoidCount)
+        .function("initializeBoids", &BoidTree::initializeBoids)
         .property("root", &BoidTree::root, allow_raw_pointers());
 
     class_<BoidUnit>("BoidUnit")

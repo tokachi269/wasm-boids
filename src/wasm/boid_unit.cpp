@@ -309,10 +309,13 @@ void BoidUnit::updateRecursive(float dt)
             for (auto &child : current->children)
                 stack.push(child);
 
-            for (auto &other : current->children)
-                if (current != other)
-                    current->applyInterUnitInfluence(other);
-
+            for (size_t i = 0; i < current->children.size(); ++i)
+            {
+                for (size_t j = i + 1; j < current->children.size(); ++j)
+                {
+                    current->children[i]->applyInterUnitInfluence(current->children[j]);
+                }
+            }
             current->computeBoundingSphere();
         }
     }
@@ -383,9 +386,16 @@ void BoidUnit::computeBoidInteraction(Boid &b, const std::vector<Boid> &boids, f
     int count = 0;
     int memCount = 0;
 
-    // visibleIds を std::unordered_set に変更
     std::unordered_set<int> visibleIds;
     visibleIds.reserve(boids.size());
+
+    // id → Boidポインタのマップを構築
+    std::unordered_map<int, const Boid*> idToBoidMap;
+    idToBoidMap.reserve(boids.size());
+    for (const auto& other : boids)
+    {
+        idToBoidMap[other.id] = &other;
+    }
 
     for (const auto &other : boids)
     {
@@ -413,7 +423,6 @@ void BoidUnit::computeBoidInteraction(Boid &b, const std::vector<Boid> &boids, f
         }
     }
 
-    // cohesionMemory の更新を隔フレームで実行
     if (frameCount % 5 == 0)
     {
         for (auto it = b.cohesionMemory.begin(); it != b.cohesionMemory.end();)
@@ -431,7 +440,6 @@ void BoidUnit::computeBoidInteraction(Boid &b, const std::vector<Boid> &boids, f
         }
     }
 
-    // cohesionMemory のサイズを制限 (LRU風)
     const size_t maxCohesionMemorySize = 100;
     if (b.cohesionMemory.size() > maxCohesionMemorySize)
     {
@@ -447,11 +455,10 @@ void BoidUnit::computeBoidInteraction(Boid &b, const std::vector<Boid> &boids, f
 
     for (const auto &mem : b.cohesionMemory)
     {
-        auto found = std::find_if(boids.begin(), boids.end(), [&](const Boid &other)
-                                  { return other.id == mem.first; });
-        if (found != boids.end())
+        auto it = idToBoidMap.find(mem.first);
+        if (it != idToBoidMap.end())
         {
-            memCohesion += found->position;
+            memCohesion += it->second->position;
             memCount++;
         }
     }
@@ -474,6 +481,7 @@ void BoidUnit::computeBoidInteraction(Boid &b, const std::vector<Boid> &boids, f
         b.acceleration += separation + alignment + totalCohesion;
     }
 }
+
 
 // 分割が必要か判定
 bool BoidUnit::needsSplit(float splitRadius, float directionVarThresh, int maxBoids) const

@@ -123,7 +123,7 @@ function initThreeJS() {
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x0a1e3a);
-  scene.fog = new THREE.Fog(0x0a1e3a, 300, 900);
+  scene.fog = new THREE.Fog(0x0a1e3a, 10, 500);
 
   camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
   camera.position.set(20, 40, 40);
@@ -141,7 +141,7 @@ function initThreeJS() {
   const groundMat = new THREE.MeshStandardMaterial({ color: 0x183050, roughness: 0.8 });
   const ground = new THREE.Mesh(groundGeo, groundMat);
   ground.rotation.x = -Math.PI / 2;
-  ground.position.y = -200;
+  ground.position.y = -80;
   ground.receiveShadow = true; // 影を受ける
   scene.add(ground);
 
@@ -328,12 +328,10 @@ function animate() {
 
 function startSimulation() {
   const BoidTree = wasmModule.BoidTree;
-  const VectorBoid = wasmModule.VectorBoid;
-  const Boid = wasmModule.Boid;
   // 初期化時
-  boids = wasmModule.BoidTree.generateRandomBoids(settings.flockSize, 30, 0.25);
   boidTree = new BoidTree();
-  boidTree.build(boids, 8, 0);
+  boidTree.initializeBoids(settings.flockSize, 30, 0.25);
+  boidTree.build(8, 0);
   animate();
 }
 
