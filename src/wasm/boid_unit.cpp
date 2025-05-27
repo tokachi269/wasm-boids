@@ -372,6 +372,11 @@ void BoidUnit::updateRecursive(float dt)
                 float finalSpeed = glm::clamp(speed, globalSpeciesParams.minSpeed, globalSpeciesParams.maxSpeed);
                 current->velocities[i] = newDir * finalSpeed;
                 current->positions[i] += current->velocities[i] * dt;
+                // デバッグログ
+                if (i == 3) // 最初のBoidのみログ出力
+                {
+                    std::cout << "Boid " << i << " position: " << glm::to_string(current->positions[i]) << std::endl;
+                }
                 current->accelerations[i] = glm::vec3(0.0f); // 加速度をリセット
             }
         }
@@ -385,7 +390,6 @@ void BoidUnit::updateRecursive(float dt)
 
 void BoidUnit::computeBoidInteraction(size_t index, float dt)
 {
-    std::cout << "Computing interaction for Boid at index: " << index << std::endl;
     glm::vec3 separation = glm::vec3(0.0f);
     glm::vec3 alignment = glm::vec3(0.0f);
     glm::vec3 cohesion = glm::vec3(0.0f);
@@ -490,7 +494,6 @@ void BoidUnit::computeBoidInteraction(size_t index, float dt)
             separation = glm::normalize(separation) * globalSpeciesParams.separation * 0.8f;
             alignment = (alignment / static_cast<float>(count) - vel) * globalSpeciesParams.alignment;
         }
-
         accelerations[index] += separation + alignment + totalCohesion;
     }
 }
