@@ -80,12 +80,9 @@ EMSCRIPTEN_BINDINGS(my_module)
         .constructor<>()
         .function("build", &BoidTree::build)
         .function("update", &BoidTree::update)
-        .function("getBoids", &BoidTree::getBoids)
         .function("setFlockSize", &BoidTree::setFlockSize)
-        .function("updatePositionBuffer", &BoidTree::updatePositionBuffer)
-        .function("updateVelocityBuffer", &BoidTree::updateVelocityBuffer) // 追加
-        .function("getPositionBufferPtr", &BoidTree::getPositionBufferPtr)
-        .function("getVelocityBufferPtr", &BoidTree::getVelocityBufferPtr) // 追加
+        .function("getPositionsPtr", &BoidTree::getPositionsPtr)
+        .function("getVelocitiesPtr", &BoidTree::getVelocitiesPtr)
         .function("getBoidCount", &BoidTree::getBoidCount)
         .function("initializeBoids", &BoidTree::initializeBoids)
         .property("root", &BoidTree::root, allow_raw_pointers());

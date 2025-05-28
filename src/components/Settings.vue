@@ -38,7 +38,7 @@
     </div>
     <div class="setting-row">
       <label>最大速度:<br> (Max Speed):</label>
-      <input type="range" v-model.number="settings.maxSpeed" min="0.1" max="10" step="0.01" />
+      <input type="range" v-model.number="settings.maxSpeed" min="0.1" max="2" step="0.01" />
       <span>{{ settings.maxSpeed }}</span>
     </div>
     <div class="setting-row">
