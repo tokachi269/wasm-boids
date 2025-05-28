@@ -7,18 +7,14 @@
 #include <glm/glm.hpp>
 #include <glm/gtx/norm.hpp>
 #include <glm/gtx/rotate_vector.hpp>
+struct SoABuffers;
 
 class BoidUnit
 {
 public:
-    // SOA形式のデータ
-    std::vector<glm::vec3> positions;
-    std::vector<glm::vec3> velocities;
-    std::vector<glm::vec3> accelerations;
-    std::vector<int> ids;
-    std::vector<float> stresses;
-    std::vector<int> speciesIds;
-    std::unordered_map<int, std::unordered_map<int, float>> cohesionMemories;
+    SoABuffers *buf = nullptr; // Not owning
+    std::vector<int> indices;  // ← 既存移動元
+    std::unordered_map<int, std::unordered_map<int, float>> cohesionMemories; // 修正
 
     std::vector<BoidUnit *> children;
     glm::vec3 center, averageVelocity;

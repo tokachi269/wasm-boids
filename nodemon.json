@@ -1,7 +1,8 @@
 {
     "watch": [
-        "src/wasm/"
+        "src/wasm/",
+        "package.json"
     ],
-    "ext": "cpp,h",
+    "ext": "cpp,h,js,json",
     "exec": "npm run build-wasm"
 }

@@ -278,10 +278,8 @@ function animate() {
 
   if (!paused.value && boidTree) {
     boidTree.update(1.0);
-    boidTree.updatePositionBuffer();
-    boidTree.updateVelocityBuffer();
-    const ptr = boidTree.getPositionBufferPtr();
-    const vptr = boidTree.getVelocityBufferPtr();
+    const ptr = boidTree.getPositionsPtr();
+    const vptr = boidTree.getVelocitiesPtr();
     const count = boidTree.getBoidCount();
     const positions = new Float32Array(wasmModule.HEAPF32.buffer, ptr, count * 3);
     const velocities = new Float32Array(wasmModule.HEAPF32.buffer, vptr, count * 3);
