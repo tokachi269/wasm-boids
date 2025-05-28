@@ -3,7 +3,7 @@
 
 class Entry {
 public:
-    void run();
+    static void run();
 };
 
 #endif // ENTRY_H

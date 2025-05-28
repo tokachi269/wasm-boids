@@ -44,6 +44,13 @@ const wasmModule = inject('wasmModule');
 if (!wasmModule) {
   console.error('wasmModule not provided');
 }
+const posPtr = wasmModule.cwrap('posPtr', 'number', [])
+const velPtr = wasmModule.cwrap('velPtr', 'number', [])
+const boidCountF = wasmModule.cwrap('boidCount', 'number', [])
+const initBoids  = wasmModule.cwrap('initBoids', 'void', ['number', 'number', 'number']) 
+const build  = wasmModule.cwrap('build', 'void', ['number', 'number'])
+
+
 const DEFAULT_SETTINGS = {
   cohesion: 3.07,
   separation: 5.27,
@@ -271,17 +278,24 @@ function drawUnitTree(unit, layer = 0) {
     }
   }
 }
-
+let positions, velocities
 function animate() {
+  console.log(
+  Object.keys(wasmModule).filter(k => k.includes('_init'))
+)
+const ok = wasmModule._initBoids(settings.flockSize, 30.0, 0.25)
+console.log('initBoids returned', ok)
   if (stats) stats.begin();
 
   if (!paused.value && boidTree) {
     boidTree.update(1.0);
-    const ptr = boidTree.getPositionsPtr();
-    const vptr = boidTree.getVelocitiesPtr();
-    const count = boidTree.getBoidCount();
-    const positions = new Float32Array(wasmModule.HEAPF32.buffer, ptr, count * 3);
-    const velocities = new Float32Array(wasmModule.HEAPF32.buffer, vptr, count * 3);
+    const count = boidCountF()
+
+console.log('Boids Count: %d\n', count);
+    /* ヒープ が伸びたり個体数が変わったらバッファを作り直す */
+      positions = new Float32Array(wasmModule.HEAPF32.buffer, posPtr(), count * 3)
+      velocities = new Float32Array(wasmModule.HEAPF32.buffer, velPtr(), count * 3)
+         count = boidCountF()
 
     if (boidLODs.length !== count) {
       initBoidLODs(count);
@@ -325,10 +339,9 @@ function animate() {
 
 function startSimulation() {
   const BoidTree = wasmModule.BoidTree;
-  // 初期化時
-  boidTree = new BoidTree();
-  boidTree.initializeBoids(settings.flockSize, 30, 0.25);
-  boidTree.build(8, 0);
+
+  initBoids(settings.flockSize, 30, 0.25);
+  build(8, 0);
   animate();
 }
 

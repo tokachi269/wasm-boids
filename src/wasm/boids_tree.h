@@ -8,6 +8,10 @@
 class BoidTree
 {
 public:
+    static BoidTree& instance() {
+        static BoidTree instance; // シングルトンインスタンス
+        return instance;
+    }
     BoidUnit *root;
     int frameCount = 0;
     std::vector<BoidUnit *> leafCache;
