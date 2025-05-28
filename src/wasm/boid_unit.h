@@ -18,7 +18,7 @@ public:
     std::vector<int> ids;
     std::vector<float> stresses;
     std::vector<int> speciesIds;
-    std::unordered_map<int, std::unordered_map<int, float>> cohesionMemory;
+    std::unordered_map<int, std::unordered_map<int, float>> cohesionMemories;
 
     std::vector<BoidUnit *> children;
     glm::vec3 center, averageVelocity;

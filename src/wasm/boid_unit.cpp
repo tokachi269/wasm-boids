@@ -372,11 +372,7 @@ void BoidUnit::updateRecursive(float dt)
                 float finalSpeed = glm::clamp(speed, globalSpeciesParams.minSpeed, globalSpeciesParams.maxSpeed);
                 current->velocities[i] = newDir * finalSpeed;
                 current->positions[i] += current->velocities[i] * dt;
-                // デバッグログ
-                if (i == 3) // 最初のBoidのみログ出力
-                {
-                    std::cout << "Boid " << i << " position: " << glm::to_string(current->positions[i]) << std::endl;
-                }
+
                 current->accelerations[i] = glm::vec3(0.0f); // 加速度をリセット
             }
         }
@@ -437,14 +433,14 @@ void BoidUnit::computeBoidInteraction(size_t index, float dt)
     // cohesionMemory の更新を隔フレームで実行
     if (frameCount % 5 == 0)
     {
-        for (auto it = cohesionMemory[ids[index]].begin(); it != cohesionMemory[ids[index]].end();)
+        for (auto it = cohesionMemories[ids[index]].begin(); it != cohesionMemories[ids[index]].end();)
         {
             if (visibleIds.find(it->first) == visibleIds.end())
             {
                 it->second += dt;
                 if (it->second > globalSpeciesParams.tau)
                 {
-                    it = cohesionMemory[ids[index]].erase(it);
+                    it = cohesionMemories[ids[index]].erase(it);
                     continue;
                 }
             }
@@ -454,20 +450,20 @@ void BoidUnit::computeBoidInteraction(size_t index, float dt)
 
     // cohesionMemory のサイズを制限 (LRU風)
     const size_t maxCohesionMemorySize = 100;
-    if (cohesionMemory[ids[index]].size() > maxCohesionMemorySize)
+    if (cohesionMemories[ids[index]].size() > maxCohesionMemorySize)
     {
         auto oldest = std::min_element(
-            cohesionMemory[ids[index]].begin(), cohesionMemory[ids[index]].end(),
+            cohesionMemories[ids[index]].begin(), cohesionMemories[ids[index]].end(),
             [](const auto &a, const auto &b)
             { return a.second > b.second; });
-        if (oldest != cohesionMemory[ids[index]].end())
+        if (oldest != cohesionMemories[ids[index]].end())
         {
-            cohesionMemory[ids[index]].erase(oldest);
+            cohesionMemories[ids[index]].erase(oldest);
         }
     }
 
     // cohesionMemory を使用した凝集計算
-    for (const auto &mem : cohesionMemory[ids[index]])
+    for (const auto &mem : cohesionMemories[ids[index]])
     {
         for (size_t j = 0; j < ids.size(); ++j)
         {

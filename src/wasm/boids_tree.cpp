@@ -27,6 +27,10 @@ void setGlobalSpeciesParams(const SpeciesParams &params)
 {
     globalSpeciesParams = params;
 }
+BoidTree::BoidTree()
+    : root(nullptr), frameCount(0), splitIndex(0), mergeIndex(0), maxBoidsPerUnit(10)
+{
+}
 
 void printTree(const BoidUnit *node, int depth)
 {
@@ -45,92 +49,79 @@ void printTree(const BoidUnit *node, int depth)
 }
 
 // BoidTreeのメンバ関数実装
-BoidTree::BoidTree() : root(nullptr) {}
-
-void BoidTree::build(int maxPerUnit, int level)
-{
-    maxBoidsPerUnit = maxPerUnit;
-
-    if (!root)
-    {
-        root = new BoidUnit(); // 初回のみ新しいルートノードを作成
+void BoidTree::build(int maxPerUnit, int level) {
+    if (!root) {
+        root = new BoidUnit();
     }
+
     root->level = level;
 
-    // 再帰的に木構造を構築
-    std::vector<int> indices(root->positions.size());
-    std::iota(indices.begin(), indices.end(), 0); // 0 から positions.size() - 1 までのインデックスを生成
+    // すべてのインデックスを初期化
+    std::vector<int> indices(positions.size());
+    for (size_t i = 0; i < indices.size(); ++i) {
+        indices[i] = static_cast<int>(i);
+    }
+
+    // デバッグログ
+    std::cout << "Building tree with " << indices.size() << " boids." << std::endl;
+
     buildRecursive(root, indices, maxPerUnit, level);
 }
 
-void BoidTree::buildRecursive(BoidUnit *node, const std::vector<int> &ids, int maxPerUnit, int level)
-{
+void BoidTree::buildRecursive(BoidUnit* node, const std::vector<int>& indices, int maxPerUnit, int level) {
     node->level = level;
 
-    if ((int)ids.size() <= maxPerUnit)
-    {
-        // SoA形式で保存
-        node->ids = ids;
-        node->positions.clear();
-        node->velocities.clear();
-        node->accelerations.clear();
-
-        for (int idx : ids)
-        {
-            node->positions.push_back( root->positions[idx]);
-            node->velocities.push_back( root->velocities[idx]);
-            node->accelerations.push_back( root->accelerations[idx]);
+    if ((int)indices.size() <= maxPerUnit) {
+        for (int i : indices) {
+            node->positions.push_back(positions[i]);
+            node->velocities.push_back(velocities[i]);
+            node->accelerations.push_back(glm::vec3(0.0f));
+            node->ids.push_back(ids[i]);
+            node->stresses.push_back(stresses[i]);
+            node->speciesIds.push_back(speciesIds[i]);
+            node->cohesionMemories[ids[i]] = cohesionMemories[ids[i]];
         }
-
         node->computeBoundingSphere();
         return;
     }
 
-    // --- 最大分散軸の計算 ---
-    float mean[3] = {0, 0, 0}, var[3] = {0, 0, 0};
-    for (int idx : ids)
-    {
-        const auto &pos = root->positions[idx];
+    float mean[3] = {0}, var[3] = {0};
+    for (int i : indices) {
+        const glm::vec3& pos = positions[i];
         mean[0] += pos.x;
         mean[1] += pos.y;
         mean[2] += pos.z;
     }
-    for (int i = 0; i < 3; ++i)
-        mean[i] /= ids.size();
+    for (int i = 0; i < 3; ++i) mean[i] /= indices.size();
 
-    for (int idx : ids)
-    {
-        const auto &pos = root->positions[idx];
+    for (int i : indices) {
+        const glm::vec3& pos = positions[i];
         var[0] += (pos.x - mean[0]) * (pos.x - mean[0]);
         var[1] += (pos.y - mean[1]) * (pos.y - mean[1]);
         var[2] += (pos.z - mean[2]) * (pos.z - mean[2]);
     }
 
     int axis = (var[1] > var[0]) ? 1 : 0;
-    if (var[2] > var[axis])
-        axis = 2;
+    if (var[2] > var[axis]) axis = 2;
 
-    // --- ソート & 分割 ---
-    std::vector<int> sortedIds = ids;
-    std::sort(sortedIds.begin(), sortedIds.end(), [this, axis](int a, int b)
-              {
-        const auto &pa = root-> positions[a];
-        const auto &pb =  root->positions[b];
-        return (axis == 0) ? (pa.x < pb.x) :
-               (axis == 1) ? (pa.y < pb.y) :
-                             (pa.z < pb.z); });
+    std::vector<int> sorted = indices;
+    std::sort(sorted.begin(), sorted.end(), [this, axis](int a, int b) {
+        const glm::vec3& pa = positions[a];
+        const glm::vec3& pb = positions[b];
+        return (axis == 0) ? pa.x < pb.x : (axis == 1) ? pa.y < pb.y : pa.z < pb.z;
+    });
 
-    size_t mid = sortedIds.size() / 2;
-    std::vector<int> leftIds(sortedIds.begin(), sortedIds.begin() + mid);
-    std::vector<int> rightIds(sortedIds.begin() + mid, sortedIds.end());
+    size_t mid = sorted.size() / 2;
+    std::vector<int> left(sorted.begin(), sorted.begin() + mid);
+    std::vector<int> right(sorted.begin() + mid, sorted.end());
 
-    BoidUnit *left = new BoidUnit();
-    BoidUnit *right = new BoidUnit();
+    BoidUnit* leftChild = new BoidUnit();
+    BoidUnit* rightChild = new BoidUnit();
+    node->children = {leftChild, rightChild};
 
-    buildRecursive(left, leftIds, maxPerUnit, level + 1);
-    buildRecursive(right, rightIds, maxPerUnit, level + 1);
+    buildRecursive(leftChild, left, maxPerUnit, level + 1);
+    buildRecursive(rightChild, right, maxPerUnit, level + 1);
 
-    node->children = {left, right};
     node->computeBoundingSphere();
 }
 
@@ -151,16 +142,19 @@ BoidUnit *BoidTree::findParent(BoidUnit *node, BoidUnit *target)
     return nullptr;
 }
 
-void BoidTree::update(float dt) {
+void BoidTree::update(float dt)
+{
     // 木構造全体を再帰的に更新
-    if (root) {
+    if (root)
+    {
         root->updateRecursive(dt);
     }
 
     frameCount++;
 
     // 一定フレームごとに葉ノードを再収集
-    if (frameCount % 5 == 0) {
+    if (frameCount % 5 == 0)
+    {
         leafCache.clear();
         collectLeaves(root, leafCache);
         splitIndex = 0;
@@ -168,19 +162,21 @@ void BoidTree::update(float dt) {
     }
 
     // 一定フレームごとに木構造を再構築
-    if (frameCount % 60 == 0) { // 再構築頻度を調整
+    if (frameCount % 170 == 0)
+    { // 再構築頻度を調整
         build(maxBoidsPerUnit, 0);
-        updatePositionBuffer();
-        updateVelocityBuffer();
         return;
     }
 
     // 分割と結合の処理
-    if (!leafCache.empty()) {
+    if (!leafCache.empty())
+    {
         // 分割
-        for (int i = 0; i < 5 && splitIndex < (int)leafCache.size(); ++i, ++splitIndex) {
+        for (int i = 0; i < 5 && splitIndex < (int)leafCache.size(); ++i, ++splitIndex)
+        {
             BoidUnit *u = leafCache[splitIndex];
-            if (u && u->needsSplit(40.0f, 0.5f, maxBoidsPerUnit)) {
+            if (u && u->needsSplit(40.0f, 0.5f, maxBoidsPerUnit))
+            {
                 u->splitInPlace(maxBoidsPerUnit);
                 leafCache.clear();
                 collectLeaves(root, leafCache);
@@ -189,13 +185,17 @@ void BoidTree::update(float dt) {
         }
 
         // 結合
-        for (int i = 0; i < 5 && mergeIndex < (int)leafCache.size(); ++i, ++mergeIndex) {
-            for (int j = mergeIndex + 1; j < (int)leafCache.size(); ++j) {
+        for (int i = 0; i < 5 && mergeIndex < (int)leafCache.size(); ++i, ++mergeIndex)
+        {
+            for (int j = mergeIndex + 1; j < (int)leafCache.size(); ++j)
+            {
                 BoidUnit *a = leafCache[mergeIndex];
                 BoidUnit *b = leafCache[j];
-                if (a && b && a->canMergeWith(*b)) {
+                if (a && b && a->canMergeWith(*b))
+                {
                     BoidUnit *parent = findParent(root, b);
-                    if (parent) {
+                    if (parent)
+                    {
                         leafCache.clear();
                         a->mergeWith(b, parent);
                         collectLeaves(root, leafCache);
@@ -275,20 +275,15 @@ void BoidTree::collectLeaves(const BoidUnit *node, std::vector<BoidUnit *> &leav
 
 void BoidTree::initializeBoids(int count, float posRange, float velRange)
 {
-    if (!root)
-    {
-        root = new BoidUnit(); // 初回のみ新しいルートノードを作成
+    positions.resize(count);
+    velocities.resize(count);
+    accelerations.resize(count, glm::vec3(0.0f));
+    ids.resize(count);
+    stresses.resize(count, 0.0f);
+    speciesIds.resize(count, 0);
+    for (int i = 0; i < count; ++i) {
+        cohesionMemories[i] = std::unordered_map<int, float>();
     }
-
-    // 配列を指定されたサイズにリサイズ
-    root->positions.resize(count);
-    root->velocities.resize(count);
-    root->accelerations.resize(count);
-    root->ids.resize(count);
-    root->stresses.resize(count);
-    root->speciesIds.resize(count);
-
-    // ランダムな Boid を生成
     std::random_device rd;
     std::mt19937 gen(rd());
     std::uniform_real_distribution<float> posDist(-posRange, posRange);
@@ -296,17 +291,19 @@ void BoidTree::initializeBoids(int count, float posRange, float velRange)
 
     for (int i = 0; i < count; ++i)
     {
-        root->positions[i] = glm::vec3(posDist(gen), posDist(gen), posDist(gen));
-        root->velocities[i] = glm::vec3(velDist(gen), velDist(gen), velDist(gen));
-        root->accelerations[i] = glm::vec3(0.0f);
-        root->ids[i] = i;
-        root->stresses[i] = 0.0f;
-        root->speciesIds[i] = 0;
+        positions[i] = glm::vec3(posDist(gen), posDist(gen), posDist(gen));
+        velocities[i] = glm::vec3(velDist(gen), velDist(gen), velDist(gen));
+        ids[i] = i;
     }
 
-    // 木構造を構築
-    build(maxBoidsPerUnit, 0);
-    printTree(root); // デバッグ用にツリーを出力
+    if (!root) root = new BoidUnit();
+
+    // build() は中央バッファをもとに木構造を作る
+    std::vector<int> indices(count);
+    std::iota(indices.begin(), indices.end(), 0);  // 0, 1, ..., count-1
+
+    buildRecursive(root, indices, maxBoidsPerUnit, 0);
+    printTree(root);
 }
 
 void BoidTree::setFlockSize(int newSize, float posRange, float velRange)
@@ -342,20 +339,19 @@ void BoidTree::setFlockSize(int newSize, float posRange, float velRange)
 
 void BoidTree::updatePositionBuffer()
 {
-    positionBuffer.resize(root->positions.size() * 3);
-    for (size_t i = 0; i < root->positions.size(); ++i)
-    {
-        positionBuffer[i * 3 + 0] = root->positions[i].x;
-        positionBuffer[i * 3 + 1] = root->positions[i].y;
-        positionBuffer[i * 3 + 2] = root->positions[i].z;
-                        if (i == 3) // 最初のBoidのみログ出力
-                {
-                    std::cout << "Boid " << i << " position: " << glm::to_string(root->positions[i]) << " buffer" << std::endl;
-                }
-    }
-        // デバッグログ
-    std::cout << "Position Buffer Updated: " << positionBuffer.size() / 3 << " positions." << std::endl;
+    positionBuffer.clear();
+    std::vector<BoidUnit *> leaves;
+    collectLeaves(root, leaves); // すべての leaf node を収集
 
+    for (BoidUnit *leaf : leaves)
+    {
+        for (const glm::vec3 &pos : leaf->positions)
+        {
+            positionBuffer.push_back(pos.x);
+            positionBuffer.push_back(pos.y);
+            positionBuffer.push_back(pos.z);
+        }
+    }
 }
 
 uintptr_t BoidTree::getPositionBufferPtr()
@@ -370,16 +366,19 @@ int BoidTree::getBoidCount() const
 
 void BoidTree::updateVelocityBuffer()
 {
-    velocityBuffer.resize(root->velocities.size() * 3);
-    for (size_t i = 0; i < root->velocities.size(); ++i)
-    {
-        velocityBuffer[i * 3 + 0] = root->velocities[i].x;
-        velocityBuffer[i * 3 + 1] = root->velocities[i].y;
-        velocityBuffer[i * 3 + 2] = root->velocities[i].z;
-    }
-        // デバッグログ
-    std::cout << "Velocity Buffer Updated: " << velocityBuffer.size() / 3 << " velocities." << std::endl;
+    velocityBuffer.clear();
+    std::vector<BoidUnit *> leaves;
+    collectLeaves(root, leaves);
 
+    for (BoidUnit *leaf : leaves)
+    {
+        for (const glm::vec3 &vel : leaf->velocities)
+        {
+            velocityBuffer.push_back(vel.x);
+            velocityBuffer.push_back(vel.y);
+            velocityBuffer.push_back(vel.z);
+        }
+    }
 }
 
 uintptr_t BoidTree::getVelocityBufferPtr()
