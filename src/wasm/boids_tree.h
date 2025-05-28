@@ -28,6 +28,7 @@ public:
     uintptr_t getPositionsPtr();
     uintptr_t getVelocitiesPtr();
     int getBoidCount() const;
+    void collectLeaves(const BoidUnit *node, std::vector<BoidUnit *> &leaves) const;
 };
 
 extern SpeciesParams globalSpeciesParams;

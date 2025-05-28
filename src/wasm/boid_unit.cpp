@@ -17,6 +17,12 @@
 
 bool BoidUnit::isBoidUnit() const { return children.empty(); }
 
+inline glm::vec3 approxRotate(const glm::vec3 &v, const glm::vec3 &axis, float angle)
+{
+    // 小角度近似: sinθ ≈ θ, cosθ ≈ 1
+    return v + angle * glm::cross(axis, v);
+}
+
 /**
  * ユニット内の Boid または子ノードを基にバウンディングスフィアを計算する。
  *
@@ -100,14 +106,12 @@ void BoidUnit::computeBoundingSphere()
  * 使用例:
  * - 階層構造内で異なるユニット間の影響を計算する際に使用。
  */
-// 中央バッファ対応版（コメントは // のみ）
-void BoidUnit::applyInterUnitInfluence(BoidUnit *other)
+void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt)
 {
-    // indices が空なら葉ではない
     if (!indices.empty() && !other->indices.empty())
     {
 
-        // 葉ノード同士：Boid‐Boid で詳細計算
+        // 葉ノード同士
         for (int idxA : indices)
         {
 
@@ -118,131 +122,96 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other)
 
             for (int idxB : other->indices)
             {
-
                 glm::vec3 diff = buf->positions[idxA] - other->buf->positions[idxB];
                 float d2 = glm::dot(diff, diff);
 
                 if (d2 < 2500.0f && d2 > 1e-4f)
                 {
-                    float d = glm::sqrt(d2);
-                    float infl = std::max(0.0f, 1.0f - (d / 40.0f));
+                    float d = std::sqrt(d2);
+                    float w = std::max(0.0f, 1.0f - (d / 40.0f));
 
-                    sumVel += other->buf->velocities[idxB] * infl;
-                    sumPos += other->buf->positions[idxB] * infl;
-                    sep += (diff / (d2 + 1.0f)) * infl;
+                    sumVel += other->buf->velocities[idxB] * w;
+                    sumPos += other->buf->positions[idxB] * w;
+                    sep += (diff / (d2 + 1.0f)) * w;
                     ++cnt;
                 }
             }
 
             if (cnt > 0)
             {
-                glm::vec3 align = (sumVel / float(cnt) - buf->velocities[idxA]) *
-                                  globalSpeciesParams.alignment;
-                glm::vec3 cohes = (sumPos / float(cnt) - buf->positions[idxA]) *
-                                  (globalSpeciesParams.cohesion * 0.5f);
-                glm::vec3 sepa = sep * (globalSpeciesParams.separation * 0.5f);
 
-                buf->accelerations[idxA] += align + cohes + sepa;
+                // 整列・凝集・分離
+                buf->accelerations[idxA] +=
+                    (sumVel / float(cnt) - buf->velocities[idxA]) * globalSpeciesParams.alignment;
+                buf->accelerations[idxA] +=
+                    (sumPos / float(cnt) - buf->positions[idxA]) * (globalSpeciesParams.cohesion * 0.5f);
+                buf->accelerations[idxA] +=
+                    sep * (globalSpeciesParams.separation * 0.5f);
+
+                // ── 回転トルク（復活部分） ──
+                glm::vec3 fwd = glm::normalize(buf->velocities[idxA]);
+                glm::vec3 tgt = glm::normalize(sumVel / float(cnt));
+                float dot = glm::clamp(glm::dot(fwd, tgt), -1.0f, 1.0f);
+                float ang = acosf(dot);
+
+                if (ang > 1e-4f)
+                {
+                    glm::vec3 axis = glm::cross(fwd, tgt);
+                    float len = glm::length(axis);
+                    if (len > 1e-4f)
+                    {
+                        axis /= len;
+
+                        float rot = std::min(ang, globalSpeciesParams.torqueStrength * dt);
+                        rot = std::min(rot, globalSpeciesParams.maxTurnAngle);
+
+                        glm::vec3 newDir = approxRotate(fwd, axis, rot);
+                        buf->velocities[idxA] = newDir * glm::length(buf->velocities[idxA]);
+
+                        // 加速度にもトルク分を加算（任意: 回転のノイズを弱めたい場合は外して良い）
+                        buf->accelerations[idxA] += axis * ang * globalSpeciesParams.torqueStrength;
+                    }
+                }
             }
         }
     }
     else if (!indices.empty() && other->indices.empty())
     {
-        // this が葉、other が中間
-        for (BoidUnit *c : other->children)
-            applyInterUnitInfluence(c);
+
+        // this が葉, other が中間
+        for (auto *c : other->children)
+            applyInterUnitInfluence(c, dt);
     }
     else if (indices.empty() && !other->indices.empty())
     {
-        // this が中間、other が葉
-        for (BoidUnit *c : children)
-            c->applyInterUnitInfluence(other);
+
+        // this が中間, other が葉
+        for (auto *c : children)
+            c->applyInterUnitInfluence(other, dt);
     }
     else
     {
-        // 両方とも中間ノード：代表値近似
-        float d2 = glm::distance2(center, other->center);
 
+        // 中間ノード同士（代表値近似）
+        float d2 = glm::distance2(center, other->center);
         if (d2 < 1600.0f && d2 > 0.01f)
         {
 
             float d = glm::sqrt(d2);
             float scale = 1.0f / (d2 + 1.0f);
+
             glm::vec3 diff = center - other->center;
+            glm::vec3 separ = diff / d2 * globalSpeciesParams.separation;
+            glm::vec3 align = (other->averageVelocity - averageVelocity) * globalSpeciesParams.alignment;
+            glm::vec3 cohes = (other->center - center) * globalSpeciesParams.cohesion;
 
-            glm::vec3 separation = diff / d2 * globalSpeciesParams.separation;
-            glm::vec3 align = (other->averageVelocity - averageVelocity) *
-                              globalSpeciesParams.alignment;
-            glm::vec3 cohes = (other->center - center) *
-                              globalSpeciesParams.cohesion;
-
-            // this 配下の Boid へトルクと加速度を適用
             for (int idx : indices)
-            {
+                buf->accelerations[idx] += (align + cohes + separ) * scale;
 
-                glm::vec3 fwd = glm::normalize(buf->velocities[idx]);
-                glm::vec3 tgt = glm::normalize(other->center - center);
-                float dot = glm::clamp(glm::dot(fwd, tgt), -1.0f, 1.0f);
-                float angle = acos(dot);
-
-                if (angle > 1e-4f)
-                {
-                    glm::vec3 axis = glm::cross(fwd, tgt);
-                    float len = glm::length(axis);
-                    if (len > 1e-4f)
-                    {
-                        axis /= len;
-                        float rot = std::min(angle,
-                                             globalSpeciesParams.torqueStrength * scale);
-                        rot = std::min(rot, globalSpeciesParams.maxTurnAngle);
-
-                        glm::vec3 newDir = glm::rotate(fwd, rot, axis);
-                        buf->velocities[idx] = newDir * glm::length(buf->velocities[idx]);
-                        buf->accelerations[idx] += axis * angle *
-                                                   globalSpeciesParams.torqueStrength;
-                    }
-                }
-
-                buf->accelerations[idx] += (align + cohes + separation) * scale;
-            }
-
-            // other 配下の Boid へ
             for (int idx : other->indices)
-            {
-
-                glm::vec3 fwd = glm::normalize(other->buf->velocities[idx]);
-                glm::vec3 tgt = glm::normalize(center - other->center);
-                float dot = glm::clamp(glm::dot(fwd, tgt), -1.0f, 1.0f);
-                float angle = acos(dot);
-
-                if (angle > 1e-4f)
-                {
-                    glm::vec3 axis = glm::cross(fwd, tgt);
-                    float len = glm::length(axis);
-                    if (len > 1e-4f)
-                    {
-                        axis /= len;
-                        float rot = std::min(angle,
-                                             globalSpeciesParams.torqueStrength * scale);
-                        rot = std::min(rot, globalSpeciesParams.maxTurnAngle);
-
-                        glm::vec3 newDir = glm::rotate(fwd, rot, axis);
-                        other->buf->velocities[idx] =
-                            newDir * glm::length(other->buf->velocities[idx]);
-                    }
-                }
-
-                other->buf->accelerations[idx] -=
-                    (align + cohes + separation) * scale;
-            }
+                other->buf->accelerations[idx] -= (align + cohes + separ) * scale;
         }
     }
-}
-
-inline glm::vec3 approxRotate(const glm::vec3 &v, const glm::vec3 &axis, float angle)
-{
-    // 小角度近似: sinθ ≈ θ, cosθ ≈ 1
-    return v + angle * glm::cross(axis, v);
 }
 
 /**
@@ -358,23 +327,6 @@ void BoidUnit::updateRecursive(float dt)
 
 void BoidUnit::computeBoidInteraction(size_t index, float dt)
 {
-    if (index >= buf->positions.size())
-    {
-        std::cerr << "Error: Index out of bounds in computeBoidInteraction: " << index << std::endl;
-        return;
-    }
-    int gIdx = indices[index];
-    if (gIdx < 0 || gIdx >= buf->positions.size())
-    {
-        std::cerr << "Error: gIdx out of bounds in computeBoidInteraction: " << gIdx << std::endl;
-        return;
-    }
-
-    if (cohesionMemories.find(buf->ids[gIdx]) == cohesionMemories.end())
-    {
-        cohesionMemories[buf->ids[gIdx]] = std::unordered_map<int, float>();
-    }
-
     glm::vec3 separation = glm::vec3(0.0f);
     glm::vec3 alignment = glm::vec3(0.0f);
     glm::vec3 cohesion = glm::vec3(0.0f);
@@ -382,7 +334,7 @@ void BoidUnit::computeBoidInteraction(size_t index, float dt)
 
     int count = 0;
     int memCount = 0;
-
+    int gIdx = indices[index];
     glm::vec3 pos = buf->positions[gIdx];
     glm::vec3 vel = buf->velocities[gIdx];
 
@@ -479,87 +431,37 @@ void BoidUnit::computeBoidInteraction(size_t index, float dt)
         {
             separation = glm::normalize(separation) * globalSpeciesParams.separation * 0.8f;
             alignment = (alignment / static_cast<float>(count) - vel) * globalSpeciesParams.alignment;
+
+            // 回転トルクの適用
+            glm::vec3 fwd = glm::normalize(vel);
+            glm::vec3 tgt = glm::normalize(alignment);
+            float dot = glm::clamp(glm::dot(fwd, tgt), -1.0f, 1.0f);
+            float angle = acosf(dot);
+
+            if (angle > 1e-4f)
+            {
+                glm::vec3 axis = glm::cross(fwd, tgt);
+                float len = glm::length(axis);
+                if (len > 1e-4f)
+                {
+                    axis /= len;
+
+                    float rot = std::min(angle, globalSpeciesParams.torqueStrength * dt);
+                    rot = std::min(rot, globalSpeciesParams.maxTurnAngle);
+
+                    glm::vec3 newDir = approxRotate(fwd, axis, rot);
+                    vel = newDir * glm::length(vel);
+
+                    // 加速度にもトルク分を加算
+                    buf->accelerations[gIdx] += axis * angle * globalSpeciesParams.torqueStrength;
+                }
+            }
         }
 
         buf->accelerations[gIdx] += separation + alignment + totalCohesion;
     }
 }
 
-// k-means 風クラスタリングで indices をグループ化
-std::vector<BoidUnit *> BoidUnit::splitByClustering(int numClusters)
-{
-    if ((int)indices.size() < numClusters)
-        numClusters = static_cast<int>(indices.size());
-    if (numClusters < 2)
-        numClusters = 2;
-
-    // 初期中心をランダム（ここでは先頭から）に選択
-    std::vector<glm::vec3> centers;
-    for (int k = 0; k < numClusters; ++k)
-        centers.push_back(buf->positions[indices[k]]);
-
-    std::vector<int> assign(indices.size(), 0);
-
-    // 反復回数は少なめに固定
-    for (int iter = 0; iter < 5; ++iter)
-    {
-        // 割り当て
-        for (size_t i = 0; i < indices.size(); ++i)
-        {
-            int gI = indices[i];
-            float best = std::numeric_limits<float>::max();
-            int bestK = 0;
-            for (int k = 0; k < numClusters; ++k)
-            {
-                float d = glm::distance(buf->positions[gI], centers[k]);
-                if (d < best)
-                {
-                    best = d;
-                    bestK = k;
-                }
-            }
-            assign[i] = bestK;
-        }
-
-        // 中心を再計算
-        std::vector<glm::vec3> newCenters(numClusters, glm::vec3(0.0f));
-        std::vector<int> counts(numClusters, 0);
-        for (size_t i = 0; i < indices.size(); ++i)
-        {
-            int gI = indices[i];
-            newCenters[assign[i]] += buf->positions[gI];
-            counts[assign[i]]++;
-        }
-        for (int k = 0; k < numClusters; ++k)
-        {
-            if (counts[k] > 0)
-                newCenters[k] /= static_cast<float>(counts[k]);
-            else
-                newCenters[k] = centers[k];
-        }
-        centers.swap(newCenters);
-    }
-
-    // グループごとに global index をまとめる
-    std::vector<std::vector<int>> groups(numClusters);
-    for (size_t i = 0; i < indices.size(); ++i)
-        groups[assign[i]].push_back(indices[i]);
-
-    // 各グループから BoidUnit を生成
-    std::vector<BoidUnit *> result;
-    for (const auto &g : groups)
-    {
-        if (g.empty())
-            continue;
-        auto *u = new BoidUnit();
-        u->buf = buf;   // 中央バッファを共有
-        u->indices = g; // インデックスだけ保持
-        u->level = level + 1;
-        u->computeBoundingSphere();
-        result.push_back(u);
-    }
-    return result;
-}
 // 分割が必要か判定 (indices + 中央バッファ版)
 bool BoidUnit::needsSplit(float splitRadius, float directionVarThresh, int maxBoids) const
 {
@@ -677,6 +579,81 @@ void BoidUnit::splitInPlace(int maxBoids)
 
     // バウンディングスフィアを再計算
     computeBoundingSphere();
+}
+// k-means 風クラスタリングで indices をグループ化
+std::vector<BoidUnit *> BoidUnit::splitByClustering(int numClusters)
+{
+    if ((int)indices.size() < numClusters)
+        numClusters = static_cast<int>(indices.size());
+    if (numClusters < 2)
+        numClusters = 2;
+
+    // 初期中心をランダム（ここでは先頭から）に選択
+    std::vector<glm::vec3> centers;
+    for (int k = 0; k < numClusters; ++k)
+        centers.push_back(buf->positions[indices[k]]);
+
+    std::vector<int> assign(indices.size(), 0);
+
+    // 反復回数は少なめに固定
+    for (int iter = 0; iter < 5; ++iter)
+    {
+        // 割り当て
+        for (size_t i = 0; i < indices.size(); ++i)
+        {
+            int gI = indices[i];
+            float best = std::numeric_limits<float>::max();
+            int bestK = 0;
+            for (int k = 0; k < numClusters; ++k)
+            {
+                float d = glm::distance(buf->positions[gI], centers[k]);
+                if (d < best)
+                {
+                    best = d;
+                    bestK = k;
+                }
+            }
+            assign[i] = bestK;
+        }
+
+        // 中心を再計算
+        std::vector<glm::vec3> newCenters(numClusters, glm::vec3(0.0f));
+        std::vector<int> counts(numClusters, 0);
+        for (size_t i = 0; i < indices.size(); ++i)
+        {
+            int gI = indices[i];
+            newCenters[assign[i]] += buf->positions[gI];
+            counts[assign[i]]++;
+        }
+        for (int k = 0; k < numClusters; ++k)
+        {
+            if (counts[k] > 0)
+                newCenters[k] /= static_cast<float>(counts[k]);
+            else
+                newCenters[k] = centers[k];
+        }
+        centers.swap(newCenters);
+    }
+
+    // グループごとに global index をまとめる
+    std::vector<std::vector<int>> groups(numClusters);
+    for (size_t i = 0; i < indices.size(); ++i)
+        groups[assign[i]].push_back(indices[i]);
+
+    // 各グループから BoidUnit を生成
+    std::vector<BoidUnit *> result;
+    for (const auto &g : groups)
+    {
+        if (g.empty())
+            continue;
+        auto *u = new BoidUnit();
+        u->buf = buf;   // 中央バッファを共有
+        u->indices = g; // インデックスだけ保持
+        u->level = level + 1;
+        u->computeBoundingSphere();
+        result.push_back(u);
+    }
+    return result;
 }
 
 /**

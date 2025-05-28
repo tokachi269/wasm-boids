@@ -44,23 +44,22 @@ const wasmModule = inject('wasmModule');
 if (!wasmModule) {
   console.error('wasmModule not provided');
 }
-
 const DEFAULT_SETTINGS = {
   cohesion: 3.07,
-  separation: 4.95,
-  alignment: 4.39,
+  separation: 5.27,
+  alignment: 6.55,
   maxSpeed: 0.48,
-  maxTurnAngle: 0.12,
-  separationRange: 10,
+  maxTurnAngle: 0.08,
+  separationRange: 6,
   alignmentRange: 25,
   cohesionRange: 128,
   speed: 5,
-  flockSize: 1300,
+  flockSize: 3000,
   maxNeighbors: 4,
   lambda: 0.068,
-  horizontalTorque: 0.07,
+  horizontalTorque: 0.047,
   velocityEpsilon: 0.00448,
-  torqueStrength: 0.554,
+  torqueStrength: 2.477,
 };
 
 function loadSettings() {
@@ -362,7 +361,8 @@ onMounted(() => {
       separationRange: Number(raw.separationRange),
       alignmentRange: Number(raw.alignmentRange),
       cohesionRange: Number(raw.cohesionRange),
-      horizontalTorque: Number(raw.horizontalTorque), // 追加
+      horizontalTorque: Number(raw.horizontalTorque),
+      torqueStrength: Number(raw.torqueStrength),
     });
   }
 
