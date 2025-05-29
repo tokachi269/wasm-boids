@@ -39,25 +39,39 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import Settings from './components/Settings.vue';
 import Stats from 'three/examples/jsm/libs/stats.module'
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { SSAOPass } from 'three/examples/jsm/postprocessing/SSAOPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'; // 任意
 
 const wasmModule = inject('wasmModule');
 if (!wasmModule) {
   console.error('wasmModule not provided');
 }
 
+const posPtr = wasmModule.cwrap('posPtr', 'number', [])
+const velPtr = wasmModule.cwrap('velPtr', 'number', [])
+const boidCount = wasmModule.cwrap('boidCount', 'number', [])
+const initBoids = wasmModule.cwrap('initBoids', 'void', ['number', 'number', 'number'])
+const build = wasmModule.cwrap('build', 'void', ['number', 'number'])
+const update = wasmModule.cwrap('update', 'void', ['number'])
+const setFlockSize = wasmModule.cwrap('setFlockSize', 'void', ['number', 'number', 'number'])
+
 const DEFAULT_SETTINGS = {
-  cohesion: 5.8,
-  separation: 1.0,
-  alignment: 3.0,
-  maxSpeed: 0.5,
-  maxTurnAngle: 0.1,
-  separationRange: 6.0,
-  alignmentRange: 56.0,
-  cohesionRange: 100.0,
-  speed: 5,
   flockSize: 3000,
-  maxNeighbors: 15,
-  lambda: 0.1,
+  cohesion: 4.94,
+  cohesionRange: 128,
+  separation: 6.7,
+  separationRange: 6,
+  alignment: 5.64,
+  alignmentRange: 25,
+  maxSpeed: 0.36,
+  maxTurnAngle: 0.065,
+  maxNeighbors: 4,
+  lambda: 0.15,
+  horizontalTorque: 0.041,
+  velocityEpsilon: 0.005,
+  torqueStrength: 3.438
 };
 
 function loadSettings() {
@@ -75,9 +89,7 @@ function loadSettings() {
 const settings = reactive(loadSettings());
 
 const threeContainer = ref(null);
-let scene, camera, renderer, controls;
-let boidTree = null;
-let boids = null;
+let scene, camera, renderer, controls, composer;
 
 const paused = ref(false);
 
@@ -93,7 +105,7 @@ let maxDepth = 1;
 let stats = null;
 
 let animationTimer = null;
-const FRAME_INTERVAL = 1000 / 60; // 60FPS
+const FRAME_INTERVAL = 1000 / 60;//1000 / 60; // 60FPS
 
 // ツリーの最大深さを計算
 function calcMaxDepth(unit, depth = 0) {
@@ -120,34 +132,44 @@ function initThreeJS() {
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x0a1e3a);
-  scene.fog = new THREE.Fog(0x0a1e3a, 300, 900);
+  scene.fog = new THREE.Fog(0x0a1e3a, 10, 500);
 
   camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
-  camera.position.set(0, 0, 150);
+  camera.position.set(20, 40, 40);
   camera.lookAt(0, 0, 0);
 
-  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer = new THREE.WebGLRenderer({
+    antialias: true,
+  });
+  renderer.setPixelRatio(window.devicePixelRatio); // 高DPI対応
   renderer.setSize(width, height);
   renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap; // 影を柔らかく
+
   threeContainer.value.appendChild(renderer.domElement);
 
+  camera.aspect = width / height;
+  camera.updateProjectionMatrix();
+
   controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true; // なめらかな操作
+  controls.dampingFactor = 0.1;
 
   // 地面メッシュ追加
   const groundGeo = new THREE.PlaneGeometry(1000, 1000);
   const groundMat = new THREE.MeshStandardMaterial({ color: 0x183050, roughness: 0.8 });
   const ground = new THREE.Mesh(groundGeo, groundMat);
   ground.rotation.x = -Math.PI / 2;
-  ground.position.y = -200;
+  ground.position.y = -80;
   ground.receiveShadow = true; // 影を受ける
   scene.add(ground);
 
   // ライト
-  const ambientLight = new THREE.AmbientLight(0xffffff, 1.5);
+  const ambientLight = new THREE.AmbientLight(0xffffff, 1.2);
   scene.add(ambientLight);
 
   // 太陽光（やや暖色のDirectionalLight）
-  const dirLight = new THREE.DirectionalLight(0xfff2cc, 1.3); // 暖色＆強め
+  const dirLight = new THREE.DirectionalLight(0xfff2cc, 1.5); // 暖色＆強め
   dirLight.position.set(300, 500, 200); // 高い位置から照らす
   dirLight.castShadow = true;
 
@@ -165,7 +187,25 @@ function initThreeJS() {
   dirLight.shadow.normalBias = 0.01;
 
   scene.add(dirLight);
+  // EffectComposer の初期化（スマホ以外の場合のみ）
+  if (!isMobileDevice()) {
+    // EffectComposer の初期化
+    composer = new EffectComposer(renderer);
 
+    // RenderPass を追加
+    const renderPass = new RenderPass(scene, camera);
+    composer.addPass(renderPass);
+
+    const ssaoPass = new SSAOPass(scene, camera, width, height);
+    ssaoPass.kernelRadius = 8; // サンプル半径（大きくすると効果が広がる）
+    ssaoPass.minDistance = 0.001; // 最小距離（小さくすると近距離の効果が強調される）
+    ssaoPass.maxDistance = 0.01; // 最大距離（大きくすると遠距離の効果が強調される）
+    composer.addPass(ssaoPass);
+
+    // UnrealBloomPass を追加（任意）
+    const bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 1.5, 0.4, 0.85);
+    composer.addPass(bloomPass);
+  }
   // ウィンドウリサイズ対応
   window.addEventListener('resize', onWindowResize);
 }
@@ -178,37 +218,38 @@ function onWindowResize() {
   renderer.setSize(width, height);
 }
 
-let instancedMesh = null; // 使わないので削除してもOK
-let boidLODs = []; // LOD用配列
+let instancedMeshHigh = null; // 高ポリゴン用
+let instancedMeshLow = null;  // 低ポリゴン用
 
 // LOD用ジオメトリ・マテリアルを使い回す
 const boidGeometryHigh = new THREE.SphereGeometry(1, 8, 8);
 const boidGeometryLow = new THREE.SphereGeometry(1, 3, 2);
 const boidMaterial = new THREE.MeshStandardMaterial({ color: 0x1fb5ff });
+boidGeometryHigh.scale(0.5, 0.5, 2.0); // 少し小さくする
+boidGeometryLow.scale(0.5, 0.5, 2.0); // 少し小さくする
 
-function initBoidLODs(count) {
-  // 既存LODをクリア
-  for (const lod of boidLODs) scene.remove(lod);
-  boidLODs = [];
-
-  for (let i = 0; i < count; i++) {
-    const lod = new THREE.LOD();
-
-    // 近距離: 高ポリ
-    const meshHigh = new THREE.Mesh(boidGeometryHigh, boidMaterial);
-    meshHigh.castShadow = true; // 影を落とす
-    meshHigh.scale.set(0.5, 0.5, 2.0);
-    lod.addLevel(meshHigh, 0);
-
-    // 遠距離: 低ポリ
-    const meshLow = new THREE.Mesh(boidGeometryLow, boidMaterial);
-    meshLow.castShadow = true; // 影を落とす
-    meshLow.scale.set(0.5, 0.5, 2.0);
-    lod.addLevel(meshLow, 100);
-
-    scene.add(lod);
-    boidLODs.push(lod);
+function initInstancedBoids(count) {
+  if (instancedMeshHigh) {
+    scene.remove(instancedMeshHigh);
   }
+  if (instancedMeshLow) {
+    scene.remove(instancedMeshLow);
+  }
+
+  const material = boidMaterial;
+
+  // 高ポリゴンメッシュ
+  instancedMeshHigh = new THREE.InstancedMesh(boidGeometryHigh, material, count);
+  instancedMeshHigh.castShadow = true;
+  instancedMeshHigh.receiveShadow = true;
+
+  // 低ポリゴンメッシュ
+  instancedMeshLow = new THREE.InstancedMesh(boidGeometryLow, material, count);
+  instancedMeshLow.castShadow = true;
+  instancedMeshLow.receiveShadow = true;
+
+  scene.add(instancedMeshHigh);
+  scene.add(instancedMeshLow);
 }
 
 function clearUnitVisuals() {
@@ -226,18 +267,22 @@ function drawUnitTree(unit, layer = 0) {
     layer >= (maxDepth - unitLayer.value + 1) &&
     (unit.children == null || unit.children.size() === 0 || layer === maxDepth)
   ) {
-    // 最下層 or 指定レイヤ以上のノード
-    const color = new THREE.Color().setHSL(0.1, 1, 0.7 - 0.4 * (layer / maxDepth)); // オレンジ系グラデ
-    const geometry = new THREE.SphereGeometry(unit.radius, 16, 16);
-    const material = new THREE.MeshBasicMaterial({
-      color: color,
-      wireframe: true,
-      opacity: 0.3,
-      transparent: true,
-    });
-    const sphere = new THREE.Mesh(geometry, material);
+    let sphere;
+    if (unitSpheres.length > 0) {
+      sphere = unitSpheres.pop(); // 再利用
+      sphere.visible = true;
+    } else {
+      const geometry = new THREE.SphereGeometry(unit.radius, 16, 16);
+      const material = new THREE.MeshBasicMaterial({
+        color: new THREE.Color().setHSL(0.1, 1, 0.7 - 0.4 * (layer / maxDepth)),
+        wireframe: true,
+        opacity: 0.3,
+        transparent: true,
+      });
+      sphere = new THREE.Mesh(geometry, material);
+      scene.add(sphere);
+    }
     sphere.position.set(unit.center.x, unit.center.y, unit.center.z);
-    scene.add(sphere);
     unitSpheres.push(sphere);
   }
 
@@ -245,15 +290,23 @@ function drawUnitTree(unit, layer = 0) {
   if (showUnitLines.value && unit.children && typeof unit.children.size === 'function' && unit.children.size() > 0) {
     for (let i = 0; i < unit.children.size(); i++) {
       const child = unit.children.get(i);
+      let line;
+      if (unitLines.length > 0) {
+        line = unitLines.pop(); // 再利用
+        line.visible = true;
+      } else {
+        const lineGeometry = new THREE.BufferGeometry();
+        const lineMaterial = new THREE.LineBasicMaterial({
+          color: new THREE.Color().setHSL(0.35, 1, 0.7 - 0.4 * (layer / maxDepth)),
+        });
+        line = new THREE.Line(lineGeometry, lineMaterial);
+        scene.add(line);
+      }
       const points = [
         new THREE.Vector3(unit.center.x, unit.center.y, unit.center.z),
-        new THREE.Vector3(child.center.x, child.center.y, child.center.z)
+        new THREE.Vector3(child.center.x, child.center.y, child.center.z),
       ];
-      // 線の色も深さでグラデーション
-      const color = new THREE.Color().setHSL(0.35, 1, 0.7 - 0.4 * (layer / maxDepth)); // 緑系グラデ
-      const lineGeometry = new THREE.BufferGeometry().setFromPoints(points);
-      const line = new THREE.Line(lineGeometry, new THREE.LineBasicMaterial({ color: color }));
-      scene.add(line);
+      line.geometry.setFromPoints(points);
       unitLines.push(line);
     }
   }
@@ -266,68 +319,74 @@ function drawUnitTree(unit, layer = 0) {
     }
   }
 }
+let positions, velocities
 
 function animate() {
   if (stats) stats.begin();
 
-  if (!paused.value && boidTree) {
-    boidTree.update(1.0);
-    boidTree.updatePositionBuffer();
-    boidTree.updateVelocityBuffer();
-    const ptr = boidTree.getPositionBufferPtr();
-    const vptr = boidTree.getVelocityBufferPtr();
-    const count = boidTree.getBoidCount();
-    const positions = new Float32Array(wasmModule.HEAPF32.buffer, ptr, count * 3);
-    const velocities = new Float32Array(wasmModule.HEAPF32.buffer, vptr, count * 3);
+  if (!paused.value) {
+    update(1.0);
+    const count = boidCount();
 
-    if (boidLODs.length !== count) {
-      initBoidLODs(count);
-    }
+    positions = new Float32Array(wasmModule.HEAPF32.buffer, posPtr(), count * 3);
+    velocities = new Float32Array(wasmModule.HEAPF32.buffer, velPtr(), count * 3);
+
+    const dummy = new THREE.Object3D();
+    const cameraPosition = camera.position;
+
     for (let i = 0; i < count; i++) {
-      const lod = boidLODs[i];
-      lod.position.set(
+      dummy.position.set(
         positions[i * 3 + 0],
         positions[i * 3 + 1],
         positions[i * 3 + 2]
       );
-      // 進行方向に向ける
+
       const dir = new THREE.Vector3(
         velocities[i * 3 + 0],
         velocities[i * 3 + 1],
         velocities[i * 3 + 2]
       );
       if (dir.lengthSq() > 0.0001) {
-        lod.quaternion.setFromUnitVectors(
+        dummy.quaternion.setFromUnitVectors(
           new THREE.Vector3(0, 0, 1),
           dir.clone().normalize()
         );
       } else {
-        lod.quaternion.identity();
+        dummy.quaternion.identity();
+      }
+      dummy.updateMatrix();
+
+      // 距離判定
+      const distanceSq = cameraPosition.distanceToSquared(dummy.position);
+      if (distanceSq < 10000) { // 近距離: 高ポリゴン
+        instancedMeshHigh.setMatrixAt(i, dummy.matrix);
+        instancedMeshLow.setMatrixAt(i, new THREE.Matrix4().identity()); // 非表示
+      } else { // 遠距離: 低ポリゴン
+        instancedMeshLow.setMatrixAt(i, dummy.matrix);
+        instancedMeshHigh.setMatrixAt(i, new THREE.Matrix4().identity()); // 非表示
       }
     }
 
-    clearUnitVisuals();
-    if (showUnits.value && boidTree.root) {
-      maxDepth = calcMaxDepth(boidTree.root, 0);
-      drawUnitTree(boidTree.root, 0);
-    }
+    instancedMeshHigh.instanceMatrix.needsUpdate = true;
+    instancedMeshLow.instanceMatrix.needsUpdate = true;
   }
-  controls.update();
-  renderer.render(scene, camera);
 
+  controls.update();
+  // スマホの場合は renderer を使用、それ以外は composer を使用
+  if (isMobileDevice()) {
+    renderer.render(scene, camera);
+  } else {
+    composer.render();
+  }
   if (stats) stats.end();
 
   animationTimer = setTimeout(animate, FRAME_INTERVAL);
 }
 
 function startSimulation() {
-  const BoidTree = wasmModule.BoidTree;
-  const VectorBoid = wasmModule.VectorBoid;
-  const Boid = wasmModule.Boid;
-  // 初期化時
-  boids = wasmModule.BoidTree.generateRandomBoids(settings.flockSize, 30, 0.25);
-  boidTree = new BoidTree();
-  boidTree.build(boids, 16, 0);
+  initBoids(settings.flockSize, 30, 0.25);
+  build(8, 0);
+  initInstancedBoids(settings.flockSize);
   animate();
 }
 
@@ -360,6 +419,8 @@ onMounted(() => {
       separationRange: Number(raw.separationRange),
       alignmentRange: Number(raw.alignmentRange),
       cohesionRange: Number(raw.cohesionRange),
+      horizontalTorque: Number(raw.horizontalTorque),
+      torqueStrength: Number(raw.torqueStrength),
     });
   }
 
@@ -368,6 +429,9 @@ onMounted(() => {
   startSimulation();
 });
 
+function isMobileDevice() {
+  return /Mobi|Android/i.test(navigator.userAgent);
+}
 // settingsの変更をwasmModuleに反映
 watch(
   () => [
@@ -381,15 +445,16 @@ watch(
     settings.cohesionRange,
     settings.maxNeighbors, // 追加
     settings.lambda,       // 追加
+    settings.horizontalTorque,
+    settings.velocityEpsilon,
+    settings.torqueStrength,
   ],
   () => {
     if (
       wasmModule &&
       wasmModule.setGlobalSpeciesParamsFromJS
     ) {
-      // プレーンなオブジェクトを作る
       const raw = toRaw(settings);
-
       wasmModule.setGlobalSpeciesParamsFromJS({
         cohesion: Number(raw.cohesion),
         separation: Number(raw.separation),
@@ -401,6 +466,9 @@ watch(
         cohesionRange: Number(raw.cohesionRange),
         maxNeighbors: Number(raw.maxNeighbors),
         lambda: Number(raw.lambda),
+        horizontalTorque: Number(raw.horizontalTorque),
+        velocityEpsilon: Number(raw.velocityEpsilon),
+        torqueStrength: Number(raw.torqueStrength),
       });
     }
   }
@@ -410,9 +478,11 @@ watch(
 watch(
   () => settings.flockSize,
   (newSize) => {
-    if (boidTree && boidTree.setFlockSize) {
+    if (setFlockSize) {
       // flockSize変更時
-      boidTree.setFlockSize(newSize, 40, 0.25);
+      setFlockSize(newSize, 40, 0.25);
+      // Three.js 側の初期化
+      initInstancedBoids(newSize);
     }
   }
 );
@@ -471,6 +541,7 @@ function resetSettings() {
   z-index: 2;
   pointer-events: none;
 }
+
 .ui-overlay * {
   pointer-events: auto;
 }

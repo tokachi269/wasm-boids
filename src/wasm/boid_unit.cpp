@@ -1,674 +1,746 @@
+#define GLM_ENABLE_EXPERIMENTAL
 #include "boid_unit.h"
 #include "boids_tree.h"
 #include <algorithm>
 #include <queue>
 #include <iostream>
 #include <random>
+#include <unordered_set>
 #include <limits>
 #include <cmath>
+#include <glm/glm.hpp>
+#include <glm/gtx/norm.hpp>
+#include <glm/gtx/rotate_vector.hpp>
+#include <glm/gtx/string_cast.hpp>
+#include <glm/gtc/random.hpp>
+#include <random>
 
 bool BoidUnit::isBoidUnit() const { return children.empty(); }
 
+inline glm::vec3 approxRotate(const glm::vec3 &v, const glm::vec3 &axis, float angle)
+{
+    // 小角度近似: sinθ ≈ θ, cosθ ≈ 1
+    return v + angle * glm::cross(axis, v);
+}
+
+/**
+ * ユニット内の Boid または子ノードを基にバウンディングスフィアを計算する。
+ *
+ * 処理内容:
+ * - **最下位層の場合**:
+ *   - Boid の位置を基に中心と半径を計算。
+ * - **中間ノードの場合**:
+ *   - 子ノードの中心と半径を基に親ノードの中心と半径を計算。
+ *
+ * 使用例:
+ * - 階層構造内でユニットの境界を計算する際に使用。
+ */
 void BoidUnit::computeBoundingSphere()
 {
     if (isBoidUnit())
     {
-        if (boids.empty())
+        if (indices.empty())
             return;
-        center = Vec3();
-        for (const auto &b : boids)
-            center = center + b.position;
-        center = center / boids.size();
-        radius = 0.0f;
-        for (const auto &b : boids)
+
+        // 中心を計算
+        center = glm::vec3(0.0f);
+        for (int gIdx : indices)
+            center += buf->positions[gIdx];
+        center /= static_cast<float>(indices.size());
+
+        // 平均距離と分散を計算
+        float sum = 0.0f, sum2 = 0.0f;
+        for (int gIdx : indices)
         {
-            float d = center.distance(b.position);
-            if (d > radius)
-                radius = d;
+            float d = glm::distance(center, buf->positions[gIdx]);
+            sum += d;
+            sum2 += d * d;
         }
+        float mean = sum / static_cast<float>(indices.size());
+        float var = sum2 / static_cast<float>(indices.size()) - mean * mean;
+        float stddev = var > 0.0f ? std::sqrt(var) : 0.0f;
+
+        // 平均 + α × 標準偏差（α = 1.0）で半径を決定
+        radius = mean + 1.0f * stddev;
     }
     else
     {
-        center = Vec3();
-        for (const auto &c : children)
-            center = center + c->center;
-        center = center / children.size();
-        radius = 0.0f;
-        for (const auto &c : children)
+        if (children.empty())
+            return;
+
+        // 子ノードの中心を計算
+        center = glm::vec3(0.0f);
+        for (const auto &child : children)
+            center += child->center;
+        center /= static_cast<float>(children.size());
+
+        // 子ノード中心までの平均距離 + 子ノード半径
+        float sum = 0.0f, sum2 = 0.0f;
+        for (const auto &child : children)
         {
-            float d = center.distance(c->center) + c->radius;
-            if (d > radius)
-                radius = d;
+            float d = glm::distance(center, child->center) + child->radius;
+            sum += d;
+            sum2 += d * d;
+        }
+        float mean = sum / static_cast<float>(children.size());
+        float var = sum2 / static_cast<float>(children.size()) - mean * mean;
+        float stddev = var > 0.0f ? std::sqrt(var) : 0.0f;
+
+        radius = mean + 1.0f * stddev;
+    }
+}
+
+/**
+ * 他のユニットとの相互作用を計算し、加速度に影響を加える。
+ *
+ * @param other 他の BoidUnit へのポインタ
+ *
+ * 処理内容:
+ * - **最下位層の場合**:
+ *   - Boid 間の詳細な相互作用を計算し、分離、整列、凝集ルールを適用。
+ * - **片方が中間ノードの場合**:
+ *   - 再帰的に子ノードを処理。
+ * - **両方が中間ノードの場合**:
+ *   - 代表値（中心、平均速度）を用いて近似計算を行う。
+ *
+ * 使用例:
+ * - 階層構造内で異なるユニット間の影響を計算する際に使用。
+ */
+void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt)
+{
+    if (!indices.empty() && !other->indices.empty())
+    {
+
+        // 葉ノード同士
+        for (int idxA : indices)
+        {
+
+            glm::vec3 sumVel = glm::vec3(0.0f);
+            glm::vec3 sumPos = glm::vec3(0.0f);
+            glm::vec3 sep = glm::vec3(0.0f);
+            int cnt = 0;
+
+            for (int idxB : other->indices)
+            {
+                glm::vec3 diff = buf->positions[idxA] - other->buf->positions[idxB];
+                float d2 = glm::dot(diff, diff);
+
+                if (d2 < 2500.0f && d2 > 1e-4f)
+                {
+                    float d = std::sqrt(d2);
+                    float w = std::max(0.0f, 1.0f - (d / 40.0f));
+
+                    sumVel += other->buf->velocities[idxB] * w;
+                    sumPos += other->buf->positions[idxB] * w;
+                    sep += (diff / (d2 + 1.0f)) * w;
+                    ++cnt;
+                }
+            }
+
+            if (cnt > 0)
+            {
+
+                // 整列・凝集・分離
+                buf->accelerations[idxA] +=
+                    (sumVel / float(cnt) - buf->velocities[idxA]) * globalSpeciesParams.alignment;
+                buf->accelerations[idxA] +=
+                    (sumPos / float(cnt) - buf->positions[idxA]) * (globalSpeciesParams.cohesion * 0.5f);
+                buf->accelerations[idxA] +=
+                    sep * (globalSpeciesParams.separation * 0.5f);
+
+                // ── 回転トルク（復活部分） ──
+                glm::vec3 fwd = glm::normalize(buf->velocities[idxA]);
+                glm::vec3 tgt = glm::normalize(sumVel / float(cnt));
+                float dot = glm::clamp(glm::dot(fwd, tgt), -1.0f, 1.0f);
+                float ang = acosf(dot);
+
+                if (ang > 1e-4f)
+                {
+                    glm::vec3 axis = glm::cross(fwd, tgt);
+                    float len = glm::length(axis);
+                    if (len > 1e-4f)
+                    {
+                        axis /= len;
+
+                        float rot = std::min(ang, globalSpeciesParams.torqueStrength * dt);
+                        rot = std::min(rot, globalSpeciesParams.maxTurnAngle);
+
+                        glm::vec3 newDir = approxRotate(fwd, axis, rot);
+                        buf->velocities[idxA] = newDir * glm::length(buf->velocities[idxA]);
+
+                        // 加速度にもトルク分を加算（任意: 回転のノイズを弱めたい場合は外して良い）
+                        buf->accelerations[idxA] += axis * ang * globalSpeciesParams.torqueStrength;
+                    }
+                }
+            }
+        }
+    }
+    else if (!indices.empty() && other->indices.empty())
+    {
+
+        // this が葉, other が中間
+        for (auto *c : other->children)
+            applyInterUnitInfluence(c, dt);
+    }
+    else if (indices.empty() && !other->indices.empty())
+    {
+
+        // this が中間, other が葉
+        for (auto *c : children)
+            c->applyInterUnitInfluence(other, dt);
+    }
+    else
+    {
+
+        // 中間ノード同士（代表値近似）
+        float d2 = glm::distance2(center, other->center);
+        if (d2 < 1600.0f && d2 > 0.01f)
+        {
+
+            float d = glm::sqrt(d2);
+            float scale = 1.0f / (d2 + 1.0f);
+
+            glm::vec3 diff = center - other->center;
+            glm::vec3 separ = diff / d2 * globalSpeciesParams.separation;
+            glm::vec3 align = (other->averageVelocity - averageVelocity) * globalSpeciesParams.alignment;
+            glm::vec3 cohes = (other->center - center) * globalSpeciesParams.cohesion;
+
+            for (int idx : indices)
+                buf->accelerations[idx] += (align + cohes + separ) * scale;
+
+            for (int idx : other->indices)
+                other->buf->accelerations[idx] -= (align + cohes + separ) * scale;
         }
     }
 }
 
-BoidStats BoidUnit::computeBoidStats(Boid &self, const std::vector<Boid> &others) const
+/**
+ * 再帰的にユニット内の Boid の動きを更新する。
+ *
+ * @param dt 時間ステップ
+ *
+ * 処理内容:
+ * - **最下位層の場合**:
+ *   - 各 Boid の加速度を初期化。
+ *   - 分離、整列、凝集ルールを適用して加速度を計算。
+ *   - 最大速度、最小速度、最大旋回角を考慮して速度を更新。
+ *   - Boid の位置を更新。
+ * - **中間ノードの場合**:
+ *   - 再帰的に子ノードを処理。
+ *   - 子ノードの結果（中心、平均速度など）を親ノードに伝搬。
+ *
+ * 使用例:
+ * - 階層構造内で各ユニットの Boid の動きを更新する際に使用。
+ */
+void BoidUnit::updateRecursive(float dt)
 {
-    BoidStats s;
-    // 最大近傍数と吸引強度をパラメータから取得
-    int Nu = globalSpeciesParams.maxNeighbors;
-    float lambda = globalSpeciesParams.lambda;
+    frameCount++;
+    std::stack<BoidUnit *> stack;
+    stack.push(this);
 
-    // 距離とBoid参照のペアを作成
-    std::vector<std::pair<float, const Boid *>> neighbors;
-    for (const auto &n : others)
+    // 第一段階: acceleration をすべて計算
+    while (!stack.empty())
     {
-        if (n.id == self.id)
-            continue;
-        float dist = self.position.distance(n.position);
-        neighbors.emplace_back(dist, &n);
-    }
-    // 距離でソートし、近い順にNu個だけ使う
-    std::sort(neighbors.begin(), neighbors.end(),
-              [](const auto &a, const auto &b)
-              { return a.first < b.first; });
+        BoidUnit *current = stack.top();
+        stack.pop();
 
-    int used = 0;
-    for (const auto &[dist, nPtr] : neighbors)
-    {
-        if (used >= Nu)
-            break;
-        const Boid &n = *nPtr;
-        // 距離減衰重み
-        float weight = std::exp(-lambda * dist);
-
-        if (n.speciesId == self.speciesId)
+        if (current->isBoidUnit())
         {
-            s.sumVelocity = s.sumVelocity + n.velocity * weight;
-            s.sumPosition = s.sumPosition + n.position * weight;
-            Vec3 diff = self.position - n.position;
-            if (dist > 0.01f)
-            {
-                s.separation = s.separation + (diff / (dist * dist)) * weight;
-                self.stress += (n.stress - self.stress) * 0.1f * weight;
-            }
-            s.count++;
+            for (size_t i = 0; i < current->indices.size(); ++i)
+                current->computeBoidInteraction(i, dt);
         }
         else
         {
-            Vec3 diff = self.position - n.position;
-            if (dist > 0.01f)
+            for (auto &child : current->children)
+                stack.push(child);
+
+            // 子ノード同士の影響
+            for (size_t a = 0; a < current->children.size(); ++a)
+                for (size_t b = a + 1; b < current->children.size(); ++b)
+                    current->children[a]->applyInterUnitInfluence(current->children[b]);
+
+            current->computeBoundingSphere();
+        }
+    }
+
+    // 第二段階: acceleration 適用 → velocity / position 更新
+    stack.push(this);
+    while (!stack.empty())
+    {
+        BoidUnit *current = stack.top();
+        stack.pop();
+
+        if (current->isBoidUnit())
+        {
+            for (size_t i = 0; i < current->indices.size(); ++i)
             {
-                s.separation = s.separation + (diff / (dist * dist)) * 2.0f * weight;
+                int gIdx = current->indices[i];
+
+                glm::vec3 desiredVelocity = current->buf->velocities[gIdx] +
+                                            current->buf->accelerations[gIdx] * dt;
+                glm::vec3 oldDir = glm::normalize(current->buf->velocities[gIdx]);
+                glm::vec3 newDir = glm::normalize(desiredVelocity);
+                float speed = glm::length(desiredVelocity);
+
+                float angle = acosf(glm::clamp(glm::dot(oldDir, newDir), -1.0f, 1.0f));
+                if (angle > globalSpeciesParams.maxTurnAngle)
+                {
+                    glm::vec3 axis = glm::cross(oldDir, newDir);
+                    if (glm::length2(axis) > 1e-8f)
+                    {
+                        axis = glm::normalize(axis);
+                        float rot = glm::min(angle, globalSpeciesParams.maxTurnAngle * dt);
+                        newDir = approxRotate(oldDir, axis, rot);
+                    }
+                }
+
+                float tilt = newDir.y;
+                if (fabsf(tilt) > 1e-4f)
+                {
+                    glm::vec3 flatDir = glm::normalize(glm::vec3(newDir.x, 0, newDir.z));
+                    glm::vec3 axis = glm::cross(newDir, flatDir);
+                    float flatAngle = acosf(glm::clamp(glm::dot(newDir, flatDir), -1.0f, 1.0f));
+                    if (flatAngle > 1e-4f && glm::length2(axis) > 1e-8f)
+                    {
+                        axis = glm::normalize(axis);
+                        float rot = glm::min(flatAngle, globalSpeciesParams.horizontalTorque * dt);
+                        newDir = approxRotate(newDir, axis, rot);
+                    }
+                }
+
+                float finalSpeed = glm::clamp(speed,
+                                              globalSpeciesParams.minSpeed,
+                                              globalSpeciesParams.maxSpeed);
+
+                current->buf->velocities[gIdx] = newDir * finalSpeed;
+                current->buf->positions[gIdx] += current->buf->velocities[gIdx] * dt;
+                current->buf->accelerations[gIdx] = glm::vec3(0.0f); // 加速度リセット
             }
         }
-        used++;
+        else
+        {
+            for (auto &child : current->children)
+                stack.push(child);
+        }
     }
-    return s;
 }
 
-void BoidUnit::applyInterUnitInfluence(BoidUnit *other)
+void BoidUnit::computeBoidInteraction(size_t index, float dt)
 {
-    if (!boids.empty() && !other->boids.empty())
+    glm::vec3 separation = glm::vec3(0.0f);
+    glm::vec3 alignment = glm::vec3(0.0f);
+    glm::vec3 cohesion = glm::vec3(0.0f);
+    glm::vec3 memCohesion = glm::vec3(0.0f);
+
+    int count = 0;
+    int memCount = 0;
+    int gIdx = indices[index];
+    glm::vec3 pos = buf->positions[gIdx];
+    glm::vec3 vel = buf->velocities[gIdx];
+
+    // 近傍Boidとの相互作用を計算
+    std::unordered_set<int> visibleIds;
+    visibleIds.reserve(indices.size());
+
+    for (size_t j = 0; j < indices.size(); ++j)
     {
-        // 葉ノード同士はboidごとに詳細計算
-        for (Boid &a : boids)
+        if (j == index)
+            continue;
+
+        int gJ = indices[j];
+
+        glm::vec3 diff = pos - buf->positions[gJ];
+        float distSq = glm::dot(diff, diff);
+
+        if (distSq < 2500.0f && distSq > 0.0001f)
         {
-            Vec3 sumVelocity, sumPosition, separation;
-            int count = 0;
-            for (const Boid &b : other->boids)
+            float dist = sqrtf(distSq);
+
+            // 分離
+            float separationWeight = glm::clamp(1.0f - (dist / 50.0f), 0.0f, 1.0f);
+            separation += diff * (separationWeight * globalSpeciesParams.separation);
+
+            // 凝集
+            float cohesionWeight = glm::clamp(dist / 50.0f, 0.0f, 1.0f);
+            cohesion += buf->positions[gJ] * cohesionWeight;
+
+            // 整列
+            alignment += buf->velocities[gJ];
+            count++;
+
+            // 視界内のBoidを記録
+            visibleIds.insert(buf->ids[gJ]);
+        }
+    }
+
+    // cohesionMemory の更新を隔フレームで実行
+    if (frameCount % 5 == 0)
+    {
+        auto &memMap = cohesionMemories[buf->ids[gIdx]];
+        for (auto it = memMap.begin(); it != memMap.end();)
+        {
+            if (visibleIds.find(it->first) == visibleIds.end())
             {
-                float dist = a.position.distance(b.position);
-                if (dist < 40.0f && dist > 0.01f)
+                it->second += dt;
+                if (it->second > globalSpeciesParams.tau)
                 {
-                    float influence = std::max(0.0f, 1.0f - (dist / 40.0f));
-                    sumVelocity += b.velocity * influence;
-                    sumPosition += b.position * influence;
-                    Vec3 diff = a.position - b.position;
-                    separation += (diff / (dist * dist)) * influence;
-                    count += influence;
+                    it = memMap.erase(it);
+                    continue;
                 }
             }
-            if (count > 0)
+            ++it;
+        }
+    }
+
+    // cohesionMemory のサイズを制限 (LRU風)
+    const size_t maxCohesionMemorySize = 100;
+    if (cohesionMemories[buf->ids[gIdx]].size() > maxCohesionMemorySize)
+    {
+        auto &memMap = cohesionMemories[buf->ids[gIdx]];
+        auto oldest = std::min_element(
+            memMap.begin(), memMap.end(),
+            [](const auto &a, const auto &b)
+            { return a.second > b.second; });
+        if (oldest != memMap.end())
+            memMap.erase(oldest);
+    }
+
+    // cohesionMemory を使用した凝集計算
+    for (const auto &mem : cohesionMemories[buf->ids[gIdx]])
+    {
+        for (size_t j = 0; j < indices.size(); ++j)
+        {
+            int gJ = indices[j];
+            if (buf->ids[gJ] == mem.first)
             {
-                a.acceleration += ((sumVelocity / count - a.velocity) * globalSpeciesParams.alignment);
-                a.acceleration += ((sumPosition / count - a.position) * globalSpeciesParams.cohesion);
-                a.acceleration += (separation * globalSpeciesParams.separation);
+                memCohesion += buf->positions[gJ];
+                memCount++;
+                break;
             }
         }
     }
-    else if (!boids.empty() && other->boids.empty())
+
+    if (count + memCount > 0)
     {
-        // 片方が葉ノード、片方が中間ノード
-        for (auto *c : other->children)
+        glm::vec3 totalCohesion = cohesion + memCohesion;
+        totalCohesion = (totalCohesion / static_cast<float>(count + memCount)) - pos;
+        if (glm::length2(totalCohesion) > 0.0f)
+            totalCohesion = glm::normalize(totalCohesion) * globalSpeciesParams.cohesion * 1.2f;
+
+        if (count > 0)
         {
-            applyInterUnitInfluence(c);
-        }
-    }
-    else if (boids.empty() && !other->boids.empty())
-    {
-        for (auto *c : children)
-        {
-            c->applyInterUnitInfluence(other);
-        }
-    }
-    else
-    {
-        // 両方とも中間ノード → 代表値で近似計算
-        float dist = center.distance(other->center);
+            separation = glm::normalize(separation) * globalSpeciesParams.separation * 0.8f;
+            alignment = (alignment / static_cast<float>(count) - vel) * globalSpeciesParams.alignment;
 
-        // 代表値近似の影響をunitサイズで減衰
-        float rangeA = globalSpeciesParams.cohesionRange;
-        float rangeB = globalSpeciesParams.cohesionRange;
-        if (radius > rangeA || other->radius > rangeB)
-            return; // 大きすぎるunitは代表値近似を適用しない
+            // 回転トルクの適用
+            glm::vec3 fwd = glm::normalize(vel);
+            glm::vec3 tgt = glm::normalize(alignment);
+            float dot = glm::clamp(glm::dot(fwd, tgt), -1.0f, 1.0f);
+            float angle = acosf(dot);
 
-        if (dist < 400.0f && dist > 0.01f)
-        {
-            float influence = 1.0f / (dist * dist + 1.0f);
-            // unitが大きいほど影響を急激に減衰
-            float scaleA = std::clamp(1.0f - (radius / rangeA) * (radius / rangeA), 0.0f, 1.0f);
-            float scaleB = std::clamp(1.0f - (other->radius / rangeB) * (other->radius / rangeB), 0.0f, 1.0f);
-            float scale = influence * scaleA * scaleB * 0.3f;
-
-            Vec3 align = (other->averageVelocity - averageVelocity) * globalSpeciesParams.alignment;
-            Vec3 cohes = (other->center - center) * globalSpeciesParams.cohesion;
-            Vec3 separation = (other->center - center) * globalSpeciesParams.separation;
-            // このノード配下の全Boid
-            std::vector<Boid *> allBoids;
-            std::queue<BoidUnit *> q;
-            q.push(this);
-            while (!q.empty())
+            if (angle > 1e-4f)
             {
-                BoidUnit *u = q.front();
-                q.pop();
-                if (!u->boids.empty())
+                glm::vec3 axis = glm::cross(fwd, tgt);
+                float len = glm::length(axis);
+                if (len > 1e-4f)
                 {
-                    for (Boid &b : u->boids)
-                        allBoids.push_back(&b);
-                }
-                else
-                {
-                    for (BoidUnit *c : u->children)
-                        q.push(c);
-                }
-            }
+                    axis /= len;
 
-            // 相手ノード配下の全Boid
-            std::vector<Boid *> otherBoids;
-            q.push(other);
-            while (!q.empty())
-            {
-                BoidUnit *u = q.front();
-                q.pop();
-                if (!u->boids.empty())
-                {
-                    for (Boid &b : u->boids)
-                        otherBoids.push_back(&b);
-                }
-                else
-                {
-                    for (BoidUnit *c : u->children)
-                        q.push(c);
-                }
-            }
+                    float rot = std::min(angle, globalSpeciesParams.torqueStrength * dt);
+                    rot = std::min(rot, globalSpeciesParams.maxTurnAngle);
 
-            // 影響を加算
-            for (Boid *b : allBoids)
-            {
-                b->acceleration += align * scale;
-                b->acceleration += cohes * scale;
-                b->acceleration += separation * scale;
-            }
-            for (Boid *b : otherBoids)
-            {
-                b->acceleration -= align * scale;
-                b->acceleration -= cohes * scale;
-                b->acceleration -= separation * scale;
+                    glm::vec3 newDir = approxRotate(fwd, axis, rot);
+                    vel = newDir * glm::length(vel);
+
+                    // 加速度にもトルク分を加算
+                    buf->accelerations[gIdx] += axis * angle * globalSpeciesParams.torqueStrength;
+                }
             }
         }
+
+        buf->accelerations[gIdx] += separation + alignment + totalCohesion;
     }
 }
 
-void BoidUnit::updateRecursive(float dt)
-{
-    if (isBoidUnit())
-    {
-        // 1. まず全Boidの合計値を計算
-        Vec3 totalVelocity, totalPosition;
-        for (const auto &b : boids)
-        {
-            totalVelocity += b.velocity;
-            totalPosition += b.position;
-        }
-
-        // 2. 各Boidごとに「自分以外の合計」を使って計算
-        for (auto &b : boids)
-        {
-            int n = (int)boids.size() - 1;
-            if (n <= 0)
-                continue;
-
-            Vec3 sumVelocity, sumPosition, separation;
-            int alignCount = 0, cohesCount = 0, separCount = 0;
-            float stress = b.stress;
-
-            // 距離閾値
-            float separRange = globalSpeciesParams.separationRange;
-            float alignRange = globalSpeciesParams.alignmentRange;
-            float cohesRange = globalSpeciesParams.cohesionRange;
-
-            // --- ここから最適化 ---
-            // 近傍候補を距離付きで収集
-            std::vector<std::pair<float, const Boid*>> neighbors;
-            for (const auto &nboid : boids)
-            {
-                if (nboid.id == b.id) continue;
-                float dist = b.position.distance(nboid.position);
-                neighbors.emplace_back(dist, &nboid);
-            }
-
-            // 最大近傍数と減衰パラメータ
-            int Nu = globalSpeciesParams.maxNeighbors;
-            float lambda = globalSpeciesParams.lambda;
-
-            // 近い順にNu個だけ使う
-            if ((int)neighbors.size() > Nu) {
-                std::partial_sort(neighbors.begin(), neighbors.begin() + Nu, neighbors.end(),
-                    [](const auto &a, const auto &b) { return a.first < b.first; });
-                neighbors.resize(Nu);
-            }
-
-            for (const auto &[dist, nPtr] : neighbors)
-            {
-                const Boid &nboid = *nPtr;
-                float weight = std::exp(-lambda * dist);
-
-                // 分離
-                if (dist < separRange && dist > 0.01f)
-                {
-                    Vec3 diff = b.position - nboid.position;
-                    separation += (diff / (dist * dist)) * weight;
-                    separCount++;
-                    stress += (nboid.stress - b.stress) * 0.1f * weight;
-                }
-                // 整列
-                if (dist < alignRange)
-                {
-                    sumVelocity += nboid.velocity * weight;
-                    alignCount++;
-                }
-                // 凝集
-                if (dist < cohesRange)
-                {
-                    sumPosition += nboid.position * weight;
-                    cohesCount++;
-                }
-            }
-            // --- ここまで最適化 ---
-
-            // ルール適用（既存のまま）
-            Vec3 align = alignCount > 0 ? ((sumVelocity / alignCount - b.velocity) * globalSpeciesParams.alignment) : Vec3();
-            Vec3 cohesTarget = cohesCount > 0 ? ((sumPosition / cohesCount - b.position).normalized()) : Vec3();
-            Vec3 forward = b.velocity.normalized();
-
-            float boost = 1.0f + b.stress * 0.8f;
-            Vec3 separ = separation * (globalSpeciesParams.separation + b.stress * 0.4f);
-
-            // --- 既存コードの一部を最適化 ---
-
-            // 例：進行方向ベクトルの正規化と長さ判定
-            float forwardLenSq = forward.lengthSq();
-            Vec3 forwardNorm;
-            if (forwardLenSq > 0.000001f) {
-                forwardNorm = forward / std::sqrt(forwardLenSq);
-            } else {
-                forwardNorm = Vec3();
-            }
-
-            // 以降は forwardNorm を使い回す
-            if (cohesCount > 0 && forwardLenSq > 0.000001f)
-            {
-                float maxCohesionAngle = 0.1f;
-                float dot = forwardNorm.dot(cohesTarget);
-                float angle = acos(std::clamp(dot, -1.0f, 1.0f));
-                if (angle > maxCohesionAngle)
-                {
-                    Vec3 axis = forwardNorm.cross(cohesTarget).normalized();
-                    cohesTarget = Vec3::rotateVector(forwardNorm, axis, maxCohesionAngle);
-                }
-                Vec3 cohes = (cohesTarget - forwardNorm) * globalSpeciesParams.cohesion * (1.0f - b.stress);
-                b.acceleration += cohes * boost;
-            }
-            else
-            {
-                Vec3 cohes = cohesCount > 0 ? ((sumPosition / cohesCount - b.position) * globalSpeciesParams.cohesion * (1.0f - b.stress)) : Vec3();
-                b.acceleration += cohes * boost;
-            }
-
-            // ...他の箇所も .normalized() や .length() を複数回呼ばず、変数にキャッシュして使い回す...
-
-            // 進行方向ベクトル
-            Vec3 forwardVec = b.velocity;
-            float forwardVecLenSq = forwardVec.lengthSq();
-            Vec3 forwardVecNorm;
-            if (forwardVecLenSq > 0.000001f) {
-                forwardVecNorm = forwardVec / std::sqrt(forwardVecLenSq);
-            } else {
-                forwardVecNorm = Vec3();
-            }
-            // XZ平面上の進行方向
-            Vec3 flatForward = Vec3(forwardVecNorm.x, 0.0f, forwardVecNorm.z);
-            float flatForwardLenSq = flatForward.lengthSq();
-            if (flatForwardLenSq > 0.000001f)
-            {
-                flatForward = flatForward / std::sqrt(flatForwardLenSq);
-                // 上下方向（y成分）を減らす補正ベクトル
-                Vec3 flatten = (flatForward - forwardVecNorm) * 0.1f; // 係数は調整
-                b.acceleration += flatten;
-            }
-
-            float boundary = 200.0f;
-            if (b.position.length() > boundary)
-            {
-                Vec3 toOrigin = (Vec3(0, 0, 0) - b.position) * 0.002f;
-                b.acceleration += toOrigin;
-            }
-            // jitter（微小なランダムノイズ）を加える
-            float jitterStrength = 0.1f;
-            b.acceleration.x += ((float)rand() / float(RAND_MAX) - 0.5f) * jitterStrength;
-            b.acceleration.y += ((float)rand() / 2147483647.0f - 0.5f) * jitterStrength;
-            b.acceleration.z += ((float)rand() / 2147483647.0f - 0.5f) * jitterStrength;
-
-            /** 速度の更新 */
-            Vec3 desiredVelocity = b.velocity + b.acceleration * dt;
-            float maxTurnAngle = globalSpeciesParams.maxTurnAngle;
-            float speed = desiredVelocity.length();
-            if (speed > 0.001f)
-            {
-                Vec3 oldDir = b.velocity.normalized();
-                Vec3 newDir = desiredVelocity.normalized();
-                float angle = acos(std::clamp(oldDir.dot(newDir), -1.0f, 1.0f));
-                if (angle > maxTurnAngle)
-                {
-                    // oldDirからnewDirへmaxTurnAngleだけ回転
-                    Vec3 axis = oldDir.cross(newDir).normalized();
-                    // 回転行列またはSLERPで補間（Vec3型なら自作関数が必要）
-                    newDir = Vec3::rotateVector(oldDir, axis, maxTurnAngle);
-                    b.velocity = newDir * speed;
-                }
-                else
-                {
-                    b.velocity = desiredVelocity;
-                }
-            }
-
-            /** 最大速度の制限 */
-            float maxSpeed = globalSpeciesParams.maxSpeed;
-            if (speed > maxSpeed)
-            {
-                b.velocity = b.velocity * (maxSpeed / speed);
-            }
-
-            // ...既存の最大速度制限の直後に追加...
-            float minSpeed = globalSpeciesParams.minSpeed;
-            if (speed < minSpeed && speed > 0.0001f)
-            {
-                b.velocity = b.velocity * (minSpeed / speed);
-            }
-
-            // 速度方向に微小な推進力
-            if (speed > 0.001f)
-            {
-                b.acceleration += (b.velocity / speed) * 0.01f;
-            }
-
-            /** 位置の更新 */
-            b.position += b.velocity * dt;
-
-            /** ストレスの減少 */
-            b.stress = std::max(0.0f, b.stress - 0.005f);
-        }
-
-        // 中心・平均速度の再計算はここで一度だけ
-        center = averageVelocity = Vec3();
-        for (const auto &b : boids)
-        {
-            center = center + b.position;
-            averageVelocity = averageVelocity + b.velocity;
-        }
-        if (!boids.empty())
-        {
-            center = center / boids.size();
-            averageVelocity = averageVelocity / boids.size();
-        }
-    }
-    else
-    {
-        for (auto &c : children)
-            c->updateRecursive(dt);
-        for (size_t i = 0; i < children.size(); ++i)
-        {
-            for (size_t j = i + 1; j < children.size(); ++j)
-            {
-                children[i]->applyInterUnitInfluence(children[j]);
-                children[j]->applyInterUnitInfluence(children[i]);
-            }
-        }
-        center = averageVelocity = Vec3();
-        for (const auto &c : children)
-        {
-            center = center + c->center;
-            averageVelocity = averageVelocity + c->averageVelocity;
-        }
-        if (!children.empty())
-        {
-            center = center / children.size();
-            averageVelocity = averageVelocity / children.size();
-        }
-    }
-    computeBoundingSphere();
-}
-
-// 分割が必要か判定
+// 分割が必要か判定 (indices + 中央バッファ版)
 bool BoidUnit::needsSplit(float splitRadius, float directionVarThresh, int maxBoids) const
 {
-    if ((int)boids.size() > maxBoids)
+    if (static_cast<int>(indices.size()) > maxBoids)
         return true;
     if (radius > splitRadius)
         return true;
-    // 密度基準を追加
-    float density = boids.size() / (4.0f / 3.0f * M_PI * std::max(radius, 1e-3f) * std::max(radius, 1e-3f) * std::max(radius, 1e-3f));
-    if (density < 0.01f) // 密度が低すぎる場合も分割
-        return true;
+
     // 方向のバラつき判定
-    if (boids.size() > 1)
+    if (indices.size() > 1)
     {
-        Vec3 avg = Vec3();
-        for (const auto &b : boids)
-            avg += b.velocity.normalized();
-        avg = avg / boids.size();
+        glm::vec3 avg = glm::vec3(0.0f);
+        for (int gIdx : indices)
+            avg += glm::normalize(buf->velocities[gIdx]);
+        avg /= static_cast<float>(indices.size());
+
         float var = 0.0f;
-        for (const auto &b : boids)
-            var += (b.velocity.normalized() - avg).length();
-        var /= boids.size();
+        for (int gIdx : indices)
+            var += glm::length(glm::normalize(buf->velocities[gIdx]) - avg);
+        var /= static_cast<float>(indices.size());
+
         if (var > directionVarThresh)
             return true;
     }
     return false;
 }
 
-// 2分割（例：最大分散軸で分割）→ 任意分割
+// 最大分散軸で分割 → 任意分割 (indices 版)
 std::vector<BoidUnit *> BoidUnit::split(int numSplits)
 {
+    if (numSplits < 2)
+        numSplits = 2;
+    if (static_cast<int>(indices.size()) < numSplits)
+        numSplits = static_cast<int>(indices.size());
+
+    // 最大分散軸を求める
     int axis = 0;
     float maxVar = 0.0f;
-    for (int i = 0; i < 3; ++i)
+    for (int ax = 0; ax < 3; ++ax)
     {
-        float mean = 0, var = 0;
-        for (const auto &b : boids)
-            mean += (i == 0 ? b.position.x : (i == 1 ? b.position.y : b.position.z));
-        mean /= boids.size();
-        for (const auto &b : boids)
+        float mean = 0.0f, var = 0.0f;
+        for (int gIdx : indices)
+            mean += (ax == 0   ? buf->positions[gIdx].x
+                     : ax == 1 ? buf->positions[gIdx].y
+                               : buf->positions[gIdx].z);
+        mean /= static_cast<float>(indices.size());
+
+        for (int gIdx : indices)
         {
-            float v = (i == 0 ? b.position.x : (i == 1 ? b.position.y : b.position.z)) - mean;
+            float v = (ax == 0   ? buf->positions[gIdx].x
+                       : ax == 1 ? buf->positions[gIdx].y
+                                 : buf->positions[gIdx].z) -
+                      mean;
             var += v * v;
         }
         if (var > maxVar)
         {
             maxVar = var;
-            axis = i;
+            axis = ax;
         }
     }
-    // min, maxを求めて等間隔で分割
+
+    // min / max を取り等間隔で分ける
     float minVal = std::numeric_limits<float>::max();
-    float maxVal = std::numeric_limits<float>::lowest();
-    for (const auto &b : boids)
+    float maxVal = -std::numeric_limits<float>::max();
+    for (int gIdx : indices)
     {
-        float v = (axis == 0 ? b.position.x : (axis == 1 ? b.position.y : b.position.z));
+        float v = (axis == 0   ? buf->positions[gIdx].x
+                   : axis == 1 ? buf->positions[gIdx].y
+                               : buf->positions[gIdx].z);
         minVal = std::min(minVal, v);
         maxVal = std::max(maxVal, v);
     }
+
     float interval = (maxVal - minVal) / numSplits;
-    std::vector<std::vector<Boid>> groups(numSplits);
-    for (const auto &b : boids)
+    std::vector<std::vector<int>> groups(numSplits);
+    for (int gIdx : indices)
     {
-        float v = (axis == 0 ? b.position.x : (axis == 1 ? b.position.y : b.position.z));
+        float v = (axis == 0   ? buf->positions[gIdx].x
+                   : axis == 1 ? buf->positions[gIdx].y
+                               : buf->positions[gIdx].z);
         int idx = std::min(numSplits - 1, int((v - minVal) / interval));
-        groups[idx].push_back(b);
+        groups[idx].push_back(gIdx);
     }
+
+    // 子 BoidUnit を生成
     std::vector<BoidUnit *> result;
-    for (auto &group : groups)
+    for (const auto &g : groups)
     {
-        if (!group.empty())
-        {
-            BoidUnit *unit = new BoidUnit();
-            unit->boids = group;
-            unit->computeBoundingSphere();
-            result.push_back(unit);
-        }
+        if (g.empty())
+            continue;
+        BoidUnit *u = new BoidUnit();
+        u->buf = buf;   // 中央バッファ共有
+        u->indices = g; // インデックスだけ保持
+        u->level = level + 1;
+        u->computeBoundingSphere();
+        result.push_back(u);
     }
     return result;
 }
 
-// k-means風クラスタリングで近いもの同士をグループ化
+// 現在のユニットを分割し子ノードとして配置
+void BoidUnit::splitInPlace(int maxBoids)
+{
+    if (!needsSplit(80.0f, 0.5f, maxBoids))
+        return;
+
+    auto splits = splitByClustering(4);
+
+    // 自分は中間ノードになるので indices を空に
+    indices.clear();
+
+    // 子ノードを登録
+    children = std::move(splits);
+
+    // バウンディングスフィアを再計算
+    computeBoundingSphere();
+}
+// k-means 風クラスタリングで indices をグループ化
 std::vector<BoidUnit *> BoidUnit::splitByClustering(int numClusters)
 {
-    if ((int)boids.size() < numClusters)
-        numClusters = boids.size();
+    if ((int)indices.size() < numClusters)
+        numClusters = static_cast<int>(indices.size());
     if (numClusters < 2)
         numClusters = 2;
 
-    // 初期中心をランダム選択
-    std::vector<Vec3> centers;
-    std::vector<Boid> seeds = boids;
-    for (int i = 0; i < numClusters; ++i)
-        centers.push_back(seeds[i].position);
+    // 初期中心をランダム（ここでは先頭から）に選択
+    std::vector<glm::vec3> centers;
+    for (int k = 0; k < numClusters; ++k)
+        centers.push_back(buf->positions[indices[k]]);
 
-    std::vector<int> assignments(boids.size(), 0);
+    std::vector<int> assign(indices.size(), 0);
+
+    // 反復回数は少なめに固定
     for (int iter = 0; iter < 5; ++iter)
-    { // 反復回数少なめ
+    {
         // 割り当て
-        for (size_t i = 0; i < boids.size(); ++i)
+        for (size_t i = 0; i < indices.size(); ++i)
         {
-            float minDist = 1e9;
-            int best = 0;
+            int gI = indices[i];
+            float best = std::numeric_limits<float>::max();
+            int bestK = 0;
             for (int k = 0; k < numClusters; ++k)
             {
-                float d = boids[i].position.distance(centers[k]);
-                if (d < minDist)
+                float d = glm::distance(buf->positions[gI], centers[k]);
+                if (d < best)
                 {
-                    minDist = d;
-                    best = k;
+                    best = d;
+                    bestK = k;
                 }
             }
-            assignments[i] = best;
+            assign[i] = bestK;
         }
-        // 中心再計算
-        std::vector<Vec3> newCenters(numClusters, Vec3());
+
+        // 中心を再計算
+        std::vector<glm::vec3> newCenters(numClusters, glm::vec3(0.0f));
         std::vector<int> counts(numClusters, 0);
-        for (size_t i = 0; i < boids.size(); ++i)
+        for (size_t i = 0; i < indices.size(); ++i)
         {
-            newCenters[assignments[i]] += boids[i].position;
-            counts[assignments[i]]++;
+            int gI = indices[i];
+            newCenters[assign[i]] += buf->positions[gI];
+            counts[assign[i]]++;
         }
         for (int k = 0; k < numClusters; ++k)
         {
             if (counts[k] > 0)
-                newCenters[k] = newCenters[k] / counts[k];
+                newCenters[k] /= static_cast<float>(counts[k]);
             else
                 newCenters[k] = centers[k];
         }
-        centers = newCenters;
+        centers.swap(newCenters);
     }
-    // グループ分け
-    std::vector<std::vector<Boid>> groups(numClusters);
-    for (size_t i = 0; i < boids.size(); ++i)
-    {
-        groups[assignments[i]].push_back(boids[i]);
-    }
-    // BoidUnit生成
+
+    // グループごとに global index をまとめる
+    std::vector<std::vector<int>> groups(numClusters);
+    for (size_t i = 0; i < indices.size(); ++i)
+        groups[assign[i]].push_back(indices[i]);
+
+    // 各グループから BoidUnit を生成
     std::vector<BoidUnit *> result;
-    for (auto &group : groups)
+    for (const auto &g : groups)
     {
-        if (!group.empty())
-        {
-            BoidUnit *unit = new BoidUnit();
-            unit->boids = group;
-            unit->computeBoundingSphere();
-            result.push_back(unit);
-        }
+        if (g.empty())
+            continue;
+        auto *u = new BoidUnit();
+        u->buf = buf;   // 中央バッファを共有
+        u->indices = g; // インデックスだけ保持
+        u->level = level + 1;
+        u->computeBoundingSphere();
+        result.push_back(u);
     }
     return result;
 }
 
-// 親ノードから自身を分割する
-void BoidUnit::splitInPlace(int maxBoids)
+/**
+ * 指定されたユニット内のすべての Boid に反発力を加える。
+ *
+ * @param unit 対象の BoidUnit
+ * @param repulsion 反発力ベクトル
+ *
+ * 処理内容:
+ * - **最下位層の場合**:
+ *   - Boid の位置に基づいて反発力を計算し、加速度に加算。
+ * - **中間ノードの場合**:
+ *   - 再帰的に子ノードを処理。
+ *
+ * 使用例:
+ * - Boid 間の衝突回避やユニット間の分離を実現する際に使用。
+ */
+bool BoidUnit::canMergeWith(const BoidUnit &other,
+                            float mergeDist, float velThresh,
+                            float maxRadius, int maxBoids) const
 {
-    if (!needsSplit(40.0f, 0.5f, maxBoids))
-        return;
-    // 例: 近いもの同士で最大4グループに分割
-    auto splits = splitByClustering(4);
-    this->boids.clear();
-    this->children = splits;
-    for (auto *c : children)
-        c->level = this->level + 1;
-    computeBoundingSphere();
-}
+    // 中心間距離
+    if (glm::distance(center, other.center) > mergeDist)
+        return false;
 
-// 結合可能か判定
-bool BoidUnit::canMergeWith(const BoidUnit &other, float mergeDist, float velThresh, float maxRadius, int maxBoids) const
-{
-    if (center.distance(other.center) > mergeDist)
+    // 平均速度差
+    if (glm::length(averageVelocity - other.averageVelocity) > velThresh)
         return false;
-    if ((averageVelocity - other.averageVelocity).length() > velThresh)
+
+    // Boid 数上限
+    if (static_cast<int>(indices.size() + other.indices.size()) > maxBoids)
         return false;
-    // Boid数上限チェック
-    if ((int)boids.size() + (int)other.boids.size() > maxBoids)
-        return false;
+
+    // 結合後の中心
+    glm::vec3 newCenter =
+        (center * static_cast<float>(indices.size()) +
+         other.center * static_cast<float>(other.indices.size())) /
+        static_cast<float>(indices.size() + other.indices.size());
+
     // 結合後の半径
-    Vec3 newCenter = (center * boids.size() + other.center * other.boids.size()) / (boids.size() + other.boids.size());
     float newRadius = 0.0f;
-    for (const auto &b : boids)
-        newRadius = std::max(newRadius, newCenter.distance(b.position));
-    for (const auto &b : other.boids)
-        newRadius = std::max(newRadius, newCenter.distance(b.position));
-    if (newRadius > maxRadius)
-        return false;
-    return true;
+    for (int gIdx : indices)
+        newRadius = std::max(newRadius, glm::distance(newCenter, buf->positions[gIdx]));
+    for (int gIdx : other.indices)
+        newRadius = std::max(newRadius, glm::distance(newCenter, buf->positions[gIdx]));
+
+    return newRadius <= maxRadius;
 }
 
-// 結合
+// 他ユニットを結合（値渡し版）
 void BoidUnit::mergeWith(const BoidUnit &other)
 {
-    boids.insert(boids.end(), other.boids.begin(), other.boids.end());
+    indices.insert(indices.end(), other.indices.begin(), other.indices.end());
     computeBoundingSphere();
 }
 
-// 結合
+// 他ユニットを結合（ポインタ／親ノード付き版）
 void BoidUnit::mergeWith(BoidUnit *other, BoidUnit *parent)
 {
-    boids.insert(boids.end(), other->boids.begin(), other->boids.end());
-    children.clear();
+    indices.insert(indices.end(), other->indices.begin(), other->indices.end());
+    children.clear(); // 自ノードを葉に戻す
     computeBoundingSphere();
-    // 親ノードのchildrenからotherを除去
+
     if (parent)
     {
         auto it = std::find(parent->children.begin(), parent->children.end(), other);
         if (it != parent->children.end())
             parent->children.erase(it);
     }
-    // メモリ解放
     delete other;
+}
+
+// 兄弟ノード配下の全 Boid に反発を適用
+void BoidUnit::addRepulsionToAllBoids(BoidUnit *unit, const glm::vec3 &repulsion)
+{
+    if (unit->isBoidUnit())
+    {
+        for (int gIdx : unit->indices)
+        {
+            float d = glm::length(unit->buf->positions[gIdx] - unit->center);
+            float w = 0.5f + 0.5f * (d / (unit->radius + 1e-5f)); // 端ほど 1.0、中心 0.5
+            unit->buf->accelerations[gIdx] += repulsion * w;
+        }
+    }
+    else
+    {
+        for (auto *c : unit->children)
+            addRepulsionToAllBoids(c, repulsion);
+    }
 }
