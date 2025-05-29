@@ -189,24 +189,25 @@ function initThreeJS() {
   dirLight.shadow.normalBias = 0.01;
 
   scene.add(dirLight);
+  // EffectComposer の初期化（スマホ以外の場合のみ）
+  if (!isMobileDevice()) {
+    // EffectComposer の初期化
+    composer = new EffectComposer(renderer);
 
-  // EffectComposer の初期化
-  composer = new EffectComposer(renderer);
+    // RenderPass を追加
+    const renderPass = new RenderPass(scene, camera);
+    composer.addPass(renderPass);
 
-  // RenderPass を追加
-  const renderPass = new RenderPass(scene, camera);
-  composer.addPass(renderPass);
+    const ssaoPass = new SSAOPass(scene, camera, width, height);
+    ssaoPass.kernelRadius = 8; // サンプル半径（大きくすると効果が広がる）
+    ssaoPass.minDistance = 0.001; // 最小距離（小さくすると近距離の効果が強調される）
+    ssaoPass.maxDistance = 0.01; // 最大距離（大きくすると遠距離の効果が強調される）
+    composer.addPass(ssaoPass);
 
-  const ssaoPass = new SSAOPass(scene, camera, width, height);
-  ssaoPass.kernelRadius = 8; // サンプル半径（大きくすると効果が広がる）
-  ssaoPass.minDistance = 0.001; // 最小距離（小さくすると近距離の効果が強調される）
-  ssaoPass.maxDistance = 0.01; // 最大距離（大きくすると遠距離の効果が強調される）
-  composer.addPass(ssaoPass);
-
-  // UnrealBloomPass を追加（任意）
-  const bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 1.5, 0.4, 0.85);
-  composer.addPass(bloomPass);
-
+    // UnrealBloomPass を追加（任意）
+    const bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 1.5, 0.4, 0.85);
+    composer.addPass(bloomPass);
+  }
   // ウィンドウリサイズ対応
   window.addEventListener('resize', onWindowResize);
 }
@@ -373,8 +374,12 @@ function animate() {
   }
 
   controls.update();
-  composer.render(); // ← renderer.render の代わり
-
+  // スマホの場合は renderer を使用、それ以外は composer を使用
+  if (isMobileDevice()) {
+    renderer.render(scene, camera);
+  } else {
+    composer.render();
+  }
   if (stats) stats.end();
 
   animationTimer = setTimeout(animate, FRAME_INTERVAL);
@@ -426,6 +431,9 @@ onMounted(() => {
   startSimulation();
 });
 
+function isMobileDevice() {
+  return /Mobi|Android/i.test(navigator.userAgent);
+}
 // settingsの変更をwasmModuleに反映
 watch(
   () => [
