@@ -32,4 +32,12 @@ extern "C"
     {
         return BoidTree::instance().getBoidCount();
     }
+    void update(float dt)
+    {
+        BoidTree::instance().update(dt);
+    }
+    void setFlockSize(int newSize, float posRange, float velRange)
+    {
+        BoidTree::instance().setFlockSize(newSize, posRange, velRange);
+    }
 }
