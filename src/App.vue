@@ -39,6 +39,11 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import Settings from './components/Settings.vue';
 import Stats from 'three/examples/jsm/libs/stats.module'
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { SSAOPass } from 'three/examples/jsm/postprocessing/SSAOPass.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'; // 任意
 
 const wasmModule = inject('wasmModule');
 if (!wasmModule) {
@@ -85,7 +90,7 @@ function loadSettings() {
 const settings = reactive(loadSettings());
 
 const threeContainer = ref(null);
-let scene, camera, renderer, controls;
+let scene, camera, renderer, controls, composer;
 let boids = null;
 
 const paused = ref(false);
@@ -135,12 +140,22 @@ function initThreeJS() {
   camera.position.set(20, 40, 40);
   camera.lookAt(0, 0, 0);
 
-  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer = new THREE.WebGLRenderer({
+    antialias: true,
+  });
+  renderer.setPixelRatio(window.devicePixelRatio); // 高DPI対応
   renderer.setSize(width, height);
   renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap; // 影を柔らかく
+
   threeContainer.value.appendChild(renderer.domElement);
 
+  camera.aspect = width / height;
+  camera.updateProjectionMatrix();
+
   controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true; // なめらかな操作
+  controls.dampingFactor = 0.1;
 
   // 地面メッシュ追加
   const groundGeo = new THREE.PlaneGeometry(1000, 1000);
@@ -174,6 +189,23 @@ function initThreeJS() {
   dirLight.shadow.normalBias = 0.01;
 
   scene.add(dirLight);
+
+  // EffectComposer の初期化
+  composer = new EffectComposer(renderer);
+
+  // RenderPass を追加
+  const renderPass = new RenderPass(scene, camera);
+  composer.addPass(renderPass);
+
+  const ssaoPass = new SSAOPass(scene, camera, width, height);
+  ssaoPass.kernelRadius = 8; // サンプル半径（大きくすると効果が広がる）
+  ssaoPass.minDistance = 0.001; // 最小距離（小さくすると近距離の効果が強調される）
+  ssaoPass.maxDistance = 0.01; // 最大距離（大きくすると遠距離の効果が強調される）
+  composer.addPass(ssaoPass);
+
+  // UnrealBloomPass を追加（任意）
+  const bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 1.5, 0.4, 0.85);
+  composer.addPass(bloomPass);
 
   // ウィンドウリサイズ対応
   window.addEventListener('resize', onWindowResize);
@@ -341,7 +373,7 @@ function animate() {
   }
 
   controls.update();
-  renderer.render(scene, camera);
+  composer.render(); // ← renderer.render の代わり
 
   if (stats) stats.end();
 
