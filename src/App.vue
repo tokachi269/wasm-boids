@@ -42,13 +42,13 @@ import Stats from 'three/examples/jsm/libs/stats.module'
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { SSAOPass } from 'three/examples/jsm/postprocessing/SSAOPass.js';
-import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'; // 任意
 
 const wasmModule = inject('wasmModule');
 if (!wasmModule) {
   console.error('wasmModule not provided');
 }
+
 const posPtr = wasmModule.cwrap('posPtr', 'number', [])
 const velPtr = wasmModule.cwrap('velPtr', 'number', [])
 const boidCount = wasmModule.cwrap('boidCount', 'number', [])
@@ -58,21 +58,20 @@ const update = wasmModule.cwrap('update', 'void', ['number'])
 const setFlockSize = wasmModule.cwrap('setFlockSize', 'void', ['number', 'number', 'number'])
 
 const DEFAULT_SETTINGS = {
-  cohesion: 4.3,
-  separation: 6.7,
-  alignment: 4.4,
-  maxSpeed: 0.48,
-  maxTurnAngle: 0.08,
-  separationRange: 6,
-  alignmentRange: 25,
-  cohesionRange: 128,
-  speed: 0.48,
   flockSize: 3000,
+  cohesion: 4.94,
+  cohesionRange: 128,
+  separation: 6.7,
+  separationRange: 6,
+  alignment: 5.64,
+  alignmentRange: 25,
+  maxSpeed: 0.36,
+  maxTurnAngle: 0.065,
   maxNeighbors: 4,
-  lambda: 0.07,
-  horizontalTorque: 0.05,
+  lambda: 0.15,
+  horizontalTorque: 0.041,
   velocityEpsilon: 0.005,
-  torqueStrength: 2.5,
+  torqueStrength: 3.438
 };
 
 function loadSettings() {
@@ -91,7 +90,6 @@ const settings = reactive(loadSettings());
 
 const threeContainer = ref(null);
 let scene, camera, renderer, controls, composer;
-let boids = null;
 
 const paused = ref(false);
 
