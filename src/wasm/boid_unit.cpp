@@ -246,8 +246,7 @@ void BoidUnit::updateRecursive(float dt)
 
         if (current->isBoidUnit())
         {
-            for (size_t i = 0; i < current->indices.size(); ++i)
-                current->computeBoidInteraction(i, dt);
+            current->computeBoidInteraction(dt);
         }
         else
         {
@@ -325,7 +324,7 @@ void BoidUnit::updateRecursive(float dt)
     }
 }
 
-void BoidUnit::computeBoidInteraction(size_t index, float dt)
+void BoidUnit::computeBoidInteraction(float dt)
 {
     glm::vec3 separation = glm::vec3(0.0f);
     glm::vec3 alignment = glm::vec3(0.0f);
@@ -334,131 +333,143 @@ void BoidUnit::computeBoidInteraction(size_t index, float dt)
 
     int count = 0;
     int memCount = 0;
-    int gIdx = indices[index];
-    glm::vec3 pos = buf->positions[gIdx];
-    glm::vec3 vel = buf->velocities[gIdx];
+    int gIdx = 0;
+    glm::vec3 pos;
+    glm::vec3 vel;
 
     // 近傍Boidとの相互作用を計算
     std::unordered_set<int> visibleIds;
-    visibleIds.reserve(indices.size());
-
-    for (size_t j = 0; j < indices.size(); ++j)
+    for (size_t index = 0; index < indices.size(); ++index)
     {
-        if (j == index)
-            continue;
+        separation = glm::vec3(0.0f);
+        alignment = glm::vec3(0.0f);
+        cohesion = glm::vec3(0.0f);
+        memCohesion = glm::vec3(0.0f);
 
-        int gJ = indices[j];
-
-        glm::vec3 diff = pos - buf->positions[gJ];
-        float distSq = glm::dot(diff, diff);
-
-        if (distSq < 2500.0f && distSq > 0.0001f)
+        count = 0;
+        memCount = 0;
+        gIdx = indices[index];
+        pos = buf->positions[gIdx];
+        vel = buf->velocities[gIdx];
+        visibleIds.reserve(indices.size());
+        if (frameCount % 9 == 0)
         {
-            float dist = sqrtf(distSq);
-
-            // 分離
-            float separationWeight = glm::clamp(1.0f - (dist / 50.0f), 0.0f, 1.0f);
-            separation += diff * (separationWeight * globalSpeciesParams.separation);
-
-            // 凝集
-            float cohesionWeight = glm::clamp(dist / 50.0f, 0.0f, 1.0f);
-            cohesion += buf->positions[gJ] * cohesionWeight;
-
-            // 整列
-            alignment += buf->velocities[gJ];
-            count++;
-
-            // 視界内のBoidを記録
-            visibleIds.insert(buf->ids[gJ]);
-        }
-    }
-
-    // cohesionMemory の更新を隔フレームで実行
-    if (frameCount % 5 == 0)
-    {
-        auto &memMap = cohesionMemories[buf->ids[gIdx]];
-        for (auto it = memMap.begin(); it != memMap.end();)
-        {
-            if (visibleIds.find(it->first) == visibleIds.end())
+            for (size_t j = 0; j < indices.size(); ++j)
             {
-                it->second += dt;
-                if (it->second > globalSpeciesParams.tau)
-                {
-                    it = memMap.erase(it);
+                if (j == index)
                     continue;
-                }
-            }
-            ++it;
-        }
-    }
 
-    // cohesionMemory のサイズを制限 (LRU風)
-    const size_t maxCohesionMemorySize = 100;
-    if (cohesionMemories[buf->ids[gIdx]].size() > maxCohesionMemorySize)
-    {
-        auto &memMap = cohesionMemories[buf->ids[gIdx]];
-        auto oldest = std::min_element(
-            memMap.begin(), memMap.end(),
-            [](const auto &a, const auto &b)
-            { return a.second > b.second; });
-        if (oldest != memMap.end())
-            memMap.erase(oldest);
-    }
+                int gJ = indices[j];
 
-    // cohesionMemory を使用した凝集計算
-    for (const auto &mem : cohesionMemories[buf->ids[gIdx]])
-    {
-        for (size_t j = 0; j < indices.size(); ++j)
-        {
-            int gJ = indices[j];
-            if (buf->ids[gJ] == mem.first)
-            {
-                memCohesion += buf->positions[gJ];
-                memCount++;
-                break;
-            }
-        }
-    }
+                glm::vec3 diff = pos - buf->positions[gJ];
+                float distSq = glm::dot(diff, diff);
 
-    if (count + memCount > 0)
-    {
-        glm::vec3 totalCohesion = cohesion + memCohesion;
-        totalCohesion = (totalCohesion / static_cast<float>(count + memCount)) - pos;
-        if (glm::length2(totalCohesion) > 0.0f)
-            totalCohesion = glm::normalize(totalCohesion) * globalSpeciesParams.cohesion * 1.2f;
-
-        if (count > 0)
-        {
-            separation = glm::normalize(separation) * globalSpeciesParams.separation * 0.8f;
-            alignment = (alignment / static_cast<float>(count) - vel) * globalSpeciesParams.alignment;
-
-            // 回転トルクの適用
-            glm::vec3 fwd = glm::normalize(vel);
-            glm::vec3 tgt = glm::normalize(alignment);
-            float dot = glm::clamp(glm::dot(fwd, tgt), -1.0f, 1.0f);
-            float angle = acosf(dot);
-
-            if (angle > 1e-4f)
-            {
-                glm::vec3 axis = glm::cross(fwd, tgt);
-                float len = glm::length(axis);
-                if (len > 1e-4f)
+                if (distSq < 2500.0f && distSq > 0.0001f)
                 {
-                    axis /= len;
+                    float dist = sqrtf(distSq);
 
-                    float rot = std::min(angle, globalSpeciesParams.torqueStrength * dt);
-                    rot = std::min(rot, globalSpeciesParams.maxTurnAngle);
+                    // 分離
+                    float separationWeight = glm::clamp(1.0f - (dist / 50.0f), 0.0f, 1.0f);
+                    separation += diff * (separationWeight * globalSpeciesParams.separation);
 
-                    glm::vec3 newDir = approxRotate(fwd, axis, rot);
-                    vel = newDir * glm::length(vel);
+                    // 凝集
+                    float cohesionWeight = glm::clamp(dist / 50.0f, 0.0f, 1.0f);
+                    cohesion += buf->positions[gJ] * cohesionWeight;
 
-                    // 加速度にもトルク分を加算
-                    buf->accelerations[gIdx] += axis * angle * globalSpeciesParams.torqueStrength;
+                    // 整列
+                    alignment += buf->velocities[gJ];
+                    count++;
+
+                    // 視界内のBoidを記録
+                    visibleIds.insert(buf->ids[gJ]);
+                }
+            }
+
+            // cohesionMemory の更新を隔フレームで実行
+            auto &memMap = cohesionMemories[buf->ids[gIdx]];
+            for (auto it = memMap.begin(); it != memMap.end();)
+            {
+                if (visibleIds.find(it->first) == visibleIds.end())
+                {
+                    it->second += dt;
+                    if (it->second > globalSpeciesParams.tau)
+                    {
+                        it = memMap.erase(it);
+                        continue;
+                    }
+                }
+                ++it;
+            }
+        }
+
+        // cohesionMemory のサイズを制限 (LRU風)
+        const size_t maxCohesionMemorySize = 10;
+        if (cohesionMemories[buf->ids[gIdx]].size() > maxCohesionMemorySize)
+        {
+            auto &memMap = cohesionMemories[buf->ids[gIdx]];
+            auto oldest = std::min_element(
+                memMap.begin(), memMap.end(),
+                [](const auto &a, const auto &b)
+                { return a.second > b.second; });
+            if (oldest != memMap.end())
+                memMap.erase(oldest);
+        }
+
+        // cohesionMemory を使用した凝集計算
+        for (const auto &mem : cohesionMemories[buf->ids[gIdx]])
+        {
+            for (size_t j = 0; j < indices.size(); ++j)
+            {
+                int gJ = indices[j];
+                if (buf->ids[gJ] == mem.first)
+                {
+                    memCohesion += buf->positions[gJ];
+                    memCount++;
+                    break;
                 }
             }
         }
 
-        buf->accelerations[gIdx] += separation + alignment + totalCohesion;
+        if (count + memCount > 0)
+        {
+            glm::vec3 totalCohesion = cohesion + memCohesion;
+            totalCohesion = (totalCohesion / static_cast<float>(count + memCount)) - pos;
+            if (glm::length2(totalCohesion) > 0.0f)
+                totalCohesion = glm::normalize(totalCohesion) * globalSpeciesParams.cohesion * 1.2f;
+
+            if (count > 0)
+            {
+                separation = glm::normalize(separation) * globalSpeciesParams.separation * 0.8f;
+                alignment = (alignment / static_cast<float>(count) - vel) * globalSpeciesParams.alignment;
+
+                // 回転トルクの適用
+                glm::vec3 fwd = glm::normalize(vel);
+                glm::vec3 tgt = glm::normalize(alignment);
+                float dot = glm::clamp(glm::dot(fwd, tgt), -1.0f, 1.0f);
+                float angle = acosf(dot);
+
+                if (angle > 1e-4f)
+                {
+                    glm::vec3 axis = glm::cross(fwd, tgt);
+                    float len = glm::length(axis);
+                    if (len > 1e-4f)
+                    {
+                        axis /= len;
+
+                        float rot = std::min(angle, globalSpeciesParams.torqueStrength * dt);
+                        rot = std::min(rot, globalSpeciesParams.maxTurnAngle);
+
+                        glm::vec3 newDir = approxRotate(fwd, axis, rot);
+                        vel = newDir * glm::length(vel);
+
+                        // 加速度にもトルク分を加算
+                        buf->accelerations[gIdx] += axis * angle * globalSpeciesParams.torqueStrength;
+                    }
+                }
+            }
+
+            buf->accelerations[gIdx] += separation + alignment + totalCohesion;
+        }
     }
 }
 

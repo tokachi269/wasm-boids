@@ -326,50 +326,51 @@ function animate() {
 
   if (!paused.value) {
     update(1.0);
-    const count = boidCount();
-
-    positions = new Float32Array(wasmModule.HEAPF32.buffer, posPtr(), count * 3);
-    velocities = new Float32Array(wasmModule.HEAPF32.buffer, velPtr(), count * 3);
-
-    const dummy = new THREE.Object3D();
-    const cameraPosition = camera.position;
-
-    for (let i = 0; i < count; i++) {
-      dummy.position.set(
-        positions[i * 3 + 0],
-        positions[i * 3 + 1],
-        positions[i * 3 + 2]
-      );
-
-      const dir = new THREE.Vector3(
-        velocities[i * 3 + 0],
-        velocities[i * 3 + 1],
-        velocities[i * 3 + 2]
-      );
-      if (dir.lengthSq() > 0.0001) {
-        dummy.quaternion.setFromUnitVectors(
-          new THREE.Vector3(0, 0, 1),
-          dir.clone().normalize()
-        );
-      } else {
-        dummy.quaternion.identity();
-      }
-      dummy.updateMatrix();
-
-      // 距離判定
-      const distanceSq = cameraPosition.distanceToSquared(dummy.position);
-      if (distanceSq < 10000) { // 近距離: 高ポリゴン
-        instancedMeshHigh.setMatrixAt(i, dummy.matrix);
-        instancedMeshLow.setMatrixAt(i, new THREE.Matrix4().identity()); // 非表示
-      } else { // 遠距離: 低ポリゴン
-        instancedMeshLow.setMatrixAt(i, dummy.matrix);
-        instancedMeshHigh.setMatrixAt(i, new THREE.Matrix4().identity()); // 非表示
-      }
-    }
-
-    instancedMeshHigh.instanceMatrix.needsUpdate = true;
-    instancedMeshLow.instanceMatrix.needsUpdate = true;
   }
+  const count = boidCount();
+
+  positions = new Float32Array(wasmModule.HEAPF32.buffer, posPtr(), count * 3);
+  velocities = new Float32Array(wasmModule.HEAPF32.buffer, velPtr(), count * 3);
+
+  const dummy = new THREE.Object3D();
+  const cameraPosition = camera.position;
+
+  for (let i = 0; i < count; i++) {
+    dummy.position.set(
+      positions[i * 3 + 0],
+      positions[i * 3 + 1],
+      positions[i * 3 + 2]
+    );
+
+    const dir = new THREE.Vector3(
+      velocities[i * 3 + 0],
+      velocities[i * 3 + 1],
+      velocities[i * 3 + 2]
+    );
+    if (dir.lengthSq() > 0.0001) {
+      dummy.quaternion.setFromUnitVectors(
+        new THREE.Vector3(0, 0, 1),
+        dir.clone().normalize()
+      );
+    } else {
+      dummy.quaternion.identity();
+    }
+    dummy.updateMatrix();
+
+    // 距離判定
+    const distanceSq = cameraPosition.distanceToSquared(dummy.position);
+    if (distanceSq < 10000) { // 近距離: 高ポリゴン
+      instancedMeshHigh.setMatrixAt(i, dummy.matrix);
+      instancedMeshLow.setMatrixAt(i, new THREE.Matrix4().identity()); // 非表示
+    } else { // 遠距離: 低ポリゴン
+      instancedMeshLow.setMatrixAt(i, dummy.matrix);
+      instancedMeshHigh.setMatrixAt(i, new THREE.Matrix4().identity()); // 非表示
+    }
+  }
+
+  instancedMeshHigh.instanceMatrix.needsUpdate = true;
+  instancedMeshLow.instanceMatrix.needsUpdate = true;
+
 
   controls.update();
   // スマホの場合は renderer を使用、それ以外は composer を使用

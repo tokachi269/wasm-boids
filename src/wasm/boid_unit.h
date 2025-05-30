@@ -25,7 +25,7 @@ public:
 
     bool isBoidUnit() const;
     void computeBoundingSphere();
-    void computeBoidInteraction(size_t index, float dt);
+    void computeBoidInteraction(float dt);
     void applyInterUnitInfluence(BoidUnit *other, float dt = 1.0f);
     void updateRecursive(float dt = 1.0f);
     bool needsSplit(float splitRadius = 40.0f, float directionVarThresh = 0.5f, int maxBoids = 64) const;
