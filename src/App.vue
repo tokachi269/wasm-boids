@@ -42,7 +42,7 @@ import Stats from 'three/examples/jsm/libs/stats.module'
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { SSAOPass } from 'three/examples/jsm/postprocessing/SSAOPass.js';
-import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'; // 任意
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'; 
 
 const wasmModule = inject('wasmModule');
 if (!wasmModule) {
@@ -59,19 +59,19 @@ const setFlockSize = wasmModule.cwrap('setFlockSize', 'void', ['number', 'number
 
 const DEFAULT_SETTINGS = {
   flockSize: 3000,
-  cohesion: 4.94,
-  cohesionRange: 128,
-  separation: 6.7,
+  cohesion: 3.5,
+  cohesionRange: 140,
+  separation: 10,
   separationRange: 6,
-  alignment: 5.64,
+  alignment: 5.6,
   alignmentRange: 25,
   maxSpeed: 0.36,
-  maxTurnAngle: 0.065,
+  maxTurnAngle: 0.05,
   maxNeighbors: 4,
-  lambda: 0.15,
-  horizontalTorque: 0.041,
-  velocityEpsilon: 0.005,
-  torqueStrength: 3.438
+  lambda: 0.109,
+  horizontalTorque: 0.026,
+  velocityEpsilon: 0.004,
+  torqueStrength: 3.23
 };
 
 function loadSettings() {
@@ -386,7 +386,7 @@ function animate() {
 
 function startSimulation() {
   initBoids(settings.flockSize, 30, 0.25);
-  build(8, 0);
+  build(16, 0);
   initInstancedBoids(settings.flockSize);
   animate();
 }

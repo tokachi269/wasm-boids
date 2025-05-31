@@ -1,6 +1,7 @@
 #pragma once
 #define GLM_ENABLE_EXPERIMENTAL
 #include <vector>
+#include <bitset>
 #include "vec3.h"
 #include "boid.h"
 #include "species_params.h"
@@ -9,12 +10,16 @@
 #include <glm/gtx/rotate_vector.hpp>
 struct SoABuffers;
 
+const int MAX_BOIDS = 10000; // Define a maximum number of boids
+
 class BoidUnit
 {
 public:
-    SoABuffers *buf = nullptr; // Not owning
-    std::vector<int> indices;  // ← 既存移動元
-    std::unordered_map<int, std::unordered_map<int, float>> cohesionMemories; // 修正
+    SoABuffers *buf = nullptr;
+    std::vector<int> indices;
+    std::vector<float> cohesionMemories; // Replace unordered_map with vector
+    std::vector<int> idToIndex;          // ID-to-index mapping table
+    std::bitset<MAX_BOIDS> visibleIds;   // Replace unordered_set with bitset
 
     std::vector<BoidUnit *> children;
     glm::vec3 center, averageVelocity;
@@ -23,6 +28,7 @@ public:
     glm::vec3 influence; // 追加: 他ユニットからの影響を蓄積
     int frameCount = 0;
 
+    int getMaxID() const;
     bool isBoidUnit() const;
     void computeBoundingSphere();
     void computeBoidInteraction(float dt);
@@ -36,6 +42,11 @@ public:
     void mergeWith(const BoidUnit &other);
     void mergeWith(BoidUnit *other, BoidUnit *parent);
     void addRepulsionToAllBoids(BoidUnit *unit, const glm::vec3 &repulsion);
+
+    void initializeBuffers(int maxBoids) {
+        cohesionMemories.resize(maxBoids, 0.0f);
+        idToIndex.resize(maxBoids, -1); // -1 indicates invalid index
+    }
 };
 
 void printTree(const BoidUnit *node, int depth = 0);

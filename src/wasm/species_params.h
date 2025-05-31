@@ -13,7 +13,7 @@ struct SpeciesParams
     float cohesionRange = 50.0f;
     int maxNeighbors = 7;
     float lambda = 0.05f;
-    float tau = 1.0f;
+    float tau = 0.5f;
     float horizontalTorque = 0.005f;
     float velocityEpsilon = 0.0001f;
     float torqueStrength = 0.1f;

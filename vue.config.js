@@ -38,11 +38,19 @@ module.exports = defineConfig({
                         from: path.resolve(__dirname, 'src/wasm/build/wasm_boids.js'),
                         to: 'static/js/[name].[contenthash:8][ext]',
                     },
+                    {
+                        from: path.resolve(__dirname, 'src/wasm/build/wasm_boids.wasm.map'),
+                        to: 'static/js/wasm_boids.wasm.map',
+                    },
                 ],
             }),
         ],
     },
-
+    chainWebpack: (config) => {
+        config.output
+            .filename('static/js/[name].[contenthash:8].js')
+            .chunkFilename('static/js/[name].[contenthash:8].js');
+    },
     pages: {
         index: {
             entry: 'src/main.js', // ここは変えないで
