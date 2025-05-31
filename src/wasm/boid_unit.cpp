@@ -334,7 +334,6 @@ void BoidUnit::computeBoidInteraction(float dt)
     glm::vec3 separation;
     glm::vec3 alignment;
     glm::vec3 cohesion;
-    glm::vec3 memCohesion;
 
     int count = 0;
     int memCount = 0;
@@ -342,84 +341,83 @@ void BoidUnit::computeBoidInteraction(float dt)
     glm::vec3 pos;
     glm::vec3 vel;
 
-    visibleIds.reset();
-
     for (size_t index = 0; index < indices.size(); ++index)
     {
         separation = glm::vec3(0.00001f);
         alignment = glm::vec3(0.00001f);
         cohesion = glm::vec3(0.00001f);
-        memCohesion = glm::vec3(0.00001f);
 
         count = 0;
-        memCount = 0;
         gIdx = indices[index];
         pos = buf->positions[gIdx];
         vel = buf->velocities[gIdx];
 
-        for (size_t j = 0; j < indices.size(); ++j)
+        // 1. 時間を更新し、無効化フラグを設定
+        // 1. 時間更新＆無効化
+        for (size_t i = 0; i < MAX_BOIDS; ++i)
         {
-            if (j == index)
-                continue;
-
-            int gJ = indices[j];
-
-            glm::vec3 diff = pos - buf->positions[gJ];
-            float distSq = glm::dot(diff, diff);
-
-            if (distSq < 2500.0f && distSq > 0.0001f)
+            if (cohesionMemories[i] > 0.0f)
             {
-                float dist = sqrtf(distSq);
-
-                float weight = 1.0f - (dist / 50.0f);
-                if (weight < 0.0f)
-                    weight = 0.0f;
-                else if (weight > 1.0f)
-                    weight = 1.0f;
-
-                // 分離
-                separation += diff * (weight * globalSpeciesParams.separation);
-
-                // 凝集
-                cohesion += buf->positions[gJ] * weight;
-
-                // 整列
-                alignment += buf->velocities[gJ];
-                count++;
-
-                // 可視化IDの設定
-                visibleIds.set(buf->ids[gJ]);
-            }
-        }
-
-        // cohesionMemory の更新
-        for (size_t i = 0; i < cohesionMemories.size(); ++i)
-        {
-            if (!visibleIds.test(i))
-            {
-                if (visibleIds.find(it->first) == visibleIds.end())
                 cohesionMemories[i] += dt;
                 if (cohesionMemories[i] > globalSpeciesParams.tau)
                 {
-                    cohesionMemories[i] = 0.0f; // Reset memory
+                    cohesionMemories[i] = -1.0f;
+                    activeNeighbors.reset(i);
                 }
             }
         }
 
-        // cohesionMemory を使用した凝集計算
-        for (size_t i = 0; i < cohesionMemories.size(); ++i)
+        // 2. 新規近傍追加（空きスロットがあるとき）
+        if (activeNeighbors.count() < static_cast<size_t>(globalSpeciesParams.maxNeighbors))
         {
-            if (cohesionMemories[i] > 0.0f)
+            for (size_t i = 0; i < indices.size(); ++i)
             {
-                memCohesion += buf->positions[i];
-                memCount++;
+                if (i == index)
+                    continue;
+
+                int gNeighbor = indices[i];
+                glm::vec3 diff = pos - buf->positions[gNeighbor];
+                float distSq = glm::dot(diff, diff);
+
+                if (distSq < globalSpeciesParams.cohesionRange * globalSpeciesParams.cohesionRange)
+                {
+                    if (!activeNeighbors.test(i))
+                    {
+                        cohesionMemories[i] = dt;
+                        activeNeighbors.set(i);
+                    }
+                }
             }
         }
 
-        if (count + memCount > 0)
+        // 3. 影響計算
+        for (size_t i = 0; i < MAX_BOIDS; ++i)
         {
-            glm::vec3 totalCohesion = cohesion + memCohesion;
-            totalCohesion = (totalCohesion / static_cast<float>(count + memCount)) - pos;
+            if (cohesionMemories[i] > 0.0f && activeNeighbors.test(i))
+            {
+                int gNeighbor = indices[i];
+                glm::vec3 diff = pos - buf->positions[gNeighbor];
+                float distSq = glm::dot(diff, diff);
+
+                if (distSq > 0.0001f)
+                {
+                    float dist = sqrtf(distSq);
+                    float weight = 1.0f - (dist / globalSpeciesParams.cohesionRange);
+                    weight = glm::clamp(weight, 0.0f, 1.0f);
+
+                    separation += diff * (weight * globalSpeciesParams.separation);
+                    cohesion += buf->positions[gNeighbor] * weight;
+                    alignment += buf->velocities[gNeighbor];
+                    count++;
+                }
+            }
+        }
+
+        memCount = cohesionMemories.size();
+        // 3. cohesionMemories に基づいて影響を反映
+        if (memCount > 0)
+        {
+            glm::vec3 totalCohesion = cohesion / static_cast<float>(memCount) - pos;
             if (glm::length2(totalCohesion) > 0.0f)
                 totalCohesion = glm::normalize(totalCohesion) * globalSpeciesParams.cohesion * 1.2f;
 
