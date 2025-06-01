@@ -413,7 +413,7 @@ void BoidUnit::computeBoidInteraction(float dt)
         {
             // — 速度ベクトル vel がほぼゼロかどうかチェック
             float velLen2 = glm::length2(vel);
-            
+
             bool hasVel = (velLen2 > EPS);
             glm::vec3 forward;
             if (hasVel)
@@ -468,9 +468,9 @@ void BoidUnit::computeBoidInteraction(float dt)
                     { return a.first < b.first; });
                 for (int k = 0; k < toAdd; ++k)
                 {
-                    int idx = candidates[k].second;
-                    cohesionMemories[idx] = dt;
-                    activeNeighbors.set(idx);
+                    int idx2 = candidates[k].second;
+                    cohesionMemories[idx2] = dt;
+                    activeNeighbors.set(idx2);
                 }
             }
             else
@@ -478,9 +478,9 @@ void BoidUnit::computeBoidInteraction(float dt)
                 // 候補数 <= toAdd の場合は全件登録
                 for (auto &pr : candidates)
                 {
-                    int idx = pr.second;
-                    cohesionMemories[idx] = dt;
-                    activeNeighbors.set(idx);
+                    int idx2 = pr.second;
+                    cohesionMemories[idx2] = dt;
+                    activeNeighbors.set(idx2);
                 }
             }
         }
@@ -515,51 +515,75 @@ void BoidUnit::computeBoidInteraction(float dt)
                     continue; // ほぼ同一位置ならスキップ
 
                 float dist = glm::sqrt(distSq);
-                float weight = 1.0f - (dist / globalSpeciesParams.cohesionRange);
-                weight = glm::clamp(weight, 0.0f, 1.0f);
+                float wSep = 1.0f - (dist / globalSpeciesParams.separationRange);
+                wSep = glm::clamp(wSep, 0.0f, 1.0f);
+                sumSep += (diff * wSep) * (-1.0f);          // 分離
 
-                // 3 つのルールをそれぞれ加算
-                sumSep += (diff * weight) * (-1.0f);          // 分離
-                sumCoh += buf->positions[gNeighbor] * weight; // 凝集
-                sumAlign += buf->velocities[gNeighbor];       // 整列
+                float wCoh = glm::clamp(dist / globalSpeciesParams.cohesionRange, 0.0f, 1.0f);
+                sumCoh += buf->positions[gNeighbor] * wCoh; // 凝集
+
+                sumAlign += buf->velocities[gNeighbor];     // 整列
             }
 
             // --- 分離の最終ベクトル ---
-            glm::vec3 totalSeparation = glm::normalize(sumSep) * globalSpeciesParams.separation;
+            glm::vec3 totalSeparation = glm::vec3(0.0f);
+            float sepLen2 = glm::length2(sumSep);
+            if (sepLen2 > EPS)
+            {
+                totalSeparation = (sumSep * (1.0f / glm::sqrt(sepLen2))) * globalSpeciesParams.separation;
+            }
 
             // --- 凝集の最終ベクトル ---
             glm::vec3 avgCohPos = sumCoh * invN;
-            glm::vec3 totalCohesion = (avgCohPos - pos) * globalSpeciesParams.cohesion;
+            glm::vec3 totalCohesion = glm::vec3(0.0f);
+            glm::vec3 cohDir = avgCohPos - pos;
+            float cohLen2 = glm::length2(cohDir);
+            if (cohLen2 > EPS)
+            {
+                totalCohesion = (cohDir * (1.0f / glm::sqrt(cohLen2))) * globalSpeciesParams.cohesion;
+            }
 
             // --- 整列の最終ベクトル ---
             glm::vec3 avgAlignVel = sumAlign * invN;
-            glm::vec3 totalAlignment = (avgAlignVel - vel) * globalSpeciesParams.alignment;
+            glm::vec3 totalAlignment = glm::vec3(0.0f);
+            glm::vec3 aliDir = avgAlignVel - vel;
+            float aliLen2 = glm::length2(aliDir);
+            if (aliLen2 > EPS)
+            {
+                totalAlignment = (aliDir * (1.0f / glm::sqrt(aliLen2))) * globalSpeciesParams.alignment;
+            }
 
             // --- 回転トルクによる向き補正（alignment方向へ向ける） ---
             float velLen2_2 = glm::length2(vel);
             if (velLen2_2 > EPS)
             {
                 glm::vec3 forward2 = vel * (1.0f / glm::sqrt(velLen2_2));
-                glm::vec3 tgt2 = glm::normalize(totalAlignment);
-                float dot2 = glm::clamp(glm::dot(forward2, tgt2), -1.0f, 1.0f);
-                float ang2 = acosf(dot2);
 
-                if (ang2 > 1e-4f)
+                // “totalAlignment” がゼロベクトルでないかチェック
+                float aliLen2_check = glm::length2(totalAlignment);
+                if (aliLen2_check > EPS)
                 {
-                    glm::vec3 axis2 = glm::cross(forward2, tgt2);
-                    float axisLen2 = glm::length2(axis2);
-                    if (axisLen2 > EPS)
+                    glm::vec3 tgt2 = totalAlignment * (1.0f / glm::sqrt(aliLen2_check));
+                    float dot2 = glm::clamp(glm::dot(forward2, tgt2), -1.0f, 1.0f);
+                    float ang2 = acosf(dot2);
+
+                    if (ang2 > 1e-4f)
                     {
-                        axis2 *= (1.0f / glm::sqrt(axisLen2));
-                        float rot2 = std::min(ang2, globalSpeciesParams.torqueStrength * dt);
-                        rot2 = std::min(rot2, globalSpeciesParams.maxTurnAngle);
-                        glm::vec3 newDir2 = approxRotate(forward2, axis2, rot2);
+                        glm::vec3 axis2 = glm::cross(forward2, tgt2);
+                        float axisLen2 = glm::length2(axis2);
+                        if (axisLen2 > EPS)
+                        {
+                            axis2 *= (1.0f / glm::sqrt(axisLen2));
+                            float rot2 = std::min(ang2, globalSpeciesParams.torqueStrength * dt);
+                            rot2 = std::min(rot2, globalSpeciesParams.maxTurnAngle);
+                            glm::vec3 newDir2 = approxRotate(forward2, axis2, rot2);
 
-                        // 速度ベクトルを回転後の方向に更新
-                        vel = newDir2 * glm::length(vel);
+                            // 速度ベクトルを回転後の方向に更新
+                            vel = newDir2 * glm::length(vel);
 
-                        // 加速度にもトルク分を加算
-                        buf->accelerations[gIdx] += axis2 * ang2 * globalSpeciesParams.torqueStrength;
+                            // 加速度にもトルク分を加算
+                            buf->accelerations[gIdx] += axis2 * ang2 * globalSpeciesParams.torqueStrength;
+                        }
                     }
                 }
             }

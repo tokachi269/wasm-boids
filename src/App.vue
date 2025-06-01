@@ -63,20 +63,20 @@ const setSpeciesParams = wasmModule.cwrap('setSpeciesParams', 'void', [
 ]);
 
 const DEFAULT_SETTINGS = {
-  flockSize: 3000,
-  cohesion: 7.6,
-  cohesionRange: 140,
-  separation: 10,
-  separationRange: 6,
-  alignment: 8.5,
-  alignmentRange: 35,
-  maxSpeed: 0.36,
-  maxTurnAngle: 0.03,
-  maxNeighbors: 4,
-  lambda: 0.109,
-  horizontalTorque: 0.015,
-  velocityEpsilon: 0.004,
-  torqueStrength: 3.6
+  flockSize: 5118,         // 群れの数
+  cohesion: 9.04,          // 凝集
+  cohesionRange: 140,      // 凝集範囲
+  separation: 10,          // 分離
+  separationRange: 6,      // 分離範囲
+  alignment: 8.5,          // 整列
+  alignmentRange: 35,      // 整列範囲
+  maxSpeed: 0.27,          // 最大速度
+  maxTurnAngle: 0.047,     // 最大旋回角
+  maxNeighbors: 4,         // 最大近傍数
+  lambda: 0.109,           // 吸引減衰 λ
+  horizontalTorque: 0.004, // 水平化トルク
+  velocityEpsilon: 0.004,  // 速度閾値 ε
+  torqueStrength: 3.398    // 回転トルク強度
 };
 
 function loadSettings() {
