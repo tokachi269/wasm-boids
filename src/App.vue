@@ -42,7 +42,7 @@ import Stats from 'three/examples/jsm/libs/stats.module'
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { SSAOPass } from 'three/examples/jsm/postprocessing/SSAOPass.js';
-import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'; 
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 
 const wasmModule = inject('wasmModule');
 if (!wasmModule) {
@@ -56,22 +56,27 @@ const initBoids = wasmModule.cwrap('initBoids', 'void', ['number', 'number', 'nu
 const build = wasmModule.cwrap('build', 'void', ['number', 'number'])
 const update = wasmModule.cwrap('update', 'void', ['number'])
 const setFlockSize = wasmModule.cwrap('setFlockSize', 'void', ['number', 'number', 'number'])
+const setSpeciesParams = wasmModule.cwrap('setSpeciesParams', 'void', [
+  'number', 'number', 'number', 'number', 'number', 'number',
+  'number', 'number', 'number', 'number', 'number', 'number',
+  'number', 'number', 'number',
+]);
 
 const DEFAULT_SETTINGS = {
   flockSize: 3000,
-  cohesion: 3.5,
+  cohesion: 7.6,
   cohesionRange: 140,
   separation: 10,
   separationRange: 6,
-  alignment: 5.6,
-  alignmentRange: 25,
+  alignment: 8.5,
+  alignmentRange: 35,
   maxSpeed: 0.36,
-  maxTurnAngle: 0.05,
+  maxTurnAngle: 0.03,
   maxNeighbors: 4,
   lambda: 0.109,
-  horizontalTorque: 0.026,
+  horizontalTorque: 0.015,
   velocityEpsilon: 0.004,
-  torqueStrength: 3.23
+  torqueStrength: 3.6
 };
 
 function loadSettings() {
@@ -385,12 +390,33 @@ function animate() {
 }
 
 function startSimulation() {
-  initBoids(settings.flockSize, 30, 0.25);
+  initBoids(settings.flockSize, 64, 0.25);
   build(16, 0);
   initInstancedBoids(settings.flockSize);
   animate();
 }
-
+// `setSpeciesParams` を呼び出す関数
+function updateSpeciesParams() {
+  if (wasmModule && wasmModule.setSpeciesParams) {
+    const raw = toRaw(settings);
+    setSpeciesParams({
+      cohesion: Number(raw.cohesion ?? -1),
+      separation: Number(raw.separation ?? -1),
+      alignment: Number(raw.alignment ?? -1),
+      maxSpeed: Number(raw.maxSpeed ?? -1),
+      minSpeed: Number(raw.minSpeed ?? -1),
+      maxTurnAngle: Number(raw.maxTurnAngle ?? -1),
+      separationRange: Number(raw.separationRange ?? -1),
+      alignmentRange: Number(raw.alignmentRange ?? -1),
+      cohesionRange: Number(raw.cohesionRange ?? -1),
+      maxNeighbors: Number(raw.maxNeighbors ?? -1),
+      lambda: Number(raw.lambda ?? -1),
+      horizontalTorque: Number(raw.horizontalTorque ?? -1),
+      velocityEpsilon: Number(raw.velocityEpsilon ?? -1),
+      torqueStrength: Number(raw.torqueStrength ?? -1),
+    });
+  }
+}
 onMounted(() => {
   initThreeJS();
 
@@ -422,6 +448,8 @@ onMounted(() => {
       cohesionRange: Number(raw.cohesionRange),
       horizontalTorque: Number(raw.horizontalTorque),
       torqueStrength: Number(raw.torqueStrength),
+      maxNeighbors: Number(raw.maxNeighbors),
+      lambda: Number(raw.lambda),
     });
   }
 
@@ -444,8 +472,8 @@ watch(
     settings.separationRange,
     settings.alignmentRange,
     settings.cohesionRange,
-    settings.maxNeighbors, // 追加
-    settings.lambda,       // 追加
+    settings.maxNeighbors,
+    settings.lambda,
     settings.horizontalTorque,
     settings.velocityEpsilon,
     settings.torqueStrength,
@@ -465,11 +493,10 @@ watch(
         separationRange: Number(raw.separationRange),
         alignmentRange: Number(raw.alignmentRange),
         cohesionRange: Number(raw.cohesionRange),
+        horizontalTorque: Number(raw.horizontalTorque),
+        torqueStrength: Number(raw.torqueStrength),
         maxNeighbors: Number(raw.maxNeighbors),
         lambda: Number(raw.lambda),
-        horizontalTorque: Number(raw.horizontalTorque),
-        velocityEpsilon: Number(raw.velocityEpsilon),
-        torqueStrength: Number(raw.torqueStrength),
       });
     }
   }

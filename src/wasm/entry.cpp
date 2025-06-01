@@ -40,4 +40,8 @@ extern "C"
     {
         BoidTree::instance().setFlockSize(newSize, posRange, velRange);
     }
+    void setSpeciesParams(const SpeciesParams &params)
+    {
+        setGlobalSpeciesParams(params);
+    }
 }

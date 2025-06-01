@@ -18,7 +18,7 @@ struct SoABuffers;
 class BoidUnit
 {
 public:
-    static constexpr int MAX_BOIDS = 32;     // Boid数の上限（local index）
+    static constexpr int MAX_BOIDS = 16;     // Boid数の上限（local index）
 
     SoABuffers *buf = nullptr;
     std::vector<int> indices;
@@ -34,7 +34,7 @@ public:
     int frameCount = 0;
 
     BoidUnit() {
-        cohesionMemories.fill(-1.0f);
+        cohesionMemories.fill(0.0f);
     }
 
     int getMaxID() const;

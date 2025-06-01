@@ -38,12 +38,12 @@
     </div>
     <div class="setting-row">
       <label>最大速度:<br> (Max Speed):</label>
-      <input type="range" v-model.number="settings.maxSpeed" min="0.1" max="2" step="0.01" />
+      <input type="range" v-model.number="settings.maxSpeed" min="0.1" max="1" step="0.01" />
       <span>{{ settings.maxSpeed }}</span>
     </div>
     <div class="setting-row">
       <label>最大旋回角:<br> (Max Turn Angle):</label>
-      <input type="range" v-model.number="settings.maxTurnAngle" min="0.001" max="1" step="0.001" />
+      <input type="range" v-model.number="settings.maxTurnAngle" min="0.001" max="0.2" step="0.001" />
       <span>{{ settings.maxTurnAngle }}</span>
     </div>
     <div class="setting-row">

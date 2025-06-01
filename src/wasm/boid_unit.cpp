@@ -177,7 +177,6 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt)
     }
     else if (!indices.empty() && other->indices.empty())
     {
-
         // this が葉, other が中間
         for (auto *c : other->children)
             applyInterUnitInfluence(c, dt);
@@ -191,7 +190,6 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt)
     }
     else
     {
-
         // 中間ノード同士（代表値近似）
         float d2 = glm::distance2(center, other->center);
         if (d2 < 1600.0f && d2 > 0.01f)
@@ -331,128 +329,243 @@ void BoidUnit::updateRecursive(float dt)
 
 void BoidUnit::computeBoidInteraction(float dt)
 {
+    // ■ 各 Boid に対する一時変数（繰り返し再利用）
     glm::vec3 separation;
     glm::vec3 alignment;
     glm::vec3 cohesion;
 
-    int count = 0;
-    int memCount = 0;
     int gIdx = 0;
     glm::vec3 pos;
     glm::vec3 vel;
 
+    // -----------------------------------------------
+    // 事前計算しておく定数／準備
+    // -----------------------------------------------
+    // ① 視界範囲 (cohesionRange) の二乗
+    const float viewRangeSq = globalSpeciesParams.cohesionRange * globalSpeciesParams.cohesionRange;
+    // ② 視界角度（FOV in degrees）の半分をラジアンに変換 & そのコサイン
+    float halfFovRad = glm::radians(globalSpeciesParams.fieldOfViewDeg * 0.5f);
+    float cosHalfFov = std::cos(halfFovRad);
+
+    // ③ 非ゼロ判定用イプシロン
+    constexpr float EPS = 1e-8f;
+
+    // ④ 候補距離を入れてソート/部分ソートするための領域
+    static std::vector<std::pair<float, int>> candidates;
+    if (candidates.capacity() < indices.size())
+    {
+        candidates.reserve(indices.size());
+    }
+
+    // -----------------------------------------------
+    // 各 Boid（leafノード内）ごとの反復
+    // -----------------------------------------------
     for (size_t index = 0; index < indices.size(); ++index)
     {
+        // -------------------------------------------------------
+        // ❶ 初期化フェーズ
+        //    ・加速度計算用に separation/alignment/cohesion をリセット
+        //    ・対象 Boid のグローバルインデックスと位置・速度を取得
+        // -------------------------------------------------------
         separation = glm::vec3(0.00001f);
         alignment = glm::vec3(0.00001f);
         cohesion = glm::vec3(0.00001f);
 
-        count = 0;
         gIdx = indices[index];
         pos = buf->positions[gIdx];
         vel = buf->velocities[gIdx];
 
-        // 1. 時間を更新し、無効化フラグを設定
-        // 1. 時間更新＆無効化
-        for (size_t i = 0; i < MAX_BOIDS; ++i)
+        // 「距離候補リスト」は毎回クリア
+        candidates.clear();
+
+        // -------------------------------------------------------
+        // ❷ 時間更新＆古くなった記憶の無効化
+        //    ・cohesionMemories[i] > 0 のものは時間を加算
+        //    ・tau を超えたら 0 に戻して、ビットをクリア
+        //    ・activeCount には有効な隣接 Boid 数を数える
+        // -------------------------------------------------------
+        int activeCount = 0;
+        for (size_t i = 0; i < indices.size(); ++i)
         {
             if (cohesionMemories[i] > 0.0f)
             {
                 cohesionMemories[i] += dt;
                 if (cohesionMemories[i] > globalSpeciesParams.tau)
                 {
-                    cohesionMemories[i] = -1.0f;
+                    cohesionMemories[i] = 0.0f;
                     activeNeighbors.reset(i);
+                }
+                else
+                {
+                    activeCount++;
                 }
             }
         }
 
-        // 2. 新規近傍追加（空きスロットがあるとき）
-        if (activeNeighbors.count() < static_cast<size_t>(globalSpeciesParams.maxNeighbors))
+        // -------------------------------------------------------
+        // ❸ 未登録の Boid で「最も近い (距離かつ視界内)」ものを
+        //     上位 toAdd 件分見つける
+        //    ・activeCount < maxNeighbors のときだけ行う
+        //    ・距離判定: distSq < viewRangeSq
+        //    ・視界判定: (速度方向がほぼゼロでなければ) normalized(diff)·normalized(vel) >= cosHalfFov
+        // -------------------------------------------------------
+        if (activeCount < globalSpeciesParams.maxNeighbors)
         {
+            // — 速度ベクトル vel がほぼゼロかどうかチェック
+            float velLen2 = glm::length2(vel);
+            
+            bool hasVel = (velLen2 > EPS);
+            glm::vec3 forward;
+            if (hasVel)
+            {
+                float invVelLen = 1.0f / glm::sqrt(velLen2);
+                forward = vel * invVelLen; // 速度方向の正規化ベクトル
+            }
+
             for (size_t i = 0; i < indices.size(); ++i)
             {
                 if (i == index)
+                    continue; // 自分自身をスキップ
+                if (activeNeighbors.test(i) || cohesionMemories[i] > 0.0f)
+                    continue; // 登録済み or 有効な隣接Boidはスキップ
+
+                int gNeighbor = indices[i];
+                glm::vec3 diff = buf->positions[gNeighbor] - pos;
+                float distSq = glm::dot(diff, diff);
+                if (distSq >= viewRangeSq)
+                    continue; // 視界/距離外ならスキップ
+
+                // — 速度ゼロでなければ視界内かどうかを確認
+                if (hasVel)
+                {
+                    float invDist = 1.0f / glm::sqrt(distSq);
+                    glm::vec3 diffNorm = diff * invDist;
+                    float dotVal = glm::dot(forward, diffNorm);
+                    if (dotVal < cosHalfFov)
+                        continue; // 視界外 → スキップ
+                }
+
+                // 条件をすべてクリアしたので候補リストに追加（距離², ローカル index）
+                candidates.emplace_back(distSq, (int)i);
+            }
+        }
+
+        // -------------------------------------------------------
+        // ❹ 候補リストの中から最も近い toAdd 件を選んで登録
+        //    ・toAdd = maxNeighbors - activeCount
+        //    ・部分ソート (nth_element) して上位 toAdd 件だけ取り出す
+        // -------------------------------------------------------
+        int toAdd = globalSpeciesParams.maxNeighbors - activeNeighbors.count();
+        if (toAdd > 0 && !candidates.empty())
+        {
+            if ((int)candidates.size() > toAdd)
+            {
+                std::nth_element(
+                    candidates.begin(),
+                    candidates.begin() + toAdd,
+                    candidates.end(),
+                    [](auto &a, auto &b)
+                    { return a.first < b.first; });
+                for (int k = 0; k < toAdd; ++k)
+                {
+                    int idx = candidates[k].second;
+                    cohesionMemories[idx] = dt;
+                    activeNeighbors.set(idx);
+                }
+            }
+            else
+            {
+                // 候補数 <= toAdd の場合は全件登録
+                for (auto &pr : candidates)
+                {
+                    int idx = pr.second;
+                    cohesionMemories[idx] = dt;
+                    activeNeighbors.set(idx);
+                }
+            }
+        }
+
+        // -------------------------------------------------------
+        // ❺ 「有効な Boid」だけで最終的な加速度を計算
+        //    ・activeNeighbors.test(i)==true の i についてのみ
+        //    ・分離 (separation)、凝集 (cohesion)、整列 (alignment) の Contribution を合算
+        //    ・最後に回転トルク (alignment を向くための補正) を行い加速度に加える
+        // -------------------------------------------------------
+        int neighborCount = (int)activeNeighbors.count();
+        if (neighborCount > 0)
+        {
+            glm::vec3 sumSep = glm::vec3(0.0f);
+            glm::vec3 sumAlign = glm::vec3(0.0f);
+            glm::vec3 sumCoh = glm::vec3(0.0f);
+            float invN = 1.0f / float(neighborCount);
+
+            // activeNeighbors 内の「立っているビット」を単純ループで探索
+            for (size_t i = 0; i < indices.size(); ++i)
+            {
+                if (!activeNeighbors.test(i))
                     continue;
 
+                if (cohesionMemories[i] <= 0.0f)
+                    continue; // 念のためガード
+
                 int gNeighbor = indices[i];
-                glm::vec3 diff = pos - buf->positions[gNeighbor];
+                glm::vec3 diff = buf->positions[gNeighbor] - pos;
                 float distSq = glm::dot(diff, diff);
+                if (distSq <= 1e-4f)
+                    continue; // ほぼ同一位置ならスキップ
 
-                if (distSq < globalSpeciesParams.cohesionRange * globalSpeciesParams.cohesionRange)
-                {
-                    if (!activeNeighbors.test(i))
-                    {
-                        cohesionMemories[i] = dt;
-                        activeNeighbors.set(i);
-                    }
-                }
+                float dist = glm::sqrt(distSq);
+                float weight = 1.0f - (dist / globalSpeciesParams.cohesionRange);
+                weight = glm::clamp(weight, 0.0f, 1.0f);
+
+                // 3 つのルールをそれぞれ加算
+                sumSep += (diff * weight) * (-1.0f);          // 分離
+                sumCoh += buf->positions[gNeighbor] * weight; // 凝集
+                sumAlign += buf->velocities[gNeighbor];       // 整列
             }
-        }
 
-        // 3. 影響計算
-        for (size_t i = 0; i < MAX_BOIDS; ++i)
-        {
-            if (cohesionMemories[i] > 0.0f && activeNeighbors.test(i))
+            // --- 分離の最終ベクトル ---
+            glm::vec3 totalSeparation = glm::normalize(sumSep) * globalSpeciesParams.separation;
+
+            // --- 凝集の最終ベクトル ---
+            glm::vec3 avgCohPos = sumCoh * invN;
+            glm::vec3 totalCohesion = (avgCohPos - pos) * globalSpeciesParams.cohesion;
+
+            // --- 整列の最終ベクトル ---
+            glm::vec3 avgAlignVel = sumAlign * invN;
+            glm::vec3 totalAlignment = (avgAlignVel - vel) * globalSpeciesParams.alignment;
+
+            // --- 回転トルクによる向き補正（alignment方向へ向ける） ---
+            float velLen2_2 = glm::length2(vel);
+            if (velLen2_2 > EPS)
             {
-                int gNeighbor = indices[i];
-                glm::vec3 diff = pos - buf->positions[gNeighbor];
-                float distSq = glm::dot(diff, diff);
+                glm::vec3 forward2 = vel * (1.0f / glm::sqrt(velLen2_2));
+                glm::vec3 tgt2 = glm::normalize(totalAlignment);
+                float dot2 = glm::clamp(glm::dot(forward2, tgt2), -1.0f, 1.0f);
+                float ang2 = acosf(dot2);
 
-                if (distSq > 0.0001f)
+                if (ang2 > 1e-4f)
                 {
-                    float dist = sqrtf(distSq);
-                    float weight = 1.0f - (dist / globalSpeciesParams.cohesionRange);
-                    weight = glm::clamp(weight, 0.0f, 1.0f);
-
-                    separation += diff * (weight * globalSpeciesParams.separation);
-                    cohesion += buf->positions[gNeighbor] * weight;
-                    alignment += buf->velocities[gNeighbor];
-                    count++;
-                }
-            }
-        }
-
-        memCount = cohesionMemories.size();
-        // 3. cohesionMemories に基づいて影響を反映
-        if (memCount > 0)
-        {
-            glm::vec3 totalCohesion = cohesion / static_cast<float>(memCount) - pos;
-            if (glm::length2(totalCohesion) > 0.0f)
-                totalCohesion = glm::normalize(totalCohesion) * globalSpeciesParams.cohesion * 1.2f;
-
-            if (count > 0)
-            {
-                separation = glm::normalize(separation) * globalSpeciesParams.separation * 0.8f;
-                alignment = (alignment / static_cast<float>(count) - vel) * globalSpeciesParams.alignment;
-
-                // 回転トルクの適用
-                glm::vec3 fwd = glm::normalize(vel);
-                glm::vec3 tgt = glm::normalize(alignment);
-                float dot = glm::clamp(glm::dot(fwd, tgt), -1.0f, 1.0f);
-                float angle = acosf(dot);
-
-                if (angle > 1e-4f)
-                {
-                    glm::vec3 axis = glm::cross(fwd, tgt);
-                    float len = glm::length(axis);
-                    if (len > 1e-4f)
+                    glm::vec3 axis2 = glm::cross(forward2, tgt2);
+                    float axisLen2 = glm::length2(axis2);
+                    if (axisLen2 > EPS)
                     {
-                        axis /= len;
+                        axis2 *= (1.0f / glm::sqrt(axisLen2));
+                        float rot2 = std::min(ang2, globalSpeciesParams.torqueStrength * dt);
+                        rot2 = std::min(rot2, globalSpeciesParams.maxTurnAngle);
+                        glm::vec3 newDir2 = approxRotate(forward2, axis2, rot2);
 
-                        float rot = std::min(angle, globalSpeciesParams.torqueStrength * dt);
-                        rot = std::min(rot, globalSpeciesParams.maxTurnAngle);
-
-                        glm::vec3 newDir = approxRotate(fwd, axis, rot);
-                        vel = newDir * glm::length(vel);
+                        // 速度ベクトルを回転後の方向に更新
+                        vel = newDir2 * glm::length(vel);
 
                         // 加速度にもトルク分を加算
-                        buf->accelerations[gIdx] += axis * angle * globalSpeciesParams.torqueStrength;
+                        buf->accelerations[gIdx] += axis2 * ang2 * globalSpeciesParams.torqueStrength;
                     }
                 }
             }
 
-            buf->accelerations[gIdx] += separation + alignment + totalCohesion;
+            // --- 最終的な加速度をバッファに書き込み ---
+            buf->accelerations[gIdx] += totalSeparation + totalAlignment + totalCohesion;
         }
     }
 }
