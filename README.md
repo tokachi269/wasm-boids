@@ -53,30 +53,31 @@ C++とThree.jsをWebAssembly (WASM) を介して連携し、大規模な魚群�
         
 
 
-## 📂 ディレクトリ構成
+## ディレクトリ構成
 
 ```text
 wasm-boids/
 ├── src/
-│   ├── wasm/                      # C++ ソース一式 (WASM ビルド対象)
+│   ├── wasm/                      # C++ ソース (WASM ビルド対象)
 │   │   ├── boid_unit.*            # BoidUnit の挙動・近傍計算
 │   │   ├── boids_tree.*           # BoidTree (階層的木構造管理)
 │   │   ├── species_params.h       # 群れ行動パラメータ定義
 │   │   ├── entry.*                # extern "C" バインディング用インターフェース
-│   │   └── wasm_bindings.cpp      # Emscripten バインディング定義
+│   │   ├── wasm_bindings.cpp      # Emscripten バインディング定義
+│   │   └── main.cpp               # WASM エントリーポイント
 │   ├── main.js                    # Vue.js アプリのエントリーポイント
 │   ├── App.vue                    # メインレイアウト＆GUIコントロール
 │   └── components/                # Vue コンポーネント
-│       └── BoidsScene.vue         # Three.js + WASM 統合ビュー
+│       └── Settings.vue           # 設定用 GUI コンポーネント
 ├── public/                        # 静的アセット (index.html, favicon, etc.)
-│   └── index.html
 ├── package.json                   # npm スクリプト＆依存パッケージ定義
 ├── vue.config.js                  # Vue CLI 設定 (WASM 読み込み設定)
+├── CMakeLists.txt                 # CMake ビルド設定
 └── README.md                      # （このファイル）
 ```
 
 
-## 🛠 必要環境とセットアップ
+## 必要環境とセットアップ
 
 ### 1\. Emscripten SDK
 
@@ -113,7 +114,7 @@ npm install
 ```
 
 
-## 🚀 開発モードで起動 (リアルタイム連携)
+## 開発モードで起動 (リアルタイム連携)
 
 ```bash
 npm run serve
@@ -133,7 +134,7 @@ npm run serve
     
 
 
-## 📦 本番ビルドとデプロイ
+## 本番ビルドとデプロイ
 
 ### 1\. 本番向けWASM（`-O3`）+ Vueアプリ ビルド
 
@@ -158,7 +159,7 @@ npm run deploy
     
 
 
-## 🎛 主要なパラメータ（SpeciesParams）
+## 主要なパラメータ（SpeciesParams）
 
 | パラメータ名 | 説明 | デフォルト値例 |
 | --- | --- | --- |
@@ -181,7 +182,7 @@ npm run deploy
 > GUIスライダーでこれらを調整すると、WASM 側の `setSpeciesParams` が即座に呼ばれ、次フレームから反映されます。
 
 
-## 🎮 操作方法
+## 操作方法
 
 1.  **画面左側の GUI コントロール**
     
@@ -213,7 +214,7 @@ npm run deploy
         
 
 
-## 🔍 アルゴリズム概要（中～高レベル）
+## アルゴリズム概要（中～高レベル）
 
 1.  **BoidTree (KD-tree に似た構造) の構築**
     
@@ -247,7 +248,7 @@ npm run deploy
         
 
 
-## 🔮 今後の拡張・改良ポイント
+## 今後の拡張・改良ポイント
 
 1.  **回転モデルの改善**
     
@@ -271,7 +272,7 @@ npm run deploy
         
 
 
-## 📄 ライセンス
+## ライセンス
 
 本リポジトリは **MIT License** のもとで公開されています。詳細は `LICENSE` ファイルをご確認ください。
 
