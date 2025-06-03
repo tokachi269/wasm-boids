@@ -56,11 +56,15 @@ const initBoids = wasmModule.cwrap('initBoids', 'void', ['number', 'number', 'nu
 const build = wasmModule.cwrap('build', 'void', ['number', 'number'])
 const update = wasmModule.cwrap('update', 'void', ['number'])
 const setFlockSize = wasmModule.cwrap('setFlockSize', 'void', ['number', 'number', 'number'])
-const setSpeciesParams = wasmModule.cwrap('setSpeciesParams', 'void', [
-  'number', 'number', 'number', 'number', 'number', 'number',
-  'number', 'number', 'number', 'number', 'number', 'number',
-  'number', 'number', 'number',
-]);
+const exportTreeStructure = wasmModule.cwrap('exportTreeStructure', 'object', []);
+// const getUnitCount = wasmModule.cwrap('getUnitCount', 'number', []);
+// const getUnitCentersPtr = wasmModule.cwrap('getUnitCentersPtr', 'number', []);
+// const getUnitParentIndicesPtr = wasmModule.cwrap('getUnitParentIndicesPtr', 'number', []);
+
+function fetchTreeStructure() {
+  const treeData = exportTreeStructure();
+  return treeData;
+}
 
 const DEFAULT_SETTINGS = {
   flockSize: 5118,         // 群れの数
@@ -268,7 +272,6 @@ function clearUnitVisuals() {
 function drawUnitTree(unit, layer = 0) {
   // スフィア: スライダで制御
   if (
-    showUnitSpheres.value &&
     layer >= (maxDepth - unitLayer.value + 1) &&
     (unit.children == null || unit.children.size() === 0 || layer === maxDepth)
   ) {
@@ -376,7 +379,6 @@ function animate() {
   instancedMeshHigh.instanceMatrix.needsUpdate = true;
   instancedMeshLow.instanceMatrix.needsUpdate = true;
 
-
   controls.update();
   // スマホの場合は renderer を使用、それ以外は composer を使用
   if (isMobileDevice()) {
@@ -388,7 +390,31 @@ function animate() {
 
   animationTimer = setTimeout(animate, FRAME_INTERVAL);
 }
+function drawTreeStructure(treeData) {
+  const drawNode = (node, parentPosition = null) => {
+    const position = new THREE.Vector3(
+      node.center[0],
+      node.center[1],
+      node.center[2]
+    );
 
+    if (parentPosition) {
+      const geometry = new THREE.BufferGeometry().setFromPoints([
+        parentPosition,
+        position,
+      ]);
+      const material = new THREE.LineBasicMaterial({ color: 0xffffff });
+      const line = new THREE.Line(geometry, material);
+      scene.add(line);
+    }
+
+    if (node.children) {
+      node.children.forEach((child) => drawNode(child, position));
+    }
+  };
+
+  treeData.forEach((rootNode) => drawNode(rootNode));
+}
 function startSimulation() {
   initBoids(settings.flockSize, 64, 0.25);
   build(16, 0);

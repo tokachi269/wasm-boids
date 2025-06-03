@@ -1,19 +1,12 @@
 #define GLM_ENABLE_EXPERIMENTAL
-#include "boid_unit.h"
-#include "boids_tree.h"
-#include <algorithm>
-#include <queue>
-#include <iostream>
-#include <random>
-#include <unordered_set>
-#include <limits>
-#include <cmath>
 #include <glm/glm.hpp>
 #include <glm/gtx/norm.hpp>
 #include <glm/gtx/rotate_vector.hpp>
 #include <glm/gtx/string_cast.hpp>
 #include <glm/gtc/random.hpp>
-#include <random>
+#include <stack>
+#include "boid_unit.h"
+#include "boids_tree.h"
 
 bool BoidUnit::isBoidUnit() const { return children.empty(); }
 
@@ -141,12 +134,9 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt)
             {
 
                 // 整列・凝集・分離
-                buf->accelerations[idxA] +=
-                    (sumVel / float(cnt) - buf->velocities[idxA]) * globalSpeciesParams.alignment;
-                buf->accelerations[idxA] +=
-                    (sumPos / float(cnt) - buf->positions[idxA]) * (globalSpeciesParams.cohesion * 0.5f);
-                buf->accelerations[idxA] +=
-                    sep * (globalSpeciesParams.separation * 0.5f);
+                buf->accelerations[idxA] += (sumVel / float(cnt) - buf->velocities[idxA]) * globalSpeciesParams.alignment;
+                buf->accelerations[idxA] += (sumPos / float(cnt) - buf->positions[idxA]) * (globalSpeciesParams.cohesion);
+                buf->accelerations[idxA] += sep * (globalSpeciesParams.separation * 0.5f);
 
                 // ── 回転トルク（復活部分） ──
                 glm::vec3 fwd = glm::normalize(buf->velocities[idxA]);
@@ -234,7 +224,7 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt)
 void BoidUnit::updateRecursive(float dt)
 {
     frameCount++;
-    std::stack<BoidUnit *> stack;
+    std::stack<BoidUnit *, std::vector<BoidUnit *>> stack;
     stack.push(this);
 
     // 第一段階: acceleration をすべて計算
@@ -486,12 +476,56 @@ void BoidUnit::computeBoidInteraction(float dt)
         }
 
         // -------------------------------------------------------
-        // ❺ 「有効な Boid」だけで最終的な加速度を計算
-        //    ・activeNeighbors.test(i)==true の i についてのみ
-        //    ・分離 (separation)、凝集 (cohesion)、整列 (alignment) の Contribution を合算
-        //    ・最後に回転トルク (alignment を向くための補正) を行い加速度に加える
+        // ❺   【ここから追加】占有率 φᵢ 判定 & 「吸引 (fast-start)」状態更新
+        //       ・neighborCount = activeNeighbors.count()
+        //       ・φᵢ = neighborCount / maxNeighbors
+        //       ・φᵢ < 1 → 吸引開始 (isAttracting=1, attractTimer=τ)
+        //       ・吸引中は attractTimers[gIdx] を dt 減算し、
+        //         タイマーが 0 かつ φᵢ >= 1 になったら吸引終了 (isAttracting=0)。
         // -------------------------------------------------------
         int neighborCount = (int)activeNeighbors.count();
+        float phi = float(neighborCount) / float(globalSpeciesParams.maxNeighbors);
+
+        // 吸引開始の判定
+        if (phi < 1.0f)
+        {
+            if (buf->isAttracting[gIdx] == 0)
+            {
+                // φᵢ < 1 を初めて検知した瞬間
+                buf->isAttracting[gIdx] = 1;
+                buf->attractTimers[gIdx] = globalSpeciesParams.tau;
+            }
+            // φᵢ < 1 かつすでに吸引中ならタイマーはリセットせず
+        }
+
+        // 吸引中タイマーの更新
+        if (buf->isAttracting[gIdx] == 1)
+        {
+            buf->attractTimers[gIdx] -= dt;
+            if (buf->attractTimers[gIdx] <= 0.0f)
+            {
+                // τ が経過した後、
+                if (phi >= 1.0f)
+                {
+                    // 再び群れ内部に戻った → 吸引終了
+                    buf->isAttracting[gIdx] = 0;
+                    buf->attractTimers[gIdx] = 0.0f;
+                }
+                else
+                {
+                    // まだ群れ端にいる → 吸引継続のためタイマー再リセット
+                    buf->attractTimers[gIdx] = globalSpeciesParams.tau;
+                }
+            }
+        }
+        // --- ❺ ここまで追加終了 ---
+
+        // -------------------------------------------------------
+        // ❻ 「有効な Boid」だけで最終的な加速度を計算
+        //     ・分離 (separation)、凝集 (cohesion)、整列 (alignment) の Contribution を合算
+        //     ・最後に回転トルク (alignment を向くための補正) を行い加速度に加える
+        // -------------------------------------------------------
+
         if (neighborCount > 0)
         {
             glm::vec3 sumSep = glm::vec3(0.0f);
@@ -504,7 +538,6 @@ void BoidUnit::computeBoidInteraction(float dt)
             {
                 if (!activeNeighbors.test(i))
                     continue;
-
                 if (cohesionMemories[i] <= 0.0f)
                     continue; // 念のためガード
 
@@ -517,12 +550,12 @@ void BoidUnit::computeBoidInteraction(float dt)
                 float dist = glm::sqrt(distSq);
                 float wSep = 1.0f - (dist / globalSpeciesParams.separationRange);
                 wSep = glm::clamp(wSep, 0.0f, 1.0f);
-                sumSep += (diff * wSep) * (-1.0f);          // 分離
+                sumSep += (diff * wSep) * (-1.0f); // 分離
 
                 float wCoh = glm::clamp(dist / globalSpeciesParams.cohesionRange, 0.0f, 1.0f);
                 sumCoh += buf->positions[gNeighbor] * wCoh; // 凝集
 
-                sumAlign += buf->velocities[gNeighbor];     // 整列
+                sumAlign += buf->velocities[gNeighbor]; // 整列
             }
 
             // --- 分離の最終ベクトル ---
@@ -591,6 +624,55 @@ void BoidUnit::computeBoidInteraction(float dt)
             // --- 最終的な加速度をバッファに書き込み ---
             buf->accelerations[gIdx] += totalSeparation + totalAlignment + totalCohesion;
         }
+
+        // -------------------------------------------------------
+        // ❼   【ここから追加】Fast-start (吸引項) の計算
+        //       ・φᵢ < 1（isAttracting[gIdx]==1 && attractTimers[gIdx]>0）のときのみ、
+        //         re < dist ≤ cohesionRange の Boid を対象に平均方向をとって
+        //         吸引ベクトルを作成し、加速度 buf->accelerations[gIdx] に加算
+        // -------------------------------------------------------
+        if (buf->isAttracting[gIdx] == 1)
+        {
+            // re < r ≤ cohesionRange のものを収集
+            glm::vec3 sumAttractDir = glm::vec3(0.0f);
+            int aCount = 0;
+
+            float reSq = globalSpeciesParams.separationRange * globalSpeciesParams.separationRange;
+            float raSq = globalSpeciesParams.cohesionRange * globalSpeciesParams.cohesionRange;
+
+            for (size_t i = 0; i < indices.size(); ++i)
+            {
+                if ((int)i == (int)index)
+                    continue;
+                int gNeighbor = indices[i];
+                glm::vec3 diff = buf->positions[gNeighbor] - pos;
+                float distSq = glm::dot(diff, diff);
+
+                if (distSq > reSq && distSq <= raSq)
+                {
+                    float dist = glm::sqrt(distSq);
+                    if (dist > EPS)
+                    {
+                        // 吸引方向は (neighborPos - pos)
+                        sumAttractDir += (diff / dist);
+                        aCount++;
+                    }
+                }
+            }
+
+            if (aCount > 0)
+            {
+                sumAttractDir *= (1.0f / float(aCount)); // 平均方向ベクトル
+                // 吸引項: λ * ( va * dir - v_i )
+                glm::vec3 attractVel = sumAttractDir * globalSpeciesParams.maxSpeed;
+                glm::vec3 attractAccel = (attractVel - vel) * globalSpeciesParams.lambda;
+                buf->accelerations[gIdx] += attractAccel;
+            }
+        }
+        // --- ❼ ここまで追加終了 ---
+
+        // 最後に「計算中に更新した vel」を buf->velocities[gIdx] に戻す
+        buf->velocities[gIdx] = vel;
     }
 }
 

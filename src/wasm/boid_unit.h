@@ -9,7 +9,6 @@
 #include <glm/gtx/norm.hpp>
 #include <glm/gtx/rotate_vector.hpp>
 
-#include "vec3.h"
 #include "boid.h"
 #include "species_params.h"
 
@@ -23,7 +22,7 @@ public:
     SoABuffers *buf = nullptr;
     std::vector<int> indices;
 
-    std::array<float, MAX_BOIDS> cohesionMemories{};  // dt累積（-1.0fで未使用）
+    std::vector<float> cohesionMemories{};  // dt累積（-1.0fで未使用）
     std::bitset<MAX_BOIDS> activeNeighbors{};         // 使用中slotのインデックス
 
     std::vector<BoidUnit *> children;
@@ -34,7 +33,8 @@ public:
     int frameCount = 0;
 
     BoidUnit() {
-        cohesionMemories.fill(0.0f);
+        cohesionMemories.resize(MAX_BOIDS, 0.0f);
+        activeNeighbors.reset();
     }
 
     int getMaxID() const;

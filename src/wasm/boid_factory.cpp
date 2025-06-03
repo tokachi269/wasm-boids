@@ -1,4 +1,7 @@
+#define NOMINMAX
+#include <random>
 #include "boid_factory.h"
+#include "boid.h"
 
 std::vector<Boid> BoidFactory::generateRandomBoids(int count, float posRange, float velRange) {
     std::vector<Boid> boids;

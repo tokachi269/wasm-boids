@@ -1,11 +1,8 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #include "boids_tree.h"
-#include "boid_factory.h"
-#include "vec3.h"
 #include <vector>
-#include <cmath>
-#include <queue>
 #include <algorithm>
+#include <numeric>
 #include <unordered_map>
 #include <random>
 #include <iostream>

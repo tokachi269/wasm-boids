@@ -89,3 +89,8 @@ Thumbs.db
 *.exe
 *.out
 *.app
+
+# cmake
+build/
+.clangd
+compile_commands.json

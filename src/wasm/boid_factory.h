@@ -1,8 +1,9 @@
 #pragma once
 #include <vector>
-#include "boid.h"
 #include <glm/glm.hpp>
 #include <random>
+
+#include "boid.h"
 
 class BoidFactory {
 public:
