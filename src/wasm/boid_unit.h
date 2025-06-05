@@ -34,7 +34,6 @@ public:
 
     BoidUnit() {
         cohesionMemories.resize(MAX_BOIDS, 0.0f);
-        activeNeighbors.reset();
     }
 
     int getMaxID() const;

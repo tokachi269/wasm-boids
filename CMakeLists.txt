@@ -26,8 +26,6 @@ set(SOURCES
 # インクルードディレクトリを指定
 include_directories(
     D:/GitHub/vcpkg/installed/x64-windows/include
-    D:/GitHub/emsdk/upstream/emscripten/system/include
-    D:/GitHub/emsdk/upstream/emscripten/cache/sysroot/include
 )
 
 # emcc用のリンクオプションを設定
