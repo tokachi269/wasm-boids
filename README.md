@@ -1,3 +1,8 @@
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/tokachi269/wasm-boids)
+
+[Demo](https://tokachi269.github.io/wasm-boids/)
+
+
 # wasm-boids 🐟️  
 
 本プロジェクトは、**階層的Boidアルゴリズム（Hierarchical Boid Algorithm）**と、**魚群の回転運動に関する生物学的モデル**を組み合わせたリアルタイムシミュレーションです。  
