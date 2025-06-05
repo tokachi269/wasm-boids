@@ -4,9 +4,9 @@
     "description": "Boids simulation using WebAssembly and Vue.js",
     "main": "index.js",
     "scripts": {
-        "build-wasm:dev": "cmake -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=D:/GitHub/emsdk/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake -DCMAKE_BUILD_TYPE=Debug --trace && cmake --build build -- -v",
-        "build-wasm:prod": "cmake -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=D:/GitHub/emsdk/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake -DCMAKE_BUILD_TYPE=Release && cmake --build build -- -k 0",
-        "serve": "concurrently \"nodemon --watch src/wasm --ext cpp,h --exec \\\"npm run build-wasm:dev\\\"\" \"wait-on build/wasm_boids.js && vue-cli-service serve\"",
+        "build-wasm:dev": "emcmake cmake -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build",
+        "build-wasm:prod": "emcmake cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build",
+        "serve": "concurrently \"nodemon --watch src/wasm --ext cpp,h --exec \\\"npm run build-wasm:dev\\\"\" \"wait-on src/wasm/build/wasm_boids.js && vue-cli-service serve\"",
         "build": "npm run build-wasm:dev && vue-cli-service build",
         "deploy": "npm run build && gh-pages -d dist",
         "watch-wasm": "nodemon --watch src/wasm --ext cpp,h --exec \"emcc -fsyntax-only src/wasm/main.cpp\""
@@ -16,7 +16,7 @@
         "vue": "^3.3.0"
     },
     "devDependencies": {
-        "@vue/cli-service": "^5.0.0",
+        "@vue/cli-service": "^4.0.0",
         "copy-webpack-plugin": "^13.0.0",
         "gh-pages": "^6.3.0",
         "nodemon": "^3.1.10",

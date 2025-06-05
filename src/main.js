@@ -4,13 +4,14 @@ import * as BoidsModule from './wasm/build/wasm_boids.js';
 import wasmUrl from './wasm/build/wasm_boids.wasm';
 
 let wasmModule = null;
+console.log("wasmUrl:", wasmUrl); // ここで URL を確認
 
 BoidsModule.default({
     locateFile: (path) => {
         if (path.endsWith('.wasm')) {
             return wasmUrl; // ハッシュ付きの正しいURLを返す
         }
-        return `/static/js/${path}`;
+        return path;
     },
 }).then(Module => {
     wasmModule = Module;
