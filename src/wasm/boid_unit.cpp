@@ -1,12 +1,74 @@
 #include "boid_unit.h"
 #include "boids_tree.h"
+#include <algorithm>
+#include <condition_variable>
+#include <functional>
 #include <glm/glm.hpp>
 #include <glm/gtc/random.hpp>
 #include <glm/gtx/norm.hpp>
 #include <glm/gtx/rotate_vector.hpp>
 #include <glm/gtx/string_cast.hpp>
+#include <iostream>
+#include <mutex>
 #include <stack>
-#include <algorithm>
+#include <thread>
+#include <vector>
+
+class ThreadPool {
+public:
+  ThreadPool(size_t numThreads) {
+    for (size_t i = 0; i < numThreads; ++i) {
+      workers.emplace_back([this]() {
+        while (true) {
+          std::function<void()> task;
+          {
+            std::unique_lock<std::mutex> lock(queueMutex);
+            condition.wait(lock, [this]() { return !tasks.empty() || stop; });
+            if (stop && tasks.empty())
+              return;
+            task = std::move(tasks.front());
+            tasks.pop();
+          }
+          task();
+        }
+      });
+    }
+  }
+
+  ~ThreadPool() {
+    {
+      std::unique_lock<std::mutex> lock(queueMutex);
+      stop = true;
+    }
+    condition.notify_all();
+    for (std::thread &worker : workers) {
+      worker.join();
+    }
+  }
+
+  void enqueue(std::function<void()> task) {
+    {
+      std::unique_lock<std::mutex> lock(queueMutex);
+      tasks.push([task]() {
+        try {
+          task();
+        } catch (const std::exception &e) {
+          std::cerr << "Exception in thread: " << e.what() << std::endl;
+        } catch (...) {
+          std::cerr << "Unknown exception in thread" << std::endl;
+        }
+      });
+    }
+    condition.notify_one();
+  }
+
+private:
+  std::vector<std::thread> workers;
+  std::queue<std::function<void()>> tasks;
+  std::mutex queueMutex;
+  std::condition_variable condition;
+  bool stop = false;
+};
 
 bool BoidUnit::isBoidUnit() const { return children.empty(); }
 
@@ -95,9 +157,11 @@ void BoidUnit::computeBoundingSphere() {
  */
 void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
   if (!indices.empty() && !other->indices.empty()) {
-
-    // 葉ノード同士
     for (int idxA : indices) {
+      if (idxA < 0 || idxA >= buf->positions.size()) {
+        std::cerr << "Index out of bounds: idxA = " << idxA << std::endl;
+        continue;
+      }
 
       glm::vec3 sumVel = glm::vec3(0.0f);
       glm::vec3 sumPos = glm::vec3(0.0f);
@@ -105,6 +169,11 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
       int cnt = 0;
 
       for (int idxB : other->indices) {
+        if (idxB < 0 || idxB >= other->buf->positions.size()) {
+          std::cerr << "Index out of bounds: idxB = " << idxB << std::endl;
+          continue;
+        }
+
         glm::vec3 diff = buf->positions[idxA] - other->buf->positions[idxB];
         float d2 = glm::dot(diff, diff);
 
@@ -120,8 +189,6 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
       }
 
       if (cnt > 0) {
-
-        // 整列・凝集・分離
         buf->accelerations[idxA] +=
             (sumVel / float(cnt) - buf->velocities[idxA]) *
             globalSpeciesParams.alignment;
@@ -130,65 +197,11 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
             (globalSpeciesParams.cohesion);
         buf->accelerations[idxA] +=
             sep * (globalSpeciesParams.separation * 0.5f);
-
-        // ── 回転トルク（復活部分） ──
-        glm::vec3 fwd = glm::normalize(buf->velocities[idxA]);
-        glm::vec3 tgt = glm::normalize(sumVel / float(cnt));
-        float dot = glm::clamp(glm::dot(fwd, tgt), -1.0f, 1.0f);
-        float ang = acosf(dot);
-
-        if (ang > 1e-4f) {
-          glm::vec3 axis = glm::cross(fwd, tgt);
-          float len = glm::length(axis);
-          if (len > 1e-4f) {
-            axis /= len;
-
-            float rot = std::min(ang, globalSpeciesParams.torqueStrength * dt);
-            rot = std::min(rot, globalSpeciesParams.maxTurnAngle);
-
-            glm::vec3 newDir = approxRotate(fwd, axis, rot);
-            buf->velocities[idxA] = newDir * glm::length(buf->velocities[idxA]);
-
-            // 加速度にもトルク分を加算（任意:
-            // 回転のノイズを弱めたい場合は外して良い）
-            buf->accelerations[idxA] +=
-                axis * ang * globalSpeciesParams.torqueStrength;
-          }
-        }
       }
-    }
-  } else if (!indices.empty() && other->indices.empty()) {
-    // this が葉, other が中間
-    for (auto *c : other->children)
-      applyInterUnitInfluence(c, dt);
-  } else if (indices.empty() && !other->indices.empty()) {
-
-    // this が中間, other が葉
-    for (auto *c : children)
-      c->applyInterUnitInfluence(other, dt);
-  } else {
-    // 中間ノード同士（代表値近似）
-    float d2 = glm::distance2(center, other->center);
-    if (d2 < 1600.0f && d2 > 0.01f) {
-
-      float d = glm::sqrt(d2);
-      float scale = 1.0f / (d2 + 1.0f);
-
-      glm::vec3 diff = center - other->center;
-      glm::vec3 separ = diff / d2 * globalSpeciesParams.separation;
-      glm::vec3 align = (other->averageVelocity - averageVelocity) *
-                        globalSpeciesParams.alignment;
-      glm::vec3 cohes = (other->center - center) * globalSpeciesParams.cohesion;
-
-      glm::vec3 combined = (align + cohes + separ) * scale;
-      for (int idx : indices)
-        buf->accelerations[idx] += combined;
-
-      for (int idx : other->indices)
-        other->buf->accelerations[idx] -= combined;
     }
   }
 }
+ThreadPool pool(std::thread::hardware_concurrency());
 
 /**
  * 再帰的にユニット内の Boid の動きを更新する。
@@ -219,7 +232,13 @@ void BoidUnit::updateRecursive(float dt) {
     stack.pop();
 
     if (current->isBoidUnit()) {
-      current->computeBoidInteraction(dt);
+      try {
+        pool.enqueue([current, dt]() { current->computeBoidInteraction(dt); });
+      } catch (const std::exception &e) {
+        std::cerr << "Exception in thread: " << e.what() << std::endl;
+      } catch (...) {
+        std::cerr << "Unknown exception in thread" << std::endl;
+      }
     } else {
       for (auto &child : current->children)
         stack.push(child);
@@ -317,7 +336,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
   constexpr float EPS = 1e-8f;
 
   // ④ 候補距離を入れてソート/部分ソートするための領域
-  static std::vector<std::pair<float, int>> candidates;
+  std::vector<std::pair<float, int>> candidates;
   if (candidates.capacity() < indices.size()) {
     candidates.reserve(indices.size());
   }

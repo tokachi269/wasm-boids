@@ -21,4 +21,6 @@ BoidsModule.default({
     const app = createApp(App);
     app.provide('wasmModule', Module);
     app.mount('#app');
+}).catch((error) => {
+    console.error("WebAssembly module error:", error);
 });
