@@ -12,12 +12,6 @@
 
 bool BoidUnit::isBoidUnit() const { return children.empty(); }
 
-inline glm::vec3 approxRotate(const glm::vec3 &v, const glm::vec3 &axis,
-                              float angle) {
-  // 小角度近似: sinθ ≈ θ, cosθ ≈ 1
-  return v + angle * glm::cross(axis, v);
-}
-
 /**
  * ユニット内の Boid または子ノードを基にバウンディングスフィアを計算する。
  *
@@ -96,6 +90,10 @@ void BoidUnit::computeBoundingSphere() {
  * - 階層構造内で異なるユニット間の影響を計算する際に使用。
  */
 void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
+  if (frameCount % 6 != 0) {
+    // 再構築頻度でない場合は何もしない
+    return;
+  }
   if (!indices.empty() && !other->indices.empty()) {
     for (int idxA : indices) {
 
@@ -133,7 +131,7 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
     }
   }
 }
-
+#include "pool_accessor.h"
 /**
  * 再帰的にユニット内の Boid の動きを更新する。
  *
@@ -156,7 +154,9 @@ void BoidUnit::updateRecursive(float dt) {
   frameCount++;
   std::stack<BoidUnit *, std::vector<BoidUnit *>> stack;
   stack.push(this);
-  std::vector<std::future<void>> asyncTasks;
+  static std::vector<std::future<void>> asyncTasks;
+  asyncTasks.reserve(64);       // 任意。再確保を抑える
+  auto &pool = getThreadPool(); // シングルトン取得
 
   // 第一段階: acceleration をすべて計算
   while (!stack.empty()) {
@@ -164,20 +164,27 @@ void BoidUnit::updateRecursive(float dt) {
     stack.pop();
 
     if (current->isBoidUnit()) {
-      // 非同期タスクとして処理を追加
-        current->computeBoidInteraction(dt);
+      // Leaf は並列実行
+      asyncTasks.emplace_back(
+          pool.enqueue([current, dt] { current->computeBoidInteraction(dt); }));
     } else {
-      for (auto &child : current->children)
+      // 中間ノードは逐次
+      for (auto *child : current->children)
         stack.push(child);
 
-      // 子ノード同士の影響
       for (size_t a = 0; a < current->children.size(); ++a)
         for (size_t b = a + 1; b < current->children.size(); ++b)
-          current->children[a]->applyInterUnitInfluence(current->children[b]);
-
+          asyncTasks.emplace_back(pool.enqueue([current, a, b] {
+            current->children[a]->applyInterUnitInfluence(current->children[b]);
+          }));
       current->computeBoundingSphere();
     }
   }
+
+  // ── ② ここで同期してから 2 段階目へ ─────────────────
+  for (auto &f : asyncTasks)
+    f.get();
+  asyncTasks.clear();
 
   // 第二段階: acceleration 適用 → velocity / position 更新
   stack.push(this);
@@ -206,7 +213,7 @@ void BoidUnit::updateRecursive(float dt) {
           if (axisLength2 > 1e-8f) {
             axis /= glm::sqrt(axisLength2); // 正規化
             float rot = glm::min(angle, globalSpeciesParams.maxTurnAngle * dt);
-            newDir = approxRotate(oldDir, axis, rot);
+            newDir = glm::rotate(oldDir, rot, axis);
           }
         }
 
@@ -221,7 +228,7 @@ void BoidUnit::updateRecursive(float dt) {
             axis /= glm::sqrt(axisLength2); // 正規化
             float rot =
                 glm::min(flatAngle, globalSpeciesParams.horizontalTorque * dt);
-            newDir = approxRotate(newDir, axis, rot);
+            newDir = glm::rotate(newDir, rot, axis);
           }
         }
 
@@ -522,7 +529,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
               float rot2 =
                   std::min(ang2, globalSpeciesParams.torqueStrength * dt);
               rot2 = std::min(rot2, globalSpeciesParams.maxTurnAngle);
-              glm::vec3 newDir2 = approxRotate(forward2, axis2, rot2);
+              glm::vec3 newDir2 = glm::rotate(forward2, rot2, axis2);
 
               // 速度ベクトルを回転後の方向に更新
               vel = newDir2 * glm::length(vel);

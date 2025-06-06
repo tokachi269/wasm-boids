@@ -35,21 +35,18 @@ set(EMCC_LINK_FLAGS
     "-pthread" # スレッドを有効化
     "-sUSE_PTHREADS=1" # POSIXスレッドを有効化
     "-sPROXY_TO_PTHREAD=1" # main関数をスレッドに移動
-    "-sPTHREAD_POOL_SIZE=4" # CPUコア数に基づくスレッドプールサイズ
+    "-sPTHREAD_POOL_SIZE=navigator.hardwareConcurrency" # CPUコア数に基づくスレッドプールサイズ
     "-msimd128" # SIMDを有効化（必要に応じて）
     "-matomics" # Atomicsを有効化
     "-mbulk-memory" # Bulk Memoryを有効化
     "-sINCOMING_MODULE_JS_API=['locateFile']"
     "-sDISABLE_EXCEPTION_CATCHING=0"
-    "-sINITIAL_MEMORY=67108864" # 初期メモリサイズ（16MB）
+    "-sINITIAL_MEMORY=16777216" # 初期メモリサイズ（16MB）
     "-sMAXIMUM_MEMORY=2147483648"   # 最大メモリサイズ（2GB）
     "-sALLOW_MEMORY_GROWTH=1"   # メモリの動的拡張を許可
     "-sSTACK_SIZE=2097152" # スタックサイズを1MBに設定
     "-sEXCEPTION_CATCHING_ALLOWED=['*']"
     "-sASSERTIONS=1"
-    "-sSTACK_OVERFLOW_CHECK=2"
-    "-sEXIT_RUNTIME=0"
-    "-sPROXY_TO_PTHREAD=1"
 )
 
 # ソースファイルを指定
