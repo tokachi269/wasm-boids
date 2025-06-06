@@ -1,6 +1,5 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #include "boids_tree.h"
-#include "boid.h"
 #include "species_params.h"
 #include <algorithm>
 #include <glm/glm.hpp>
@@ -10,9 +9,7 @@
 #include <iostream>
 #include <numeric>
 #include <random>
-#include <unordered_map>
 #include <vector>
-
 
 // グローバル共通
 SpeciesParams globalSpeciesParams;

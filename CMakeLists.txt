@@ -29,13 +29,13 @@ set(EMCC_LINK_FLAGS
     "-sEXPORT_NAME=createBoidsModule"
     "-sENVIRONMENT=web,worker"
     "-sALLOW_MEMORY_GROWTH=1"
-    "-sEXPORTED_FUNCTIONS=['_main','__emscripten_thread_crashed','_setSpeciesParams','_setFlockSize','_update','_build','_initBoids','_posPtr','_velPtr','_boidCount','_malloc','_free']"
+    "-sEXPORTED_FUNCTIONS=['_main','_setSpeciesParams','_setFlockSize','_update','_build','_initBoids','_posPtr','_velPtr','_boidCount','_malloc','_free']"
     "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAPF32']"
     "--bind"
     "-pthread" # スレッドを有効化
     "-sUSE_PTHREADS=1" # POSIXスレッドを有効化
     "-sPROXY_TO_PTHREAD=1" # main関数をスレッドに移動
-    "-sPTHREAD_POOL_SIZE=1" # CPUコア数に基づくスレッドプールサイズ navigator.hardwareConcurrency
+    "-sPTHREAD_POOL_SIZE=4" # CPUコア数に基づくスレッドプールサイズ
     "-msimd128" # SIMDを有効化（必要に応じて）
     "-matomics" # Atomicsを有効化
     "-mbulk-memory" # Bulk Memoryを有効化
@@ -49,6 +49,7 @@ set(EMCC_LINK_FLAGS
     "-sASSERTIONS=1"
     "-sSTACK_OVERFLOW_CHECK=2"
     "-sEXIT_RUNTIME=0"
+    "-sPROXY_TO_PTHREAD=1"
 )
 
 # ソースファイルを指定

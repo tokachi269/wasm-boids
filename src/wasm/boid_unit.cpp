@@ -1,74 +1,14 @@
 #include "boid_unit.h"
 #include "boids_tree.h"
 #include <algorithm>
-#include <condition_variable>
-#include <functional>
+#include <future>
 #include <glm/glm.hpp>
 #include <glm/gtc/random.hpp>
 #include <glm/gtx/norm.hpp>
 #include <glm/gtx/rotate_vector.hpp>
 #include <glm/gtx/string_cast.hpp>
-#include <iostream>
-#include <mutex>
 #include <stack>
-#include <thread>
 #include <vector>
-
-class ThreadPool {
-public:
-  ThreadPool(size_t numThreads) {
-    for (size_t i = 0; i < numThreads; ++i) {
-      workers.emplace_back([this]() {
-        while (true) {
-          std::function<void()> task;
-          {
-            std::unique_lock<std::mutex> lock(queueMutex);
-            condition.wait(lock, [this]() { return !tasks.empty() || stop; });
-            if (stop && tasks.empty())
-              return;
-            task = std::move(tasks.front());
-            tasks.pop();
-          }
-          task();
-        }
-      });
-    }
-  }
-
-  ~ThreadPool() {
-    {
-      std::unique_lock<std::mutex> lock(queueMutex);
-      stop = true;
-    }
-    condition.notify_all();
-    for (std::thread &worker : workers) {
-      worker.join();
-    }
-  }
-
-  void enqueue(std::function<void()> task) {
-    {
-      std::unique_lock<std::mutex> lock(queueMutex);
-      tasks.push([task]() {
-        try {
-          task();
-        } catch (const std::exception &e) {
-          std::cerr << "Exception in thread: " << e.what() << std::endl;
-        } catch (...) {
-          std::cerr << "Unknown exception in thread" << std::endl;
-        }
-      });
-    }
-    condition.notify_one();
-  }
-
-private:
-  std::vector<std::thread> workers;
-  std::queue<std::function<void()>> tasks;
-  std::mutex queueMutex;
-  std::condition_variable condition;
-  bool stop = false;
-};
 
 bool BoidUnit::isBoidUnit() const { return children.empty(); }
 
@@ -158,10 +98,6 @@ void BoidUnit::computeBoundingSphere() {
 void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
   if (!indices.empty() && !other->indices.empty()) {
     for (int idxA : indices) {
-      if (idxA < 0 || idxA >= buf->positions.size()) {
-        std::cerr << "Index out of bounds: idxA = " << idxA << std::endl;
-        continue;
-      }
 
       glm::vec3 sumVel = glm::vec3(0.0f);
       glm::vec3 sumPos = glm::vec3(0.0f);
@@ -169,10 +105,6 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
       int cnt = 0;
 
       for (int idxB : other->indices) {
-        if (idxB < 0 || idxB >= other->buf->positions.size()) {
-          std::cerr << "Index out of bounds: idxB = " << idxB << std::endl;
-          continue;
-        }
 
         glm::vec3 diff = buf->positions[idxA] - other->buf->positions[idxB];
         float d2 = glm::dot(diff, diff);
@@ -201,7 +133,6 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
     }
   }
 }
-ThreadPool pool(std::thread::hardware_concurrency());
 
 /**
  * 再帰的にユニット内の Boid の動きを更新する。
@@ -225,6 +156,7 @@ void BoidUnit::updateRecursive(float dt) {
   frameCount++;
   std::stack<BoidUnit *, std::vector<BoidUnit *>> stack;
   stack.push(this);
+  std::vector<std::future<void>> asyncTasks;
 
   // 第一段階: acceleration をすべて計算
   while (!stack.empty()) {
@@ -232,13 +164,8 @@ void BoidUnit::updateRecursive(float dt) {
     stack.pop();
 
     if (current->isBoidUnit()) {
-      try {
-        pool.enqueue([current, dt]() { current->computeBoidInteraction(dt); });
-      } catch (const std::exception &e) {
-        std::cerr << "Exception in thread: " << e.what() << std::endl;
-      } catch (...) {
-        std::cerr << "Unknown exception in thread" << std::endl;
-      }
+      // 非同期タスクとして処理を追加
+        current->computeBoidInteraction(dt);
     } else {
       for (auto &child : current->children)
         stack.push(child);
