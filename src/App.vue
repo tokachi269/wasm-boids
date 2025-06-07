@@ -43,6 +43,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { SSAOPass } from 'three/examples/jsm/postprocessing/SSAOPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
 
 const wasmModule = inject('wasmModule');
 if (!wasmModule) {
@@ -141,7 +142,7 @@ function initThreeJS() {
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x0a1e3a);
-  scene.fog = new THREE.Fog(0x0a1e3a, 10, 500);
+  scene.fog = new THREE.Fog(0x0a1e3a, 0, 200);
 
   camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
   camera.position.set(20, 40, 40);
@@ -236,8 +237,20 @@ const boidGeometryLow = new THREE.SphereGeometry(1, 3, 2);
 const boidMaterial = new THREE.MeshStandardMaterial({ color: 0x1fb5ff });
 boidGeometryHigh.scale(0.5, 0.5, 2.0); // 少し小さくする
 boidGeometryLow.scale(0.5, 0.5, 2.0); // 少し小さくする
+let boidModel = null; // 読み込んだモデルを保持
+let boidModelLod = null; // 読み込んだモデルを保持
 
 function initInstancedBoids(count) {
+  if (!boidModel) {
+    console.error('Boid model not loaded yet.');
+    return;
+  }
+
+  if (!boidModel.children || !boidModel.children[0]) {
+    console.error('Boid model does not have valid children.');
+    return;
+  }
+
   if (instancedMeshHigh) {
     scene.remove(instancedMeshHigh);
   }
@@ -245,20 +258,57 @@ function initInstancedBoids(count) {
     scene.remove(instancedMeshLow);
   }
 
-  const material = boidMaterial;
+  const dummy = new THREE.Object3D();
 
   // 高ポリゴンメッシュ
-  instancedMeshHigh = new THREE.InstancedMesh(boidGeometryHigh, material, count);
+  instancedMeshHigh = new THREE.InstancedMesh(
+    boidModel.children[0].geometry,
+    boidModel.children[0].material,
+    count
+  );
   instancedMeshHigh.castShadow = true;
   instancedMeshHigh.receiveShadow = true;
 
   // 低ポリゴンメッシュ
-  instancedMeshLow = new THREE.InstancedMesh(boidGeometryLow, material, count);
+  instancedMeshLow = new THREE.InstancedMesh(
+    boidModelLod.children[0].geometry,
+    boidModelLod.children[0].material,
+    count
+  );
   instancedMeshLow.castShadow = true;
   instancedMeshLow.receiveShadow = true;
 
   scene.add(instancedMeshHigh);
   scene.add(instancedMeshLow);
+}
+
+function loadBoidModel(callback) {
+  const loader = new GLTFLoader();
+  loader.load(
+    '/models/boidModel.glb', // モデルのパス
+    (gltf) => {
+      boidModel = gltf.scene;
+      callback();
+    },
+    undefined,
+    (error) => {
+      console.error('An error occurred while loading the model:', error);
+    }
+
+    
+  );
+    loader.load(
+    '/models/boidModel_lod.glb', // モデルのパス
+    (gltf) => {
+      boidModelLod = gltf.scene;
+      callback();
+    },
+    undefined,
+    (error) => {
+      console.error('An error occurred while loading the model:', error);
+    }
+
+  );
 }
 
 function clearUnitVisuals() {
@@ -445,7 +495,10 @@ function updateSpeciesParams() {
 }
 onMounted(() => {
   initThreeJS();
-
+  loadBoidModel(() => {
+    console.log('Boid model loaded successfully.');
+    startSimulation();
+  });
   // stats.jsの初期化とDOM追加
   stats = new Stats();
   stats.showPanel(0);
@@ -481,7 +534,6 @@ onMounted(() => {
 
   window.addEventListener('keydown', handleKeydown);
 
-  startSimulation();
 });
 
 function isMobileDevice() {

@@ -58,7 +58,7 @@
     </div>
     <div class="setting-row">
       <label>水平化トルク<br>(Horizontal Torque):</label>
-      <input type="range" v-model.number="settings.horizontalTorque" min="0.001" max="0.1" step="0.001" />
+      <input type="range" v-model.number="settings.horizontalTorque" min="0.001" max="0.2" step="0.001" />
       <span>{{ settings.horizontalTorque }}</span>
     </div>
     <div class="setting-row">
