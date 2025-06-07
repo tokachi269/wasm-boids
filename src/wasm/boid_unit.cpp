@@ -12,7 +12,8 @@
 
 bool BoidUnit::isBoidUnit() const { return children.empty(); }
 
-inline glm::vec3 approxRotate(const glm::vec3 &v, const glm::vec3 &axis, float angle) {
+inline glm::vec3 approxRotate(const glm::vec3 &v, const glm::vec3 &axis,
+                              float angle) {
   // 軽量化: 小角度近似をさらに簡略化
   // sinθ ≈ θ, cosθ ≈ 1 を前提に、外積計算を最小化
   constexpr float EPSILON = 1e-6f; // 極小値判定用
@@ -232,7 +233,6 @@ void BoidUnit::updateRecursive(float dt) {
             newDir = approxRotate(oldDir, axis, rot);
           }
         }
-
         float tilt = newDir.y;
         if (fabsf(tilt) > 1e-4f) {
           glm::vec3 flatDir = glm::normalize(glm::vec3(newDir.x, 0, newDir.z));
@@ -253,13 +253,27 @@ void BoidUnit::updateRecursive(float dt) {
 
         current->buf->velocities[gIdx] = newDir * finalSpeed;
         current->buf->positions[gIdx] += current->buf->velocities[gIdx] * dt;
-        current->buf->accelerations[gIdx] = glm::vec3(0.0f); // 加速度リセット
+        current->buf->accelerations[gIdx] = glm::vec3(0.0f);
+        // クォータニオンを計算して orientations に格納
+        current->buf->orientations[gIdx] = BoidUnit::dirToQuatRollZero(newDir);
       }
     } else {
       for (auto &child : current->children)
         stack.push(child);
     }
   }
+}
+
+inline glm::quat BoidUnit::dirToQuatRollZero(const glm::vec3 &forward) {
+  glm::vec3 f = glm::normalize(forward);
+  glm::vec3 up(0.0f, 1.0f, 0.0f);
+  if (fabsf(glm::dot(f, up)) > 0.99f) { // 平行回避
+    up = glm::vec3(1.0f, 0.0f, 0.0f);   // フォールバック
+  }
+  glm::vec3 right = glm::normalize(glm::cross(up, f));
+  up = glm::cross(f, right); // 直交基底
+  glm::mat3 R(right, up, f); // 列順：X,Y,Z
+  return glm::quat_cast(R);  // 正規化済 quat
 }
 
 void BoidUnit::computeBoidInteraction(float dt) {

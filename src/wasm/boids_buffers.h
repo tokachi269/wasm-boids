@@ -10,6 +10,7 @@ struct SoABuffers
     std::vector<glm::vec3, A16<glm::vec3>> positions;
     std::vector<glm::vec3, A16<glm::vec3>> velocities;
     std::vector<glm::vec3, A16<glm::vec3>> accelerations;
+    std::vector<glm::quat, A16<glm::quat>> orientations;
 
     std::vector<int> ids;
     std::vector<float> stresses;
@@ -29,6 +30,7 @@ struct SoABuffers
         speciesIds.reserve(n);
         isAttracting.reserve(n);
         attractTimers.reserve(n);
+        orientations.reserve(n);
     }
 
     // Boid 数に合わせてフラグをクリア/サイズ調整
@@ -36,6 +38,7 @@ struct SoABuffers
     {
         positions.resize(n);
         velocities.resize(n);
+        orientations.resize(n, glm::quat(1, 0, 0, 0));
         accelerations.resize(n);
         ids.resize(n);
         stresses.resize(n);

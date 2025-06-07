@@ -38,7 +38,7 @@ set(EMCC_LINK_FLAGS
     "-sEXPORT_NAME=createBoidsModule"
     "-sENVIRONMENT=web,worker"
     "-sALLOW_MEMORY_GROWTH=1"
-    "-sEXPORTED_FUNCTIONS=['_main','_setSpeciesParams','_setFlockSize','_update','_build','_initBoids','_posPtr','_velPtr','_boidCount','_malloc','_free']"
+    "-sEXPORTED_FUNCTIONS=['_main','_oriPtr','_setSpeciesParams','_setFlockSize','_update','_build','_initBoids','_posPtr','_velPtr','_boidCount','_malloc','_free']"
     "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAPF32']"
     "--bind"
     "-pthread" # スレッドを有効化
@@ -66,7 +66,7 @@ set(EMCC_LINK_FLAGS_RELEASE
     "-sEXPORT_NAME=createBoidsModule"
     "-sENVIRONMENT=web,worker"
     "-sALLOW_MEMORY_GROWTH=1"
-    "-sEXPORTED_FUNCTIONS=['_main','_setSpeciesParams','_setFlockSize','_update','_build','_initBoids','_posPtr','_velPtr','_boidCount','_malloc','_free']"
+    "-sEXPORTED_FUNCTIONS=['_main','_oriPtr','_setSpeciesParams','_setFlockSize','_update','_build','_initBoids','_posPtr','_velPtr','_boidCount','_malloc','_free']"
     "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAPF32']"
     "--bind"
     "-pthread"

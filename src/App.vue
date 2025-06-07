@@ -52,6 +52,7 @@ if (!wasmModule) {
 
 const posPtr = wasmModule.cwrap('posPtr', 'number', [])
 const velPtr = wasmModule.cwrap('velPtr', 'number', [])
+const oriPtr = wasmModule.cwrap('oriPtr', 'number', [])
 const boidCount = wasmModule.cwrap('boidCount', 'number', [])
 const initBoids = wasmModule.cwrap('initBoids', 'void', ['number', 'number', 'number'])
 const build = wasmModule.cwrap('build', 'void', ['number', 'number'])
@@ -141,15 +142,17 @@ function initThreeJS() {
   const height = window.innerHeight;
 
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x0a1e3a);
-  scene.fog = new THREE.Fog(0x0a1e3a, 0, 200);
+  scene.background = new THREE.Color(0x193255);
+  scene.fog = new THREE.Fog(0x193255, 0, 28);
 
   camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
-  camera.position.set(20, 40, 40);
+  camera.position.set(4, 7, 7);
   camera.lookAt(0, 0, 0);
 
   renderer = new THREE.WebGLRenderer({
     antialias: true,
+      depth: true, // 深度バッファを有効化
+
   });
   renderer.setPixelRatio(window.devicePixelRatio); // 高DPI対応
   renderer.setSize(width, height);
@@ -167,29 +170,29 @@ function initThreeJS() {
 
   // 地面メッシュ追加
   const groundGeo = new THREE.PlaneGeometry(1000, 1000);
-  const groundMat = new THREE.MeshStandardMaterial({ color: 0x183050, roughness: 0.8 });
+  const groundMat = new THREE.MeshStandardMaterial({ color: 0x183050, roughness: 0.8,depthTest: true });
   const ground = new THREE.Mesh(groundGeo, groundMat);
   ground.rotation.x = -Math.PI / 2;
-  ground.position.y = -80;
+  ground.position.y = -10;
   ground.receiveShadow = true; // 影を受ける
   scene.add(ground);
 
   // ライト
-  const ambientLight = new THREE.AmbientLight(0xffffff, 1.2);
+  const ambientLight = new THREE.AmbientLight(0xa2b7d4, 1);
   scene.add(ambientLight);
 
   // 太陽光（やや暖色のDirectionalLight）
-  const dirLight = new THREE.DirectionalLight(0xfff2cc, 1.5); // 暖色＆強め
+  const dirLight = new THREE.DirectionalLight(0x88a5cf, 15); // 暖色＆強め
   dirLight.position.set(300, 500, 200); // 高い位置から照らす
   dirLight.castShadow = true;
 
   // 影カメラの範囲を広げる
-  dirLight.shadow.camera.left = -500;
-  dirLight.shadow.camera.right = 500;
-  dirLight.shadow.camera.top = 500;
-  dirLight.shadow.camera.bottom = -500;
+  dirLight.shadow.camera.left = -100;
+  dirLight.shadow.camera.right = 100;
+  dirLight.shadow.camera.top = 100;
+  dirLight.shadow.camera.bottom = -100;
   dirLight.shadow.camera.near = 1;
-  dirLight.shadow.camera.far = 2000;
+  dirLight.shadow.camera.far = 1000;
 
   dirLight.shadow.mapSize.width = 2048;
   dirLight.shadow.mapSize.height = 2048;
@@ -284,8 +287,9 @@ function initInstancedBoids(count) {
 
 function loadBoidModel(callback) {
   const loader = new GLTFLoader();
+  const basePath = process.env.BASE_URL || '/'; // publicPath を取得
   loader.load(
-    '/models/boidModel.glb', // モデルのパス
+    `./models/boidModel.glb`, // モデルのパス
     (gltf) => {
       boidModel = gltf.scene;
       callback();
@@ -298,7 +302,7 @@ function loadBoidModel(callback) {
     
   );
     loader.load(
-    '/models/boidModel_lod.glb', // モデルのパス
+    `./models/boidModel_lod.glb`, // モデルのパス
     (gltf) => {
       boidModelLod = gltf.scene;
       callback();
@@ -377,7 +381,7 @@ function drawUnitTree(unit, layer = 0) {
     }
   }
 }
-let positions, velocities
+let positions, velocities, orientations;
 
 function animate() {
   if (stats) stats.begin();
@@ -388,36 +392,32 @@ function animate() {
   const count = boidCount();
 
   positions = new Float32Array(wasmModule.HEAPF32.buffer, posPtr(), count * 3);
-  velocities = new Float32Array(wasmModule.HEAPF32.buffer, velPtr(), count * 3);
+  orientations = new Float32Array(wasmModule.HEAPF32.buffer, oriPtr(), count * 4);
 
   const dummy = new THREE.Object3D();
   const cameraPosition = camera.position;
 
   for (let i = 0; i < count; i++) {
+    // 位置を設定
     dummy.position.set(
       positions[i * 3 + 0],
       positions[i * 3 + 1],
       positions[i * 3 + 2]
     );
 
-    const dir = new THREE.Vector3(
-      velocities[i * 3 + 0],
-      velocities[i * 3 + 1],
-      velocities[i * 3 + 2]
+    // クォータニオンを設定
+    dummy.quaternion.set(
+      orientations[i * 4 + 0], // x
+      orientations[i * 4 + 1], // y
+      orientations[i * 4 + 2], // z
+      orientations[i * 4 + 3]  // w
     );
-    if (dir.lengthSq() > 0.0001) {
-      dummy.quaternion.setFromUnitVectors(
-        new THREE.Vector3(0, 0, 1),
-        dir.clone().normalize()
-      );
-    } else {
-      dummy.quaternion.identity();
-    }
+
     dummy.updateMatrix();
 
     // 距離判定
     const distanceSq = cameraPosition.distanceToSquared(dummy.position);
-    if (distanceSq < 10000) { // 近距離: 高ポリゴン
+    if (distanceSq < 25) { // 近距離: 高ポリゴン
       instancedMeshHigh.setMatrixAt(i, dummy.matrix);
       instancedMeshLow.setMatrixAt(i, new THREE.Matrix4().identity()); // 非表示
     } else { // 遠距離: 低ポリゴン
@@ -440,6 +440,7 @@ function animate() {
 
   animationTimer = setTimeout(animate, FRAME_INTERVAL);
 }
+
 function drawTreeStructure(treeData) {
   const drawNode = (node, parentPosition = null) => {
     const position = new THREE.Vector3(
@@ -466,7 +467,7 @@ function drawTreeStructure(treeData) {
   treeData.forEach((rootNode) => drawNode(rootNode));
 }
 function startSimulation() {
-  initBoids(settings.flockSize, 64, 0.25);
+  initBoids(settings.flockSize, 6, 0.25);
   build(16, 0);
   initInstancedBoids(settings.flockSize);
   animate();
@@ -490,7 +491,7 @@ function updateSpeciesParams() {
       horizontalTorque: Number(raw.horizontalTorque ?? -1),
       velocityEpsilon: Number(raw.velocityEpsilon ?? -1),
       torqueStrength: Number(raw.torqueStrength ?? -1),
-    });
+    }, 0.1);
   }
 }
 onMounted(() => {
@@ -529,7 +530,7 @@ onMounted(() => {
       torqueStrength: Number(raw.torqueStrength),
       maxNeighbors: Number(raw.maxNeighbors),
       lambda: Number(raw.lambda),
-    });
+    }, 0.1);
   }
 
   window.addEventListener('keydown', handleKeydown);
@@ -575,7 +576,7 @@ watch(
         torqueStrength: Number(raw.torqueStrength),
         maxNeighbors: Number(raw.maxNeighbors),
         lambda: Number(raw.lambda),
-      });
+      }, 0.1);
     }
   }
 );

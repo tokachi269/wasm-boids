@@ -309,7 +309,9 @@ uintptr_t BoidTree::getPositionsPtr() {
 uintptr_t BoidTree::getVelocitiesPtr() {
   return reinterpret_cast<uintptr_t>(&buf.velocities[0]);
 }
-
+uintptr_t BoidTree::getOrientationsPtr() {
+  return reinterpret_cast<uintptr_t>(&buf.orientations[0]);
+}
 int BoidTree::getBoidCount() const {
   return static_cast<int>(buf.positions.size());
 }

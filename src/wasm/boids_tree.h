@@ -31,6 +31,7 @@ public:
     // バッファ更新
     uintptr_t getPositionsPtr();
     uintptr_t getVelocitiesPtr();
+    uintptr_t getOrientationsPtr();
     int getBoidCount() const;
     void collectLeaves(const BoidUnit *node, std::vector<BoidUnit *> &leaves) const;
 };

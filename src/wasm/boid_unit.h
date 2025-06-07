@@ -50,6 +50,8 @@ public:
     void mergeWith(const BoidUnit &other);
     void mergeWith(BoidUnit *other, BoidUnit *parent);
     void addRepulsionToAllBoids(BoidUnit *unit, const glm::vec3 &repulsion);
+    glm::vec3 fixRoll(const glm::vec3 &direction);
+    static glm::quat dirToQuatRollZero(const glm::vec3 &forward);
 };
 
 void printTree(const BoidUnit *node, int depth = 0);

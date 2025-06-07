@@ -6,11 +6,12 @@
 #include <glm/glm.hpp>
 #include <glm/gtx/norm.hpp>
 #include <glm/gtx/rotate_vector.hpp>
+#include "scale_utils.h"
 
 using namespace emscripten;
 
 // JSオブジェクトからグローバルパラメータをセット（undefinedなら現状維持）
-void setGlobalSpeciesParamsFromJS(val jsObj)
+void setGlobalSpeciesParamsFromJS(val jsObj, float spatialScale = 1.0f)
 {
     SpeciesParams params = getGlobalSpeciesParams();
     if (!jsObj["cohesion"].isUndefined())
@@ -41,7 +42,8 @@ void setGlobalSpeciesParamsFromJS(val jsObj)
         params.velocityEpsilon = jsObj["velocityEpsilon"].as<float>();
     if (!jsObj["torqueStrength"].isUndefined())
         params.torqueStrength = jsObj["torqueStrength"].as<float>();
-    setGlobalSpeciesParams(params);
+      setGlobalSpeciesParams(scaledParams(params, spatialScale));
+
 }
 
 EMSCRIPTEN_BINDINGS(my_module)

@@ -3,6 +3,7 @@ const CopyWebpackPlugin = require('copy-webpack-plugin');
 const path = require('path');
 
 module.exports = defineConfig({
+     publicPath: process.env.NODE_ENV === 'production' ? '/wasm-boids/' : '',
     filenameHashing: true,
     transpileDependencies: true,
     devServer: {
