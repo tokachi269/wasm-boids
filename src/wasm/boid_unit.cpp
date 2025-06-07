@@ -12,6 +12,22 @@
 
 bool BoidUnit::isBoidUnit() const { return children.empty(); }
 
+inline glm::vec3 approxRotate(const glm::vec3 &v, const glm::vec3 &axis, float angle) {
+  // 軽量化: 小角度近似をさらに簡略化
+  // sinθ ≈ θ, cosθ ≈ 1 を前提に、外積計算を最小化
+  constexpr float EPSILON = 1e-6f; // 極小値判定用
+  float axisLength2 = glm::length2(axis);
+
+  // 軸がほぼゼロベクトルの場合は回転をスキップ
+  if (axisLength2 < EPSILON) {
+    return v;
+  }
+
+  // 軸を正規化して回転を計算
+  glm::vec3 normalizedAxis = axis * (1.0f / glm::sqrt(axisLength2));
+  return v + angle * glm::cross(normalizedAxis, v);
+}
+
 /**
  * ユニット内の Boid または子ノードを基にバウンディングスフィアを計算する。
  *
@@ -213,7 +229,7 @@ void BoidUnit::updateRecursive(float dt) {
           if (axisLength2 > 1e-8f) {
             axis /= glm::sqrt(axisLength2); // 正規化
             float rot = glm::min(angle, globalSpeciesParams.maxTurnAngle * dt);
-            newDir = glm::rotate(oldDir, rot, axis);
+            newDir = approxRotate(oldDir, axis, rot);
           }
         }
 
@@ -228,7 +244,7 @@ void BoidUnit::updateRecursive(float dt) {
             axis /= glm::sqrt(axisLength2); // 正規化
             float rot =
                 glm::min(flatAngle, globalSpeciesParams.horizontalTorque * dt);
-            newDir = glm::rotate(newDir, rot, axis);
+            newDir = approxRotate(newDir, axis, rot);
           }
         }
 
@@ -529,7 +545,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
               float rot2 =
                   std::min(ang2, globalSpeciesParams.torqueStrength * dt);
               rot2 = std::min(rot2, globalSpeciesParams.maxTurnAngle);
-              glm::vec3 newDir2 = glm::rotate(forward2, rot2, axis2);
+              glm::vec3 newDir2 = approxRotate(forward2, axis2, rot2);
 
               // 速度ベクトルを回転後の方向に更新
               vel = newDir2 * glm::length(vel);

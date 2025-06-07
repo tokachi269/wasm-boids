@@ -21,6 +21,15 @@ set(EMCC_COMPILE_FLAGS
     "-mbulk-memory" # Bulk Memoryを有効化
 )
 
+# emcc用のリリース（Release）向けコンパイルオプション
+set(EMCC_COMPILE_FLAGS_RELEASE
+    "-O3"          # 最大最適化
+    "-DNDEBUG"     # assert 無効化
+    "-msimd128"
+    "-matomics"
+    "-mbulk-memory"
+)
+
 # emcc用のリンクオプションを設定
 set(EMCC_LINK_FLAGS
     "-sWASM=1"
@@ -49,6 +58,34 @@ set(EMCC_LINK_FLAGS
     "-sASSERTIONS=1"
 )
 
+# emcc用のリリース（Release）向けリンクオプション
+set(EMCC_LINK_FLAGS_RELEASE
+    "-sWASM=1"
+    "-sEXPORT_ES6=1"
+    "-sMODULARIZE=1"
+    "-sEXPORT_NAME=createBoidsModule"
+    "-sENVIRONMENT=web,worker"
+    "-sALLOW_MEMORY_GROWTH=1"
+    "-sEXPORTED_FUNCTIONS=['_main','_setSpeciesParams','_setFlockSize','_update','_build','_initBoids','_posPtr','_velPtr','_boidCount','_malloc','_free']"
+    "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAPF32']"
+    "--bind"
+    "-pthread"
+    "-sUSE_PTHREADS=1"
+    "-sPROXY_TO_PTHREAD=1"
+    "-sPTHREAD_POOL_SIZE=navigator.hardwareConcurrency"
+    "-msimd128"
+    "-matomics"
+    "-mbulk-memory"
+	"-sINCOMING_MODULE_JS_API=['locateFile']"
+    "-sINITIAL_MEMORY=33554432"
+    "-sMAXIMUM_MEMORY=2147483648"
+	"-sALLOW_MEMORY_GROWTH=1"
+    "-O3"
+    "-sASSERTIONS=1"
+    "-sDISABLE_EXCEPTION_CATCHING=0"
+)
+
+
 # ソースファイルを指定
 set(SOURCES
     src/wasm/main.cpp
@@ -69,7 +106,10 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/src/wasm/build")
 add_executable(wasm_boids ${SOURCES})
 
 # コンパイルオプションを設定
-target_compile_options(wasm_boids PRIVATE ${EMCC_COMPILE_FLAGS})
+target_compile_options(wasm_boids PRIVATE
+    $<$<CONFIG:Debug>:${EMCC_COMPILE_FLAGS}>
+    $<$<CONFIG:Release>:${EMCC_COMPILE_FLAGS_RELEASE}>
+)
 
 # 出力形式の設定
 set_target_properties(wasm_boids PROPERTIES
@@ -78,4 +118,7 @@ set_target_properties(wasm_boids PROPERTIES
 )
 
 # リンクオプションを設定
-target_link_options(wasm_boids PRIVATE ${EMCC_LINK_FLAGS})
+target_link_options(wasm_boids PRIVATE
+    $<$<CONFIG:Debug>:${EMCC_LINK_FLAGS}>
+    $<$<CONFIG:Release>:${EMCC_LINK_FLAGS_RELEASE}>
+)

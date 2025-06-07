@@ -7,8 +7,8 @@
         "build-wasm:dev": "emcmake cmake -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build",
         "build-wasm:prod": "emcmake cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build",
         "serve": "concurrently \"nodemon --watch src/wasm --ext cpp,h --exec \\\"npm run build-wasm:dev\\\"\" \"wait-on src/wasm/build/wasm_boids.js && vue-cli-service serve\"",
-        "build": "npm run build-wasm:dev && vue-cli-service build",
-        "deploy": "npm run build && gh-pages -d dist",
+        "build": "npm run build-wasm:prod && vue-cli-service build",
+        "deploy": "npm run build && wait-on dist/index.html && gh-pages -d dist",
         "watch-wasm": "nodemon --watch src/wasm --ext cpp,h --exec \"emcc -fsyntax-only src/wasm/main.cpp\""
     },
     "dependencies": {
