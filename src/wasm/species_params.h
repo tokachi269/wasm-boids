@@ -2,6 +2,7 @@
 
 struct SpeciesParams
 {
+    int speciesId = 1; // 種の識別子
     float cohesion = 0.01f;
     float separation = 0.1f;
     float alignment = 0.05f;

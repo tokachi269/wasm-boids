@@ -36,6 +36,6 @@ public:
     void collectLeaves(const BoidUnit *node, std::vector<BoidUnit *> &leaves) const;
 };
 
-extern SpeciesParams globalSpeciesParams;
-SpeciesParams getGlobalSpeciesParams();
+extern std::vector<SpeciesParams> globalSpeciesParams;
+SpeciesParams getGlobalSpeciesParams(int speciesId);
 void setGlobalSpeciesParams(const SpeciesParams &params);

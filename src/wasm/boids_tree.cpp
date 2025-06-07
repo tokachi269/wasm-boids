@@ -12,16 +12,24 @@
 #include <vector>
 
 // グローバル共通
-SpeciesParams globalSpeciesParams;
+std::vector<SpeciesParams> globalSpeciesParams; // 配列に変更
 
-SpeciesParams getGlobalSpeciesParams() { return globalSpeciesParams; }
+SpeciesParams getGlobalSpeciesParams(int speciesId) { return globalSpeciesParams[speciesId]; }
+
 void setGlobalSpeciesParams(const SpeciesParams &params) {
-  globalSpeciesParams = params;
-  std::cout << globalSpeciesParams.torqueStrength << std::endl;
+  auto it = std::find_if(
+      globalSpeciesParams.begin(), globalSpeciesParams.end(),
+      [&params](const SpeciesParams& p) { return p.speciesId == params.speciesId; });
+  if (it != globalSpeciesParams.end()) {
+    *it = params; // 更新
+  } else {
+    globalSpeciesParams.push_back(params); // 追加
+  }
 }
+
 BoidTree::BoidTree()
-    : root(nullptr), frameCount(0), splitIndex(0), mergeIndex(0),
-      maxBoidsPerUnit(10) {}
+  : root(nullptr), frameCount(0), splitIndex(0), mergeIndex(0),
+    maxBoidsPerUnit(10) {}
 
 // ---- ツリー可視化 ----
 void printTree(const BoidUnit *node, int depth) {

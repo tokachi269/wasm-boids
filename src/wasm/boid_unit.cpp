@@ -9,6 +9,7 @@
 #include <glm/gtx/string_cast.hpp>
 #include <stack>
 #include <vector>
+#include "pool_accessor.h"
 
 bool BoidUnit::isBoidUnit() const { return children.empty(); }
 
@@ -148,7 +149,7 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
     }
   }
 }
-#include "pool_accessor.h"
+
 /**
  * 再帰的にユニット内の Boid の動きを更新する。
  *
