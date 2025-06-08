@@ -1,3 +1,4 @@
+#include <string>
 #define GLM_ENABLE_EXPERIMENTAL
 #include "boids_tree.h"
 #include "species_params.h"
@@ -14,12 +15,19 @@
 // グローバル共通
 std::vector<SpeciesParams> globalSpeciesParams; // 配列に変更
 
-SpeciesParams getGlobalSpeciesParams(int speciesId) { return globalSpeciesParams[speciesId]; }
-
-void setGlobalSpeciesParams(const SpeciesParams &params) {
+SpeciesParams BoidTree::getGlobalSpeciesParams(const std::string species) {
   auto it = std::find_if(
       globalSpeciesParams.begin(), globalSpeciesParams.end(),
-      [&params](const SpeciesParams& p) { return p.speciesId == params.speciesId; });
+      [&species](const SpeciesParams &p) { return p.species == species; });
+  return (it != globalSpeciesParams.end()) ? *it : SpeciesParams{};
+  throw std::invalid_argument("Species not found: " + species);
+}
+
+void BoidTree::setGlobalSpeciesParams(const SpeciesParams &params) {
+  auto it = std::find_if(globalSpeciesParams.begin(), globalSpeciesParams.end(),
+                         [&params](const SpeciesParams &p) {
+                           return p.species == params.species;
+                         });
   if (it != globalSpeciesParams.end()) {
     *it = params; // 更新
   } else {
@@ -28,8 +36,8 @@ void setGlobalSpeciesParams(const SpeciesParams &params) {
 }
 
 BoidTree::BoidTree()
-  : root(nullptr), frameCount(0), splitIndex(0), mergeIndex(0),
-    maxBoidsPerUnit(10) {}
+    : root(nullptr), frameCount(0), splitIndex(0), mergeIndex(0),
+      maxBoidsPerUnit(10) {}
 
 // ---- ツリー可視化 ----
 void printTree(const BoidUnit *node, int depth) {

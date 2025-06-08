@@ -7,13 +7,18 @@
 #include <glm/gtx/norm.hpp>
 #include <glm/gtx/rotate_vector.hpp>
 #include "scale_utils.h"
+#include <stdexcept>
 
 using namespace emscripten;
 
 // JSオブジェクトからグローバルパラメータをセット（undefinedなら現状維持）
 void setGlobalSpeciesParamsFromJS(val jsObj, float spatialScale = 1.0f)
 {
-    SpeciesParams params = getGlobalSpeciesParams();
+    if (jsObj["species"].isUndefined()){
+        throw std::invalid_argument("Species is required.");
+    }
+
+    SpeciesParams params =  BoidTree::instance().getGlobalSpeciesParams(jsObj["species"].as<std::string>());
     if (!jsObj["cohesion"].isUndefined())
         params.cohesion = jsObj["cohesion"].as<float>();
     if (!jsObj["separation"].isUndefined())
@@ -42,8 +47,7 @@ void setGlobalSpeciesParamsFromJS(val jsObj, float spatialScale = 1.0f)
         params.velocityEpsilon = jsObj["velocityEpsilon"].as<float>();
     if (!jsObj["torqueStrength"].isUndefined())
         params.torqueStrength = jsObj["torqueStrength"].as<float>();
-      setGlobalSpeciesParams(scaledParams(params, spatialScale));
-
+    BoidTree::instance().setGlobalSpeciesParams(scaledParams(params, spatialScale));
 }
 
 EMSCRIPTEN_BINDINGS(my_module)
@@ -87,6 +91,8 @@ EMSCRIPTEN_BINDINGS(my_module)
         .function("getVelocitiesPtr", &BoidTree::getVelocitiesPtr)
         .function("getBoidCount", &BoidTree::getBoidCount)
         .function("initializeBoids", &BoidTree::initializeBoids)
+        .function("getGlobalSpeciesParams", &BoidTree::getGlobalSpeciesParams)
+        .function("setGlobalSpeciesParams", &BoidTree::setGlobalSpeciesParams)
         .property("root", &BoidTree::root, allow_raw_pointers());
 
     class_<BoidUnit>("BoidUnit")
@@ -97,7 +103,6 @@ EMSCRIPTEN_BINDINGS(my_module)
     register_vector<Boid>("VectorBoid");
     register_vector<BoidUnit *>("VectorBoidUnit");
 
-    function("getGlobalSpeciesParams", &getGlobalSpeciesParams);
-    function("setGlobalSpeciesParams", &setGlobalSpeciesParams);
+
     function("setGlobalSpeciesParamsFromJS", &setGlobalSpeciesParamsFromJS);
 }

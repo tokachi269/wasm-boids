@@ -1,7 +1,9 @@
 #pragma once
+#include <string>
 
 struct SpeciesParams
 {
+    std::string species;
     int speciesId = 1; // 種の識別子
     float cohesion = 0.01f;
     float separation = 0.1f;

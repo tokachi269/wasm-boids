@@ -3,7 +3,6 @@
 #include "scale_utils.h"
 #include <iostream>
 
-
 void Entry::run() {
   std::cout << "WebAssembly entry point initialized!" << std::endl;
 }
@@ -32,6 +31,6 @@ void setFlockSize(int newSize, float posRange, float velRange) {
  */
 void setSpeciesParams(const SpeciesParams &params,
                       float spatialScale /*=1.0f*/) {
-  setGlobalSpeciesParams(scaledParams(params, spatialScale));
+  BoidTree::instance().setGlobalSpeciesParams(scaledParams(params, spatialScale));
 }
 }

@@ -69,6 +69,7 @@ function fetchTreeStructure() {
 }
 
 const DEFAULT_SETTINGS = {
+  species: 'Boids', // 種族名
   flockSize: 5118,         // 群れの数
   cohesion: 9.04,          // 凝集
   cohesionRange: 140,      // 凝集範囲
@@ -151,7 +152,7 @@ function initThreeJS() {
 
   renderer = new THREE.WebGLRenderer({
     antialias: true,
-      depth: true, // 深度バッファを有効化
+    depth: true, // 深度バッファを有効化
 
   });
   renderer.setPixelRatio(window.devicePixelRatio); // 高DPI対応
@@ -170,7 +171,7 @@ function initThreeJS() {
 
   // 地面メッシュ追加
   const groundGeo = new THREE.PlaneGeometry(1000, 1000);
-  const groundMat = new THREE.MeshStandardMaterial({ color: 0x183050, roughness: 0.8,depthTest: true });
+  const groundMat = new THREE.MeshStandardMaterial({ color: 0x183050, roughness: 0.8, depthTest: true });
   const ground = new THREE.Mesh(groundGeo, groundMat);
   ground.rotation.x = -Math.PI / 2;
   ground.position.y = -10;
@@ -288,33 +289,49 @@ function initInstancedBoids(count) {
 function loadBoidModel(callback) {
   const loader = new GLTFLoader();
   const basePath = process.env.BASE_URL || '/'; // publicPath を取得
+
   loader.load(
-    `./models/boidModel.glb`, // モデルのパス
+    `${basePath}models/boidModel.glb`, // モデルのパス
     (gltf) => {
       boidModel = gltf.scene;
+
+      // マテリアルの transparent と alphaTest を変更
+      boidModel.traverse((child) => {
+        if (child.isMesh) {
+          child.material.transparent = true; // 半透明を有効化
+          child.material.alphaTest = 0.5;    // アルファテストを設定
+        }
+      });
+
       callback();
     },
     undefined,
     (error) => {
       console.error('An error occurred while loading the model:', error);
     }
-
-    
   );
-    loader.load(
-    `./models/boidModel_lod.glb`, // モデルのパス
+
+  loader.load(
+    `${basePath}models/boidModel_lod.glb`, // LODモデルのパス
     (gltf) => {
       boidModelLod = gltf.scene;
+
+      // マテリアルの transparent と alphaTest を変更
+      boidModelLod.traverse((child) => {
+        if (child.isMesh) {
+          child.material.transparent = false; // 半透明を無効化
+          child.material.alphaTest = 0.5;     // アルファテストを設定
+        }
+      });
+
       callback();
     },
     undefined,
     (error) => {
-      console.error('An error occurred while loading the model:', error);
+      console.error('An error occurred while loading the LOD model:', error);
     }
-
   );
 }
-
 function clearUnitVisuals() {
   for (const mesh of unitSpheres) scene.remove(mesh);
   for (const line of unitLines) scene.remove(line);
@@ -518,6 +535,7 @@ onMounted(() => {
   ) {
     const raw = toRaw(settings);
     wasmModule.setGlobalSpeciesParamsFromJS({
+      species: raw.species,
       cohesion: Number(raw.cohesion),
       separation: Number(raw.separation),
       alignment: Number(raw.alignment),
@@ -564,6 +582,7 @@ watch(
     ) {
       const raw = toRaw(settings);
       wasmModule.setGlobalSpeciesParamsFromJS({
+        species: raw.species,
         cohesion: Number(raw.cohesion),
         separation: Number(raw.separation),
         alignment: Number(raw.alignment),

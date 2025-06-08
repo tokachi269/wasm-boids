@@ -139,12 +139,12 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
       if (cnt > 0) {
         buf->accelerations[idxA] +=
             (sumVel / float(cnt) - buf->velocities[idxA]) *
-            globalSpeciesParams.alignment;
+            globalSpeciesParams[speciesId].alignment;
         buf->accelerations[idxA] +=
             (sumPos / float(cnt) - buf->positions[idxA]) *
-            (globalSpeciesParams.cohesion);
+            (globalSpeciesParams[speciesId].cohesion);
         buf->accelerations[idxA] +=
-            sep * (globalSpeciesParams.separation * 0.5f);
+            sep * (globalSpeciesParams[speciesId].separation * 0.5f);
       }
     }
   }
@@ -225,12 +225,12 @@ void BoidUnit::updateRecursive(float dt) {
         float dotProduct = glm::dot(oldDir, newDir);
         float angle = acosf(glm::clamp(dotProduct, -1.0f, 1.0f));
 
-        if (angle > globalSpeciesParams.maxTurnAngle) {
+        if (angle > globalSpeciesParams[speciesId].maxTurnAngle) {
           glm::vec3 axis = glm::cross(oldDir, newDir);
           float axisLength2 = glm::length2(axis);
           if (axisLength2 > 1e-8f) {
             axis /= glm::sqrt(axisLength2); // 正規化
-            float rot = glm::min(angle, globalSpeciesParams.maxTurnAngle * dt);
+            float rot = glm::min(angle, globalSpeciesParams[speciesId].maxTurnAngle * dt);
             newDir = approxRotate(oldDir, axis, rot);
           }
         }
@@ -244,13 +244,13 @@ void BoidUnit::updateRecursive(float dt) {
           if (flatAngle > 1e-4f && axisLength2 > 1e-8f) {
             axis /= glm::sqrt(axisLength2); // 正規化
             float rot =
-                glm::min(flatAngle, globalSpeciesParams.horizontalTorque * dt);
+                glm::min(flatAngle, globalSpeciesParams[speciesId].horizontalTorque * dt);
             newDir = approxRotate(newDir, axis, rot);
           }
         }
 
-        float finalSpeed = glm::clamp(speed, globalSpeciesParams.minSpeed,
-                                      globalSpeciesParams.maxSpeed);
+        float finalSpeed = glm::clamp(speed, globalSpeciesParams[speciesId].minSpeed,
+                                      globalSpeciesParams[speciesId].maxSpeed);
 
         current->buf->velocities[gIdx] = newDir * finalSpeed;
         current->buf->positions[gIdx] += current->buf->velocities[gIdx] * dt;
@@ -292,9 +292,9 @@ void BoidUnit::computeBoidInteraction(float dt) {
   // -----------------------------------------------
   // ① 視界範囲 (cohesionRange) の二乗
   const float viewRangeSq =
-      globalSpeciesParams.cohesionRange * globalSpeciesParams.cohesionRange;
+      globalSpeciesParams[speciesId].cohesionRange * globalSpeciesParams[speciesId].cohesionRange;
   // ② 視界角度（FOV in degrees）の半分をラジアンに変換 & そのコサイン
-  float halfFovRad = glm::radians(globalSpeciesParams.fieldOfViewDeg * 0.5f);
+  float halfFovRad = glm::radians(globalSpeciesParams[speciesId].fieldOfViewDeg * 0.5f);
   float cosHalfFov = std::cos(halfFovRad);
 
   // ③ 非ゼロ判定用イプシロン
@@ -336,7 +336,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
     for (size_t i = 0; i < indices.size(); ++i) {
       if (cohesionMemories[i] > 0.0f) {
         cohesionMemories[i] += dt;
-        if (cohesionMemories[i] > globalSpeciesParams.tau) {
+        if (cohesionMemories[i] > globalSpeciesParams[speciesId].tau) {
           cohesionMemories[i] = 0.0f;
           activeNeighbors.reset(i);
         } else {
@@ -353,7 +353,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
     //    ・視界判定: (速度方向がほぼゼロでなければ)
     //    normalized(diff)·normalized(vel) >= cosHalfFov
     // -------------------------------------------------------
-    if (activeCount < globalSpeciesParams.maxNeighbors) {
+    if (activeCount < globalSpeciesParams[speciesId].maxNeighbors) {
       // — 速度ベクトル vel がほぼゼロかどうかチェック
       float velLen2 = glm::length2(vel);
 
@@ -395,7 +395,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
     //    ・toAdd = maxNeighbors - activeCount
     //    ・部分ソート (nth_element) して上位 toAdd 件だけ取り出す
     // -------------------------------------------------------
-    int toAdd = globalSpeciesParams.maxNeighbors - activeNeighbors.count();
+    int toAdd = globalSpeciesParams[speciesId].maxNeighbors - activeNeighbors.count();
     if (toAdd > 0 && !candidates.empty()) {
       if ((int)candidates.size() > toAdd) {
         std::nth_element(candidates.begin(), candidates.begin() + toAdd,
@@ -430,12 +430,12 @@ void BoidUnit::computeBoidInteraction(float dt) {
     // -------------------------------------------------------
     const int neighborCount = static_cast<int>(activeNeighbors.count());
     const float phi =
-        float(neighborCount) / float(globalSpeciesParams.maxNeighbors);
+        float(neighborCount) / float(globalSpeciesParams[speciesId].maxNeighbors);
 
     if (phi < 1.0f) {
       // 群れの縁に出た ⇒ 吸引 ON & タイマー毎フレーム再スタート
       buf->isAttracting[gIdx] = 1;
-      buf->attractTimers[gIdx] = globalSpeciesParams.tau;
+      buf->attractTimers[gIdx] = globalSpeciesParams[speciesId].tau;
     } else if (buf->isAttracting[gIdx]) {
       // 内部に戻っていれば τ カウントダウン
       buf->attractTimers[gIdx] -= dt;
@@ -452,10 +452,10 @@ void BoidUnit::computeBoidInteraction(float dt) {
       glm::vec3 dirSum(0.0f);
       int dirCnt = 0;
 
-      const float reSq = globalSpeciesParams.separationRange *
-                         globalSpeciesParams.separationRange;
+      const float reSq = globalSpeciesParams[speciesId].separationRange *
+                         globalSpeciesParams[speciesId].separationRange;
       const float raSq =
-          globalSpeciesParams.cohesionRange * globalSpeciesParams.cohesionRange;
+          globalSpeciesParams[speciesId].cohesionRange * globalSpeciesParams[speciesId].cohesionRange;
 
       for (size_t i = 0; i < indices.size(); ++i) {
         if (i == index)
@@ -474,8 +474,8 @@ void BoidUnit::computeBoidInteraction(float dt) {
 
       if (dirCnt > 0) {
         glm::vec3 avgDir = glm::normalize(dirSum / float(dirCnt));
-        glm::vec3 desiredVel = avgDir * globalSpeciesParams.maxSpeed;
-        glm::vec3 attractAcc = (desiredVel - vel) * globalSpeciesParams.lambda;
+        glm::vec3 desiredVel = avgDir * globalSpeciesParams[speciesId].maxSpeed;
+        glm::vec3 attractAcc = (desiredVel - vel) * globalSpeciesParams[speciesId].lambda;
         buf->accelerations[gIdx] += attractAcc;
       }
     }
@@ -501,12 +501,12 @@ void BoidUnit::computeBoidInteraction(float dt) {
           continue; // ほぼ同一位置ならスキップ
 
         float dist = glm::sqrt(distSq);
-        float wSep = 1.0f - (dist / globalSpeciesParams.separationRange);
+        float wSep = 1.0f - (dist / globalSpeciesParams[speciesId].separationRange);
         wSep = glm::clamp(wSep, 0.0f, 1.0f);
         sumSep += (diff * wSep) * (-1.0f); // 分離
 
         float wCoh =
-            glm::clamp(dist / globalSpeciesParams.cohesionRange, 0.0f, 1.0f);
+            glm::clamp(dist / globalSpeciesParams[speciesId].cohesionRange, 0.0f, 1.0f);
         sumCoh += buf->positions[gNeighbor] * wCoh; // 凝集
 
         sumAlign += buf->velocities[gNeighbor]; // 整列
@@ -517,7 +517,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
       float sepLen2 = glm::length2(sumSep);
       if (sepLen2 > EPS) {
         totalSeparation = (sumSep * (1.0f / glm::sqrt(sepLen2))) *
-                          globalSpeciesParams.separation;
+                          globalSpeciesParams[speciesId].separation;
       }
 
       // --- 凝集の最終ベクトル ---
@@ -527,7 +527,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
       float cohLen2 = glm::length2(cohDir);
       if (cohLen2 > EPS) {
         totalCohesion = (cohDir * (1.0f / glm::sqrt(cohLen2))) *
-                        globalSpeciesParams.cohesion;
+                        globalSpeciesParams[speciesId].cohesion;
       }
 
       // --- 整列の最終ベクトル ---
@@ -537,7 +537,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
       float aliLen2 = glm::length2(aliDir);
       if (aliLen2 > EPS) {
         totalAlignment = (aliDir * (1.0f / glm::sqrt(aliLen2))) *
-                         globalSpeciesParams.alignment;
+                         globalSpeciesParams[speciesId].alignment;
       }
 
       // --- 回転トルクによる向き補正（alignment方向へ向ける） ---
@@ -558,8 +558,8 @@ void BoidUnit::computeBoidInteraction(float dt) {
             if (axisLen2 > EPS) {
               axis2 *= (1.0f / glm::sqrt(axisLen2));
               float rot2 =
-                  std::min(ang2, globalSpeciesParams.torqueStrength * dt);
-              rot2 = std::min(rot2, globalSpeciesParams.maxTurnAngle);
+                  std::min(ang2, globalSpeciesParams[speciesId].torqueStrength * dt);
+              rot2 = std::min(rot2, globalSpeciesParams[speciesId].maxTurnAngle);
               glm::vec3 newDir2 = approxRotate(forward2, axis2, rot2);
 
               // 速度ベクトルを回転後の方向に更新
@@ -567,7 +567,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
 
               // 加速度にもトルク分を加算
               buf->accelerations[gIdx] +=
-                  axis2 * ang2 * globalSpeciesParams.torqueStrength;
+                  axis2 * ang2 * globalSpeciesParams[speciesId].torqueStrength;
             }
           }
         }
