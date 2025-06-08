@@ -3,12 +3,12 @@
   <div class="settings">
     <div class="setting-row">
       <label>群れの数<br> (Flock Size):</label>
-      <input type="range" v-model.number="settings.flockSize" min="10" max="10000" step="1" />
+      <input type="range" v-model.number="settings.flockSize" min="10" max="20000" step="1" />
       <span>{{ settings.flockSize }}</span>
     </div>
     <div class="setting-row">
       <label>凝集<br> (Cohesion):</label>
-      <input type="range" v-model.number="settings.cohesion" min="0" max="10" step="0.01" />
+      <input type="range" v-model.number="settings.cohesion" min="0" max="20" step="0.01" />
       <span>{{ settings.cohesion }}</span>
     </div>
     <div class="setting-row">

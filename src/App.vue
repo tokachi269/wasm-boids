@@ -69,21 +69,21 @@ function fetchTreeStructure() {
 }
 
 const DEFAULT_SETTINGS = {
-  species: 'Boids', // 種族名
-  flockSize: 5118,         // 群れの数
-  cohesion: 9.04,          // 凝集
-  cohesionRange: 140,      // 凝集範囲
-  separation: 10,          // 分離
-  separationRange: 6,      // 分離範囲
-  alignment: 8.5,          // 整列
-  alignmentRange: 35,      // 整列範囲
-  maxSpeed: 0.27,          // 最大速度
-  maxTurnAngle: 0.047,     // 最大旋回角
-  maxNeighbors: 4,         // 最大近傍数
-  lambda: 0.109,           // 吸引減衰 λ
-  horizontalTorque: 0.004, // 水平化トルク
-  velocityEpsilon: 0.004,  // 速度閾値 ε
-  torqueStrength: 3.398    // 回転トルク強度
+  species: 'Boids',         // 種族名
+  flockSize: 10000,         // 群れの数
+  cohesion: 10,             // 凝集
+  cohesionRange: 68,        // 凝集範囲
+  separation: 3.11,         // 分離
+  separationRange: 10,      // 分離範囲
+  alignment: 8,             // 整列
+  alignmentRange: 35,       // 整列範囲
+  maxSpeed: 0.39,           // 最大速度
+  maxTurnAngle: 0.034,      // 最大旋回角
+  maxNeighbors: 4,          // 最大近傍数
+  lambda: 0.109,            // 吸引減衰 λ
+  horizontalTorque: 0.004,  // 水平化トルク
+  velocityEpsilon: 0.004,   // 速度閾値 ε
+  torqueStrength: 3.398     // 回転トルク強度
 };
 
 function loadSettings() {
@@ -332,6 +332,7 @@ function loadBoidModel(callback) {
     }
   );
 }
+
 function clearUnitVisuals() {
   for (const mesh of unitSpheres) scene.remove(mesh);
   for (const line of unitLines) scene.remove(line);
@@ -401,59 +402,38 @@ function drawUnitTree(unit, layer = 0) {
 let positions, velocities, orientations;
 
 function animate() {
-  if (stats) stats.begin();
+  stats?.begin();
 
-  if (!paused.value) {
-    update(1.0);
-  }
+  if (!paused.value) update(1.0);
+
   const count = boidCount();
-
-  positions = new Float32Array(wasmModule.HEAPF32.buffer, posPtr(), count * 3);
-  orientations = new Float32Array(wasmModule.HEAPF32.buffer, oriPtr(), count * 4);
-
+  const heapF32 = wasmModule.HEAPF32.buffer;
+  const positions = new Float32Array(heapF32, posPtr(), count * 3);
+  const orientations = new Float32Array(heapF32, oriPtr(), count * 4);
   const dummy = new THREE.Object3D();
-  const cameraPosition = camera.position;
+  const identityMatrix = new THREE.Matrix4();
+  const camPos = camera.position;
 
-  for (let i = 0; i < count; i++) {
-    // 位置を設定
-    dummy.position.set(
-      positions[i * 3 + 0],
-      positions[i * 3 + 1],
-      positions[i * 3 + 2]
-    );
-
-    // クォータニオンを設定
-    dummy.quaternion.set(
-      orientations[i * 4 + 0], // x
-      orientations[i * 4 + 1], // y
-      orientations[i * 4 + 2], // z
-      orientations[i * 4 + 3]  // w
-    );
-
+  // 最小限のマトリクス更新用バッファ（パフォーマンス重視）
+  for (let i = 0; i < count; ++i) {
+    dummy.position.fromArray(positions, i * 3);
+    dummy.quaternion.fromArray(orientations, i * 4);
     dummy.updateMatrix();
 
-    // 距離判定
-    const distanceSq = cameraPosition.distanceToSquared(dummy.position);
-    if (distanceSq < 25) { // 近距離: 高ポリゴン
-      instancedMeshHigh.setMatrixAt(i, dummy.matrix);
-      instancedMeshLow.setMatrixAt(i, new THREE.Matrix4().identity()); // 非表示
-    } else { // 遠距離: 低ポリゴン
-      instancedMeshLow.setMatrixAt(i, dummy.matrix);
-      instancedMeshHigh.setMatrixAt(i, new THREE.Matrix4().identity()); // 非表示
-    }
+    const distSq = camPos.distanceToSquared(dummy.position);
+    const useHigh = distSq < 4;
+
+    (useHigh ? instancedMeshHigh : instancedMeshLow).setMatrixAt(i, dummy.matrix);
+    (useHigh ? instancedMeshLow : instancedMeshHigh).setMatrixAt(i, identityMatrix);
   }
 
   instancedMeshHigh.instanceMatrix.needsUpdate = true;
   instancedMeshLow.instanceMatrix.needsUpdate = true;
 
   controls.update();
-  // スマホの場合は renderer を使用、それ以外は composer を使用
-  if (isMobileDevice()) {
-    renderer.render(scene, camera);
-  } else {
-    composer.render();
-  }
-  if (stats) stats.end();
+
+  (isMobileDevice() ? renderer : composer).render(scene, camera);
+  stats?.end();
 
   animationTimer = setTimeout(animate, FRAME_INTERVAL);
 }
