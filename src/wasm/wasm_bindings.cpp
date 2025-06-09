@@ -11,14 +11,23 @@
 
 using namespace emscripten;
 
-// JSオブジェクトからグローバルパラメータをセット（undefinedなら現状維持）
 void setGlobalSpeciesParamsFromJS(val jsObj, float spatialScale = 1.0f)
 {
-    if (jsObj["species"].isUndefined()){
+    if (jsObj["species"].isUndefined()) {
         throw std::invalid_argument("Species is required.");
     }
+    // ★ species 名を JS から受け取る
+    std::string species = jsObj["species"].as<std::string>();
 
-    SpeciesParams params =  BoidTree::instance().getGlobalSpeciesParams(jsObj["species"].as<std::string>());
+    // ① 既存パラメータを取得 or デフォルト
+    SpeciesParams params =
+        BoidTree::instance().getGlobalSpeciesParams(species);
+
+    params.species = species;
+
+    // ② 残りのフィールドを JS オブジェクトから設定
+        if (!jsObj["count"].isUndefined()) 
+        params.count = jsObj["count"].as<int>();
     if (!jsObj["cohesion"].isUndefined())
         params.cohesion = jsObj["cohesion"].as<float>();
     if (!jsObj["separation"].isUndefined())
@@ -47,7 +56,12 @@ void setGlobalSpeciesParamsFromJS(val jsObj, float spatialScale = 1.0f)
         params.velocityEpsilon = jsObj["velocityEpsilon"].as<float>();
     if (!jsObj["torqueStrength"].isUndefined())
         params.torqueStrength = jsObj["torqueStrength"].as<float>();
-    BoidTree::instance().setGlobalSpeciesParams(scaledParams(params, spatialScale));
+    if (!jsObj["isPredator"].isUndefined())
+        params.isPredator = jsObj["isPredator"].as<bool>();
+
+    // ③ スケール適用して登録
+    BoidTree::instance().setGlobalSpeciesParams(
+        scaledParams(params, spatialScale));
 }
 
 EMSCRIPTEN_BINDINGS(my_module)
@@ -58,6 +72,8 @@ EMSCRIPTEN_BINDINGS(my_module)
         .field("z", &glm::vec3::z);
 
     value_object<SpeciesParams>("SpeciesParams")
+        .field("species", &SpeciesParams::species)
+        .field("count", &SpeciesParams::count)
         .field("cohesion", &SpeciesParams::cohesion)
         .field("separation", &SpeciesParams::separation)
         .field("alignment", &SpeciesParams::alignment)
@@ -71,7 +87,8 @@ EMSCRIPTEN_BINDINGS(my_module)
         .field("lambda", &SpeciesParams::lambda)
         .field("horizontalTorque", &SpeciesParams::horizontalTorque)
         .field("velocityEpsilon", &SpeciesParams::velocityEpsilon)
-        .field("torqueStrength", &SpeciesParams::torqueStrength);
+        .field("torqueStrength", &SpeciesParams::torqueStrength) 
+           .field("isPredator", &SpeciesParams::isPredator);
 
     class_<Boid>("Boid")
         .constructor<>()

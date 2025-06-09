@@ -11,6 +11,7 @@
 #include <numeric>
 #include <random>
 #include <vector>
+#include <emscripten/val.h>
 
 // グローバル共通
 std::vector<SpeciesParams> globalSpeciesParams; // 配列に変更
@@ -24,6 +25,9 @@ SpeciesParams BoidTree::getGlobalSpeciesParams(const std::string species) {
 }
 
 void BoidTree::setGlobalSpeciesParams(const SpeciesParams &params) {
+    emscripten::val console = emscripten::val::global("console");
+      console.call<void>("log", std::string(params.species));
+
   auto it = std::find_if(globalSpeciesParams.begin(), globalSpeciesParams.end(),
                          [&params](const SpeciesParams &p) {
                            return p.species == params.species;
@@ -32,6 +36,15 @@ void BoidTree::setGlobalSpeciesParams(const SpeciesParams &params) {
     *it = params; // 更新
   } else {
     globalSpeciesParams.push_back(params); // 追加
+  }
+
+  // 全種をログに出す
+  console.call<void>("log", std::string("Updated species parameters:"));
+
+  for (const auto &sp : globalSpeciesParams) {
+    console.call<void>("log", std::string("species: ") + sp.species +
+                                  ", isPredator: (" + (sp.isPredator ? "true" : "false") +
+                                  "), cohesion: " + std::to_string(sp.cohesion));
   }
 }
 
@@ -214,41 +227,43 @@ void BoidTree::trySplitRecursive(BoidUnit *node) {
     trySplitRecursive(c);
 }
 
-// BoidTree::initializeBoids
-void BoidTree::initializeBoids(int count, float posRange, float velRange) {
-  // 中央バッファを確保
-  buf.reserveAll(count);
-  buf.positions.resize(count);
-  buf.velocities.resize(count);
-  buf.accelerations.resize(count, glm::vec3(0.0f));
-  buf.ids.resize(count);
-  buf.stresses.resize(count, 0.0f);
-  buf.speciesIds.resize(count, 0);
-  buf.cohesionMemories.clear();
-  for (int i = 0; i < count; ++i) {
-    buf.cohesionMemories[i] = std::unordered_map<int, float>(); // 最大8件前提
+void BoidTree::initializeBoids(float posRange, float velRange) {
+  // 1. 全体の個体数を計算
+  int totalCount = 0;
+  for (const auto &species : globalSpeciesParams) {
+    totalCount += species.count; // 各種族の個体数を加算
   }
 
-  // 乱数生成器
+  // 2. バッファを確保
+  buf.reserveAll(totalCount);
+  buf.positions.resize(totalCount);
+  buf.velocities.resize(totalCount);
+  buf.accelerations.assign(totalCount, glm::vec3(0.0f));
+  buf.speciesIds.resize(totalCount);
+
+  // 3. 各種族の個体を生成
+  int offset = 0;
   std::random_device rd;
   std::mt19937 gen(rd());
   std::uniform_real_distribution<float> posDist(-posRange, posRange);
   std::uniform_real_distribution<float> velDist(-velRange, velRange);
 
-  // 位置・速度を初期化
-  for (int i = 0; i < count; ++i) {
-    buf.positions[i] = glm::vec3(posDist(gen), posDist(gen), posDist(gen));
-    buf.velocities[i] = glm::vec3(velDist(gen), velDist(gen), velDist(gen));
-    buf.ids[i] = i;
+  for (size_t speciesId = 0; speciesId < globalSpeciesParams.size(); ++speciesId) {
+    const auto &species = globalSpeciesParams[speciesId];
+    for (int i = 0; i < species.count; ++i) {
+      buf.positions[offset] = glm::vec3(posDist(gen), posDist(gen), posDist(gen));
+      buf.velocities[offset] = glm::vec3(velDist(gen), velDist(gen), velDist(gen));
+      buf.speciesIds[offset] = speciesId;
+      ++offset;
+    }
   }
 
-  // ルートノードが無ければ生成して中央バッファを共有
-  if (!root)
-    root = new BoidUnit();
+  // 4. 木構造を再構築
+  if (root) delete root;
+  root = new BoidUnit();
   root->buf = &buf;
 
-  // インデックス配列を作って木を構築
-  std::vector<int> indices(count);
+  std::vector<int> indices(totalCount);
   std::iota(indices.begin(), indices.end(), 0);
   buildRecursive(root, indices, maxBoidsPerUnit, 0);
 }

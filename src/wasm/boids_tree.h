@@ -27,7 +27,7 @@ public:
     BoidUnit *findParent(BoidUnit *node, BoidUnit *target);
     void update(float dt = 1.0f);
     void trySplitRecursive(BoidUnit *node);
-    void initializeBoids(int count, float posRange, float velRange);
+    void initializeBoids(float posRange, float velRange);
     // バッファ更新
     uintptr_t getPositionsPtr();
     uintptr_t getVelocitiesPtr();

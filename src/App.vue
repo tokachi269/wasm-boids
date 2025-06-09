@@ -44,6 +44,7 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { SSAOPass } from 'three/examples/jsm/postprocessing/SSAOPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
+import { color } from 'three/tsl';
 
 const wasmModule = inject('wasmModule');
 if (!wasmModule) {
@@ -54,7 +55,7 @@ const posPtr = wasmModule.cwrap('posPtr', 'number', [])
 const velPtr = wasmModule.cwrap('velPtr', 'number', [])
 const oriPtr = wasmModule.cwrap('oriPtr', 'number', [])
 const boidCount = wasmModule.cwrap('boidCount', 'number', [])
-const initBoids = wasmModule.cwrap('initBoids', 'void', ['number', 'number', 'number'])
+const initBoids = wasmModule.cwrap('initBoids', 'void', ['number', 'number'])
 const build = wasmModule.cwrap('build', 'void', ['number', 'number'])
 const update = wasmModule.cwrap('update', 'void', ['number'])
 const setFlockSize = wasmModule.cwrap('setFlockSize', 'void', ['number', 'number', 'number'])
@@ -70,7 +71,7 @@ function fetchTreeStructure() {
 
 const DEFAULT_SETTINGS = {
   species: 'Boids',         // 種族名
-  flockSize: 10000,         // 群れの数
+  count: 10000,             // 群れの数
   cohesion: 10,             // 凝集
   cohesionRange: 68,        // 凝集範囲
   separation: 3.11,         // 分離
@@ -238,18 +239,12 @@ let instancedMeshLow = null;  // 低ポリゴン用
 // LOD用ジオメトリ・マテリアルを使い回す
 const boidGeometryHigh = new THREE.SphereGeometry(1, 8, 8);
 const boidGeometryLow = new THREE.SphereGeometry(1, 3, 2);
-const boidMaterial = new THREE.MeshStandardMaterial({ color: 0x1fb5ff });
 boidGeometryHigh.scale(0.5, 0.5, 2.0); // 少し小さくする
 boidGeometryLow.scale(0.5, 0.5, 2.0); // 少し小さくする
 let boidModel = null; // 読み込んだモデルを保持
 let boidModelLod = null; // 読み込んだモデルを保持
 
 function initInstancedBoids(count) {
-  if (!boidModel) {
-    console.error('Boid model not loaded yet.');
-    return;
-  }
-
   if (!boidModel.children || !boidModel.children[0]) {
     console.error('Boid model does not have valid children.');
     return;
@@ -289,17 +284,57 @@ function initInstancedBoids(count) {
 function loadBoidModel(callback) {
   const loader = new GLTFLoader();
   const basePath = process.env.BASE_URL || '/'; // publicPath を取得
+  const textureLoader = new THREE.TextureLoader();
+  const texture = textureLoader.load(
+    './models/fish.png', // テクスチャのパス
+    () => {
+      console.log('Texture loaded successfully.');
+    },
+    undefined,
+    (error) => {
+      console.error('An error occurred while loading the texture:', error);
+    }
+  );
+  const textureLod = textureLoader.load(
+    './models/fish_lod.png', // テクスチャのパス
+    () => {
+      console.log('Texture loaded successfully.');
+    },
+    undefined,
+    (error) => {
+      console.error('An error occurred while loading the texture:', error);
+    }
+  );
+  texture.flipY = false;
+  texture.colorSpace = THREE.SRGBColorSpace; // sRGBカラー空間を使用
+  textureLod.flipY = false;
+  textureLod.colorSpace = THREE.SRGBColorSpace;
+
+  let boidMaterial = new THREE.MeshStandardMaterial({
+    roughness: 0.5,
+    metalness: 0,
+    transparent: false, // 半透明を有効化
+    alphaTest: 0.5,    // アルファテストを設定
+    map: texture,      // テクスチャを設定
+  });
+
+  let boidLodMaterial = new THREE.MeshStandardMaterial({
+    roughness: 0.5,
+    metalness: 0,
+    transparent: false, // 半透明を有効化
+    alphaTest: 0.5,    // アルファテストを設定
+    map: textureLod,      // テクスチャを設定
+  });
 
   loader.load(
-    `${basePath}models/boidModel.glb`, // モデルのパス
+    `./models/boidModel.glb`, // モデルのパス
     (gltf) => {
       boidModel = gltf.scene;
 
       // マテリアルの transparent と alphaTest を変更
       boidModel.traverse((child) => {
         if (child.isMesh) {
-          child.material.transparent = true; // 半透明を有効化
-          child.material.alphaTest = 0.5;    // アルファテストを設定
+          child.material = boidMaterial; // 半透明を有効化
         }
       });
 
@@ -312,15 +347,14 @@ function loadBoidModel(callback) {
   );
 
   loader.load(
-    `${basePath}models/boidModel_lod.glb`, // LODモデルのパス
+    `./models/boidModel_lod.glb`, // LODモデルのパス
     (gltf) => {
       boidModelLod = gltf.scene;
 
       // マテリアルの transparent と alphaTest を変更
       boidModelLod.traverse((child) => {
         if (child.isMesh) {
-          child.material.transparent = false; // 半透明を無効化
-          child.material.alphaTest = 0.5;     // アルファテストを設定
+          child.material = boidLodMaterial; // 半透明を有効化
         }
       });
 
@@ -464,9 +498,9 @@ function drawTreeStructure(treeData) {
   treeData.forEach((rootNode) => drawNode(rootNode));
 }
 function startSimulation() {
-  initBoids(settings.flockSize, 6, 0.25);
+  initBoids(6, 0.25);
   build(16, 0);
-  initInstancedBoids(settings.flockSize);
+  initInstancedBoids(settings.count);
   animate();
 }
 // `setSpeciesParams` を呼び出す関数
@@ -488,6 +522,7 @@ function updateSpeciesParams() {
       horizontalTorque: Number(raw.horizontalTorque ?? -1),
       velocityEpsilon: Number(raw.velocityEpsilon ?? -1),
       torqueStrength: Number(raw.torqueStrength ?? -1),
+      isPredator: Boolean(raw.isPredator ?? false)
     }, 0.1);
   }
 }
@@ -497,6 +532,8 @@ onMounted(() => {
     console.log('Boid model loaded successfully.');
     startSimulation();
   });
+
+
   // stats.jsの初期化とDOM追加
   stats = new Stats();
   stats.showPanel(0);
@@ -515,7 +552,8 @@ onMounted(() => {
   ) {
     const raw = toRaw(settings);
     wasmModule.setGlobalSpeciesParamsFromJS({
-      species: raw.species,
+      species: 'Boids',
+      count: Number(raw.count),
       cohesion: Number(raw.cohesion),
       separation: Number(raw.separation),
       alignment: Number(raw.alignment),
@@ -528,8 +566,33 @@ onMounted(() => {
       torqueStrength: Number(raw.torqueStrength),
       maxNeighbors: Number(raw.maxNeighbors),
       lambda: Number(raw.lambda),
+      isPredator: Boolean(raw.isPredator)
     }, 0.1);
   }
+
+  // ② 捕食者種を登録（最後に登録されるので ID は globalSpeciesParams.size()-1）
+  wasmModule.setGlobalSpeciesParamsFromJS({
+    species: 'Predator',
+    count: 1,
+    cohesion: 0.0,                      // 捕食者には使わない
+    separation: 0.0,
+    alignment: 0.0,
+    maxSpeed: 1.0,                     // 速く逃げられるよう速度は大きめ
+    minSpeed: 0.5,
+    maxTurnAngle: 0.1,
+    separationRange: 0.0,
+    alignmentRange: 0.0,
+    cohesionRange: 0.0,
+    maxNeighbors: 0,
+    lambda: 0.0,
+    horizontalTorque: 0.0,
+    velocityEpsilon: 0.0,
+    torqueStrength: 0.0,
+    isPredator: true                // ← 捕食者フラグ
+  }, 0.1);
+
+  // ③ 通常どおりシミュレーション開始
+  startSimulation();
 
   window.addEventListener('keydown', handleKeydown);
 
@@ -541,6 +604,8 @@ function isMobileDevice() {
 // settingsの変更をwasmModuleに反映
 watch(
   () => [
+    settings.species,
+    settings.count,
     settings.cohesion,
     settings.separation,
     settings.alignment,
@@ -554,6 +619,7 @@ watch(
     settings.horizontalTorque,
     settings.velocityEpsilon,
     settings.torqueStrength,
+    settings.isPredator
   ],
   () => {
     if (
@@ -563,6 +629,7 @@ watch(
       const raw = toRaw(settings);
       wasmModule.setGlobalSpeciesParamsFromJS({
         species: raw.species,
+        count: Number(raw.count),
         cohesion: Number(raw.cohesion),
         separation: Number(raw.separation),
         alignment: Number(raw.alignment),
@@ -575,6 +642,7 @@ watch(
         torqueStrength: Number(raw.torqueStrength),
         maxNeighbors: Number(raw.maxNeighbors),
         lambda: Number(raw.lambda),
+        isPredator: Boolean(raw.isPredator)
       }, 0.1);
     }
   }

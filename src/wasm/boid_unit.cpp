@@ -10,6 +10,7 @@
 #include <stack>
 #include <vector>
 #include "pool_accessor.h"
+#include <emscripten/val.h>
 
 bool BoidUnit::isBoidUnit() const { return children.empty(); }
 
@@ -112,16 +113,38 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
     // 再構築頻度でない場合は何もしない
     return;
   }
+  
   if (!indices.empty() && !other->indices.empty()) {
-    for (int idxA : indices) {
+    // ◉ 捕食者から逃げる（自分が prey、相手が predator のときのみ）
+    {
+      bool selfPred  = globalSpeciesParams[speciesId].isPredator;
+      bool otherPred = globalSpeciesParams[other->speciesId].isPredator;
+      if (!selfPred && otherPred) {
+            emscripten::val console = emscripten::val::global("console");
+      console.call<void>("log", std::string("逃げる！"));
+        constexpr float fleeRange2   = 2.0f * 2.0f; // 感知距離²
+        constexpr float fleeStrength = 2.0f;            // 逃げる強さ
+        for (int idxA : indices) {
+          for (int idxB : other->indices) {
+            glm::vec3 diff = buf->positions[idxA] - other->buf->positions[idxB];
+            float d2 = glm::dot(diff, diff);
+            if (d2 < fleeRange2 && d2 > 1e-6f) {
+              float invd = 1.0f / std::sqrt(d2);
+              buf->accelerations[idxA] += (diff * invd) * fleeStrength;
+            }
+          }
+        }
+        return;
+      }
+    }
 
+    for (int idxA : indices) {
       glm::vec3 sumVel = glm::vec3(0.0f);
       glm::vec3 sumPos = glm::vec3(0.0f);
-      glm::vec3 sep = glm::vec3(0.0f);
-      int cnt = 0;
+      glm::vec3 sep    = glm::vec3(0.0f);
+      int cnt          = 0;
 
       for (int idxB : other->indices) {
-
         glm::vec3 diff = buf->positions[idxA] - other->buf->positions[idxB];
         float d2 = glm::dot(diff, diff);
 
@@ -131,7 +154,7 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
 
           sumVel += other->buf->velocities[idxB] * w;
           sumPos += other->buf->positions[idxB] * w;
-          sep += (diff / (d2 + 1.0f)) * w;
+          sep    += (diff / (d2 + 1.0f)) * w;
           ++cnt;
         }
       }

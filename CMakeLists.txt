@@ -56,6 +56,9 @@ set(EMCC_LINK_FLAGS
     "-sSTACK_SIZE=2097152" # スタックサイズを1MBに設定
     "-sEXCEPTION_CATCHING_ALLOWED=['*']"
     "-sASSERTIONS=1"
+    "-ggsource-map"
+    "--profiling-funcs"
+    "--source-map-base=/static/js/"
 )
 
 # emcc用のリリース（Release）向けリンクオプション

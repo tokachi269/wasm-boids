@@ -9,8 +9,8 @@ void Entry::run() {
 
 extern "C" {
 
-void initBoids(int n, float pr, float vr) {
-  BoidTree::instance().initializeBoids(n, pr, vr);
+void initBoids(float pr, float vr) {
+  BoidTree::instance().initializeBoids(pr, vr);
 }
 void build(int maxPerUnit = 16, int level = 0) {
   BoidTree::instance().build(maxPerUnit, level);
