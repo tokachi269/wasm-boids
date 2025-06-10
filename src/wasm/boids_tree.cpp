@@ -3,6 +3,7 @@
 #include "boids_tree.h"
 #include "species_params.h"
 #include <algorithm>
+#include <emscripten/val.h>
 #include <glm/glm.hpp>
 #include <glm/gtx/norm.hpp>
 #include <glm/gtx/rotate_vector.hpp>
@@ -11,7 +12,7 @@
 #include <numeric>
 #include <random>
 #include <vector>
-#include <emscripten/val.h>
+#include <mutex>
 
 // グローバル共通
 std::vector<SpeciesParams> globalSpeciesParams; // 配列に変更
@@ -25,8 +26,8 @@ SpeciesParams BoidTree::getGlobalSpeciesParams(const std::string species) {
 }
 
 void BoidTree::setGlobalSpeciesParams(const SpeciesParams &params) {
-    emscripten::val console = emscripten::val::global("console");
-      console.call<void>("log", std::string(params.species));
+  emscripten::val console = emscripten::val::global("console");
+  console.call<void>("log", std::string(params.species));
 
   auto it = std::find_if(globalSpeciesParams.begin(), globalSpeciesParams.end(),
                          [&params](const SpeciesParams &p) {
@@ -42,9 +43,10 @@ void BoidTree::setGlobalSpeciesParams(const SpeciesParams &params) {
   console.call<void>("log", std::string("Updated species parameters:"));
 
   for (const auto &sp : globalSpeciesParams) {
-    console.call<void>("log", std::string("species: ") + sp.species +
-                                  ", isPredator: (" + (sp.isPredator ? "true" : "false") +
-                                  "), cohesion: " + std::to_string(sp.cohesion));
+    console.call<void>(
+        "log", std::string("species: ") + sp.species + ", isPredator: (" +
+                   (sp.isPredator ? "true" : "false") +
+                   "), cohesion: " + std::to_string(sp.cohesion));
   }
 }
 
@@ -226,40 +228,60 @@ void BoidTree::trySplitRecursive(BoidUnit *node) {
   for (auto *c : node->children)
     trySplitRecursive(c);
 }
+   std::mutex coutMutex;
 
-void BoidTree::initializeBoids(float posRange, float velRange) {
-  // 1. 全体の個体数を計算
-  int totalCount = 0;
-  for (const auto &species : globalSpeciesParams) {
-    totalCount += species.count; // 各種族の個体数を加算
+void BoidTree::initializeBoids(const std::vector<SpeciesParams> &speciesParamsList, float posRange, float velRange) {
+    emscripten::val console = emscripten::val::global("console");
+    console.call<void>("log", std::string("speciesParamsList size: ") + std::to_string(speciesParamsList.size()));
+    for (const auto& species : speciesParamsList) {
+        console.call<void>("log", std::string("Species: ") + species.species + ", Count: " + std::to_string(species.count));
+    }
+
+  // globalSpeciesParams を更新
+  try {
+    globalSpeciesParams = speciesParamsList; // コピー操作
+  } catch (const std::length_error &e) {
+    std::cerr << "Error updating globalSpeciesParams: " << e.what()
+              << std::endl;
+    return;
   }
 
-  // 2. バッファを確保
+  // 全体の個体数を計算
+  int totalCount = 0;
+  for (const auto &species : globalSpeciesParams) {
+    totalCount += species.count;
+  }
+
+  // バッファを確保
   buf.reserveAll(totalCount);
   buf.positions.resize(totalCount);
   buf.velocities.resize(totalCount);
   buf.accelerations.assign(totalCount, glm::vec3(0.0f));
   buf.speciesIds.resize(totalCount);
 
-  // 3. 各種族の個体を生成
+  // 各種族の個体を生成
   int offset = 0;
   std::random_device rd;
   std::mt19937 gen(rd());
   std::uniform_real_distribution<float> posDist(-posRange, posRange);
   std::uniform_real_distribution<float> velDist(-velRange, velRange);
 
-  for (size_t speciesId = 0; speciesId < globalSpeciesParams.size(); ++speciesId) {
+  for (size_t speciesId = 0; speciesId < globalSpeciesParams.size();
+       ++speciesId) {
     const auto &species = globalSpeciesParams[speciesId];
     for (int i = 0; i < species.count; ++i) {
-      buf.positions[offset] = glm::vec3(posDist(gen), posDist(gen), posDist(gen));
-      buf.velocities[offset] = glm::vec3(velDist(gen), velDist(gen), velDist(gen));
+      buf.positions[offset] =
+          glm::vec3(posDist(gen), posDist(gen), posDist(gen));
+      buf.velocities[offset] =
+          glm::vec3(velDist(gen), velDist(gen), velDist(gen));
       buf.speciesIds[offset] = speciesId;
       ++offset;
     }
   }
 
-  // 4. 木構造を再構築
-  if (root) delete root;
+  // 木構造を再構築
+  if (root)
+    delete root;
   root = new BoidUnit();
   root->buf = &buf;
 

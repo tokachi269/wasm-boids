@@ -22,12 +22,12 @@ public:
 
     BoidTree();
     void setFlockSize(int newSize, float posRange, float velRange);
+    void initializeBoids(const std::vector<SpeciesParams> &speciesParamsList, float posRange, float velRange);
     void build(int maxPerUnit = 16, int level = 0);
     void buildRecursive(BoidUnit *node, const std::vector<int> &indices, int maxPerUnit, int level);
     BoidUnit *findParent(BoidUnit *node, BoidUnit *target);
     void update(float dt = 1.0f);
     void trySplitRecursive(BoidUnit *node);
-    void initializeBoids(float posRange, float velRange);
     // バッファ更新
     uintptr_t getPositionsPtr();
     uintptr_t getVelocitiesPtr();

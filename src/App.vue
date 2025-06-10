@@ -69,7 +69,7 @@ function fetchTreeStructure() {
   return treeData;
 }
 
-const DEFAULT_SETTINGS = {
+const DEFAULT_SETTINGS = [{
   species: 'Boids',         // 種族名
   count: 10000,             // 群れの数
   cohesion: 10,             // 凝集
@@ -85,7 +85,25 @@ const DEFAULT_SETTINGS = {
   horizontalTorque: 0.004,  // 水平化トルク
   velocityEpsilon: 0.004,   // 速度閾値 ε
   torqueStrength: 3.398     // 回転トルク強度
-};
+}, {
+  species: 'Predator',
+  count: 1,
+  cohesion: 0.0,                      // 捕食者には使わない
+  separation: 0.0,
+  alignment: 0.0,
+  maxSpeed: 1.0,                     // 速く逃げられるよう速度は大きめ
+  minSpeed: 0.5,
+  maxTurnAngle: 0.1,
+  separationRange: 0.0,
+  alignmentRange: 0.0,
+  cohesionRange: 0.0,
+  maxNeighbors: 0,
+  lambda: 0.0,
+  horizontalTorque: 0.0,
+  velocityEpsilon: 0.0,
+  torqueStrength: 0.0,
+  isPredator: true                // ← 捕食者フラグ
+}];
 
 function loadSettings() {
   const saved = localStorage.getItem('boids_settings');
@@ -498,10 +516,36 @@ function drawTreeStructure(treeData) {
   treeData.forEach((rootNode) => drawNode(rootNode));
 }
 function startSimulation() {
-  initBoids(6, 0.25);
+  console.log('settings:', toRaw(settings));
+  callInitBoids( toRaw(settings), 6, 0.25);
   build(16, 0);
-  initInstancedBoids(settings.count);
+  initInstancedBoids(settings.count + 1);
   animate();
+}
+
+function callInitBoids(speciesArray, posRange, velRange) {
+  const structSize = 24; // SpeciesParams のバイト数（6 * 4）
+
+  const count = speciesArray.length;
+  const totalSize = count * structSize;
+  const ptr = Module._malloc(totalSize);
+
+  const view = new DataView(Module.HEAPU8.buffer, ptr, totalSize);
+
+  for (let i = 0; i < count; ++i) {
+    const offset = i * structSize;
+    const s = speciesArray[i];
+
+    view.setInt32(offset + 0, s.species, true);     // species ID
+    view.setInt32(offset + 4, s.count, true);       // 個体数
+    view.setFloat32(offset + 8, s.separation, true);
+    view.setFloat32(offset + 12, s.alignment, true);
+    view.setFloat32(offset + 16, s.cohesion, true);
+    // 必要に応じて追加
+  }
+
+  Module._initBoidsRaw(ptr, count, posRange, velRange);
+  Module._free(ptr);
 }
 // `setSpeciesParams` を呼び出す関数
 function updateSpeciesParams() {
@@ -530,69 +574,20 @@ onMounted(() => {
   initThreeJS();
   loadBoidModel(() => {
     console.log('Boid model loaded successfully.');
+    // stats.jsの初期化とDOM追加
+    stats = new Stats();
+    stats.showPanel(0);
+    document.body.appendChild(stats.dom);
+    // 右上に移動させる
+    stats.dom.style.position = 'fixed';
+    stats.dom.style.right = '0px';
+    stats.dom.style.top = '0px';
+    stats.dom.style.left = 'auto';
+    stats.dom.style.zIndex = 1000;
+
     startSimulation();
   });
 
-
-  // stats.jsの初期化とDOM追加
-  stats = new Stats();
-  stats.showPanel(0);
-  document.body.appendChild(stats.dom);
-  // 右上に移動させる
-  stats.dom.style.position = 'fixed';
-  stats.dom.style.right = '0px';
-  stats.dom.style.top = '0px';
-  stats.dom.style.left = 'auto';
-  stats.dom.style.zIndex = 1000;
-
-  // 初期値をwasmに反映
-  if (
-    wasmModule &&
-    wasmModule.setGlobalSpeciesParamsFromJS
-  ) {
-    const raw = toRaw(settings);
-    wasmModule.setGlobalSpeciesParamsFromJS({
-      species: 'Boids',
-      count: Number(raw.count),
-      cohesion: Number(raw.cohesion),
-      separation: Number(raw.separation),
-      alignment: Number(raw.alignment),
-      maxSpeed: Number(raw.maxSpeed),
-      maxTurnAngle: Number(raw.maxTurnAngle),
-      separationRange: Number(raw.separationRange),
-      alignmentRange: Number(raw.alignmentRange),
-      cohesionRange: Number(raw.cohesionRange),
-      horizontalTorque: Number(raw.horizontalTorque),
-      torqueStrength: Number(raw.torqueStrength),
-      maxNeighbors: Number(raw.maxNeighbors),
-      lambda: Number(raw.lambda),
-      isPredator: Boolean(raw.isPredator)
-    }, 0.1);
-  }
-
-  // ② 捕食者種を登録（最後に登録されるので ID は globalSpeciesParams.size()-1）
-  wasmModule.setGlobalSpeciesParamsFromJS({
-    species: 'Predator',
-    count: 1,
-    cohesion: 0.0,                      // 捕食者には使わない
-    separation: 0.0,
-    alignment: 0.0,
-    maxSpeed: 1.0,                     // 速く逃げられるよう速度は大きめ
-    minSpeed: 0.5,
-    maxTurnAngle: 0.1,
-    separationRange: 0.0,
-    alignmentRange: 0.0,
-    cohesionRange: 0.0,
-    maxNeighbors: 0,
-    lambda: 0.0,
-    horizontalTorque: 0.0,
-    velocityEpsilon: 0.0,
-    torqueStrength: 0.0,
-    isPredator: true                // ← 捕食者フラグ
-  }, 0.1);
-
-  // ③ 通常どおりシミュレーション開始
-  startSimulation();
 
   window.addEventListener('keydown', handleKeydown);
 

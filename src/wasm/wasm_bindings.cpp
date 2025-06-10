@@ -88,7 +88,7 @@ EMSCRIPTEN_BINDINGS(my_module)
         .field("horizontalTorque", &SpeciesParams::horizontalTorque)
         .field("velocityEpsilon", &SpeciesParams::velocityEpsilon)
         .field("torqueStrength", &SpeciesParams::torqueStrength) 
-           .field("isPredator", &SpeciesParams::isPredator);
+        .field("isPredator", &SpeciesParams::isPredator);
 
     class_<Boid>("Boid")
         .constructor<>()
@@ -122,4 +122,6 @@ EMSCRIPTEN_BINDINGS(my_module)
 
 
     function("setGlobalSpeciesParamsFromJS", &setGlobalSpeciesParamsFromJS);
+
 }
+
