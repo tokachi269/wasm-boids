@@ -18,8 +18,13 @@ void setGlobalSpeciesParamsFromJS(const std::vector<SpeciesParams>& speciesParam
         BoidTree::instance().setGlobalSpeciesParams(scaledParams(params, spatialScale));
     }
 }
-void initBoidsFromJS(const std::vector<SpeciesParams>& speciesParamsList, float posRange, float velRange) {
-    BoidTree::instance().initializeBoids(speciesParamsList, posRange, velRange);
+void callInitBoids(const std::vector<SpeciesParams>& speciesParamsList, float spatialScale = 1.0f, float posRange = 1.0f, float velRange = 1.0f) {
+    std::vector<SpeciesParams> scaledList;
+    scaledList.reserve(speciesParamsList.size());
+    for (const auto& params : speciesParamsList) {
+        scaledList.push_back(scaledParams(params, spatialScale));
+    }
+    BoidTree::instance().initializeBoids(scaledList, posRange, velRange);
 }
 EMSCRIPTEN_BINDINGS(my_module)
 {
@@ -79,6 +84,6 @@ value_object<SpeciesParams>("SpeciesParams")
     register_vector<SpeciesParams>("VectorSpeciesParams");
 
     function("setGlobalSpeciesParamsFromJS", &setGlobalSpeciesParamsFromJS);
-    function("callInitBoids", &initBoidsFromJS); // 新しい関数を登録
+    function("callInitBoids", &callInitBoids); // 新しい関数を登録
 }
 

@@ -58,14 +58,16 @@ BoidTree::BoidTree()
 void printTree(const BoidUnit *node, int depth) {
   if (!node)
     return;
+  emscripten::val console = emscripten::val::global("console");
 
   std::string indent(depth * 2, ' ');
-  std::cout << indent << "Level: " << node->level
-            << " | Boids: " << node->indices.size() // indices を参照
-            << " | Children: " << node->children.size() << " | Center: ("
-            << node->center.x << ", " << node->center.y << ", "
-            << node->center.z << ")"
-            << " | Radius: " << node->radius << '\n';
+  console.call<void>("log", indent + "Level: " + std::to_string(node->level) +
+                          " | Boids: " + std::to_string(node->indices.size()) +
+                          " | Children: " + std::to_string(node->children.size()) +
+                          " | Center: (" + std::to_string(node->center.x) + ", " +
+                          std::to_string(node->center.y) + ", " +
+                          std::to_string(node->center.z) + ")" +
+                          " | Radius: " + std::to_string(node->radius));
 
   for (const auto *child : node->children)
     printTree(child, depth + 1);
@@ -85,6 +87,10 @@ void BoidTree::build(int maxPerUnit, int level) {
   std::iota(indices.begin(), indices.end(), 0);
 
   buildRecursive(root, indices, maxPerUnit, level);
+    emscripten::val console = emscripten::val::global("console");
+  // console.call<void>("log", std::string("printTree called."));
+  // printTree(root, 0);
+
 }
 
 void BoidTree::buildRecursive(BoidUnit *node, const std::vector<int> &indices,

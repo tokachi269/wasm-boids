@@ -4,7 +4,9 @@
       <h1>Boids Simulation</h1>
       <details>
         <summary>Settings</summary>
-        <Settings :settings="settings" />
+        <div v-for="(s, i) in settings" :key="i">
+          <Settings :settings="s" />
+        </div>
         <button @click="resetSettings" style="margin-bottom:1em;">リセット</button>
         <div>
           <label>
@@ -105,15 +107,18 @@ const DEFAULT_SETTINGS = [{
 }];
 
 function loadSettings() {
-  const saved = localStorage.getItem('boids_settings');
-  if (saved) {
-    try {
-      return JSON.parse(saved); // 配列として保存されていることを期待
-    } catch {
-      return DEFAULT_SETTINGS; // 配列をそのまま返す
+  try {
+    const saved = localStorage.getItem('boids_settings');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) {
+        return parsed; // 配列として保存されている場合のみ返す
+      }
     }
+  } catch (error) {
+    console.error('Failed to load settings from localStorage:', error);
   }
-  return DEFAULT_SETTINGS; // 配列をそのまま返す
+  return DEFAULT_SETTINGS; // デフォルト値を返す
 }
 
 const settings = reactive(loadSettings());
@@ -541,7 +546,7 @@ function startSimulation() {
     });
   });
   // callInitBoids に渡す（この vector は C++ 側で vector<SpeciesParams> になる）
-  wasmModule.callInitBoids(vector, 6, 0.25);
+  wasmModule.callInitBoids(vector, 0.1, 6, 0.25);
   build(16, 0);
   initInstancedBoids(settings.reduce((sum, s) => sum + s.count, 0));
   animate();
@@ -575,10 +580,39 @@ function isMobileDevice() {
 }
 // settingsの変更をwasmModuleに反映
 watch(
-  () => toRaw(settings), // settings 全体を監視
-  (newSettings) => {
+  settings,
+  (val) => {
+    console.log('Settings changed:', val);
     if (wasmModule && wasmModule.setGlobalSpeciesParamsFromJS) {
-      wasmModule.setGlobalSpeciesParamsFromJS(newSettings, 0.1);
+      const vector = new wasmModule.VectorSpeciesParams();
+
+      settings.forEach((s) => {
+        vector.push_back({
+          species: s.species || "default",
+          count: s.count || 0,
+          cohesion: s.cohesion || 0.0,
+          separation: s.separation || 0.0,
+          alignment: s.alignment || 0.0,
+          maxSpeed: s.maxSpeed || 1.0,
+          minSpeed: s.minSpeed || 0.1, // デフォルト値を補完
+          maxTurnAngle: s.maxTurnAngle || 0.0,
+          separationRange: s.separationRange || 0.0,
+          alignmentRange: s.alignmentRange || 0.0,
+          cohesionRange: s.cohesionRange || 0.0,
+          maxNeighbors: s.maxNeighbors || 0,
+          lambda: s.lambda || 0.0,
+          horizontalTorque: s.horizontalTorque || 0.0,
+          velocityEpsilon: s.velocityEpsilon || 0.0,
+          torqueStrength: s.torqueStrength || 0.0,
+          isPredator: s.isPredator || false,
+        });
+      });
+      wasmModule.setGlobalSpeciesParamsFromJS(vector, 0.1);
+      try {
+        localStorage.setItem('boids_settings', JSON.stringify(toRaw(newSettings)));
+      } catch (error) {
+        console.error('Failed to save settings to localStorage:', error);
+      }
     }
   },
   { deep: true } // 深い変更も監視
@@ -597,16 +631,9 @@ watch(
   }
 );
 
-watch(
-  settings,
-  (val) => {
-    localStorage.setItem('boids_settings', JSON.stringify(toRaw(val)));
-  },
-  { deep: true }
-);
-
 function resetSettings() {
-  Object.assign(settings, DEFAULT_SETTINGS);
+  settings.length = 0;
+  DEFAULT_SETTINGS.forEach(s => settings.push({ ...s }));
 }
 </script>
 

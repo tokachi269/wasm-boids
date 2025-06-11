@@ -88,22 +88,13 @@
   </div>
 </template>
 
-<script>
-import { toRefs } from 'vue';
-
-export default {
-  props: {
-    settings: {
-      type: Object,
-      required: true,
-    },
-  },
-  setup(props) {
-    // props をリアクティブに変換
-    const { settings } = toRefs(props);
-    return { settings };
-  },
-};
+<script setup>
+defineProps({
+  settings: {
+    type: Object,
+    required: true
+  }
+});
 </script>
 
 <style scoped>
