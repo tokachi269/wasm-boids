@@ -55,7 +55,6 @@ const posPtr = wasmModule.cwrap('posPtr', 'number', [])
 const velPtr = wasmModule.cwrap('velPtr', 'number', [])
 const oriPtr = wasmModule.cwrap('oriPtr', 'number', [])
 const boidCount = wasmModule.cwrap('boidCount', 'number', [])
-const initBoids = wasmModule.cwrap('initBoids', 'void', ['number', 'number'])
 const build = wasmModule.cwrap('build', 'void', ['number', 'number'])
 const update = wasmModule.cwrap('update', 'void', ['number'])
 const setFlockSize = wasmModule.cwrap('setFlockSize', 'void', ['number', 'number', 'number'])
@@ -109,12 +108,12 @@ function loadSettings() {
   const saved = localStorage.getItem('boids_settings');
   if (saved) {
     try {
-      return { ...DEFAULT_SETTINGS, ...JSON.parse(saved) };
+      return JSON.parse(saved); // 配列として保存されていることを期待
     } catch {
-      return { ...DEFAULT_SETTINGS };
+      return DEFAULT_SETTINGS; // 配列をそのまま返す
     }
   }
-  return { ...DEFAULT_SETTINGS };
+  return DEFAULT_SETTINGS; // 配列をそのまま返す
 }
 
 const settings = reactive(loadSettings());
@@ -517,59 +516,37 @@ function drawTreeStructure(treeData) {
 }
 function startSimulation() {
   console.log('settings:', toRaw(settings));
-  callInitBoids( toRaw(settings), 6, 0.25);
+
+  // WebAssembly モジュール用に SpeciesParams を初期化
+  const vector = new wasmModule.VectorSpeciesParams();
+  settings.forEach((s) => {
+    vector.push_back({
+      species: s.species || "default",
+      count: s.count || 0,
+      cohesion: s.cohesion || 0.0,
+      separation: s.separation || 0.0,
+      alignment: s.alignment || 0.0,
+      maxSpeed: s.maxSpeed || 1.0,
+      minSpeed: s.minSpeed || 0.1, // デフォルト値を補完
+      maxTurnAngle: s.maxTurnAngle || 0.0,
+      separationRange: s.separationRange || 0.0,
+      alignmentRange: s.alignmentRange || 0.0,
+      cohesionRange: s.cohesionRange || 0.0,
+      maxNeighbors: s.maxNeighbors || 0,
+      lambda: s.lambda || 0.0,
+      horizontalTorque: s.horizontalTorque || 0.0,
+      velocityEpsilon: s.velocityEpsilon || 0.0,
+      torqueStrength: s.torqueStrength || 0.0,
+      isPredator: s.isPredator || false,
+    });
+  });
+  // callInitBoids に渡す（この vector は C++ 側で vector<SpeciesParams> になる）
+  wasmModule.callInitBoids(vector, 6, 0.25);
   build(16, 0);
-  initInstancedBoids(settings.count + 1);
+  initInstancedBoids(settings.reduce((sum, s) => sum + s.count, 0));
   animate();
 }
 
-function callInitBoids(speciesArray, posRange, velRange) {
-  const structSize = 24; // SpeciesParams のバイト数（6 * 4）
-
-  const count = speciesArray.length;
-  const totalSize = count * structSize;
-  const ptr = Module._malloc(totalSize);
-
-  const view = new DataView(Module.HEAPU8.buffer, ptr, totalSize);
-
-  for (let i = 0; i < count; ++i) {
-    const offset = i * structSize;
-    const s = speciesArray[i];
-
-    view.setInt32(offset + 0, s.species, true);     // species ID
-    view.setInt32(offset + 4, s.count, true);       // 個体数
-    view.setFloat32(offset + 8, s.separation, true);
-    view.setFloat32(offset + 12, s.alignment, true);
-    view.setFloat32(offset + 16, s.cohesion, true);
-    // 必要に応じて追加
-  }
-
-  Module._initBoidsRaw(ptr, count, posRange, velRange);
-  Module._free(ptr);
-}
-// `setSpeciesParams` を呼び出す関数
-function updateSpeciesParams() {
-  if (wasmModule && wasmModule.setSpeciesParams) {
-    const raw = toRaw(settings);
-    setSpeciesParams({
-      cohesion: Number(raw.cohesion ?? -1),
-      separation: Number(raw.separation ?? -1),
-      alignment: Number(raw.alignment ?? -1),
-      maxSpeed: Number(raw.maxSpeed ?? -1),
-      minSpeed: Number(raw.minSpeed ?? -1),
-      maxTurnAngle: Number(raw.maxTurnAngle ?? -1),
-      separationRange: Number(raw.separationRange ?? -1),
-      alignmentRange: Number(raw.alignmentRange ?? -1),
-      cohesionRange: Number(raw.cohesionRange ?? -1),
-      maxNeighbors: Number(raw.maxNeighbors ?? -1),
-      lambda: Number(raw.lambda ?? -1),
-      horizontalTorque: Number(raw.horizontalTorque ?? -1),
-      velocityEpsilon: Number(raw.velocityEpsilon ?? -1),
-      torqueStrength: Number(raw.torqueStrength ?? -1),
-      isPredator: Boolean(raw.isPredator ?? false)
-    }, 0.1);
-  }
-}
 onMounted(() => {
   initThreeJS();
   loadBoidModel(() => {
@@ -598,49 +575,13 @@ function isMobileDevice() {
 }
 // settingsの変更をwasmModuleに反映
 watch(
-  () => [
-    settings.species,
-    settings.count,
-    settings.cohesion,
-    settings.separation,
-    settings.alignment,
-    settings.maxSpeed,
-    settings.maxTurnAngle,
-    settings.separationRange,
-    settings.alignmentRange,
-    settings.cohesionRange,
-    settings.maxNeighbors,
-    settings.lambda,
-    settings.horizontalTorque,
-    settings.velocityEpsilon,
-    settings.torqueStrength,
-    settings.isPredator
-  ],
-  () => {
-    if (
-      wasmModule &&
-      wasmModule.setGlobalSpeciesParamsFromJS
-    ) {
-      const raw = toRaw(settings);
-      wasmModule.setGlobalSpeciesParamsFromJS({
-        species: raw.species,
-        count: Number(raw.count),
-        cohesion: Number(raw.cohesion),
-        separation: Number(raw.separation),
-        alignment: Number(raw.alignment),
-        maxSpeed: Number(raw.maxSpeed),
-        maxTurnAngle: Number(raw.maxTurnAngle),
-        separationRange: Number(raw.separationRange),
-        alignmentRange: Number(raw.alignmentRange),
-        cohesionRange: Number(raw.cohesionRange),
-        horizontalTorque: Number(raw.horizontalTorque),
-        torqueStrength: Number(raw.torqueStrength),
-        maxNeighbors: Number(raw.maxNeighbors),
-        lambda: Number(raw.lambda),
-        isPredator: Boolean(raw.isPredator)
-      }, 0.1);
+  () => toRaw(settings), // settings 全体を監視
+  (newSettings) => {
+    if (wasmModule && wasmModule.setGlobalSpeciesParamsFromJS) {
+      wasmModule.setGlobalSpeciesParamsFromJS(newSettings, 0.1);
     }
-  }
+  },
+  { deep: true } // 深い変更も監視
 );
 
 // flockSizeの変更を監視

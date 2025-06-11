@@ -8,11 +8,6 @@ void Entry::run() {
 }
 
 extern "C" {
-void initBoidsRaw(uintptr_t speciesPtr, int count, float pr, float vr) {
-  const auto* rawArray = reinterpret_cast<const SpeciesParams*>(speciesPtr);
-  std::vector<SpeciesParams> params(rawArray, rawArray + count);
-  BoidTree::instance().initializeBoids(params, pr, vr);
-}
 void build(int maxPerUnit = 16, int level = 0) {
   BoidTree::instance().build(maxPerUnit, level);
 }
