@@ -72,7 +72,7 @@ function fetchTreeStructure() {
 
 const DEFAULT_SETTINGS = [{
   species: 'Boids',         // 種族名
-  count: 500,             // 群れの数
+  count: 5000,             // 群れの数
   cohesion: 10,             // 凝集
   cohesionRange: 68,        // 凝集範囲
   separation: 3.11,         // 分離

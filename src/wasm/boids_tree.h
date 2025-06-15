@@ -17,7 +17,7 @@ public:
     std::vector<BoidUnit *> leafCache;
     int splitIndex = 0;
     int mergeIndex = 0;
-    int maxBoidsPerUnit = 32;
+    int maxBoidsPerUnit = 16;
     SoABuffers buf;              // 中央バッファに一本化
 
     BoidTree();

@@ -86,7 +86,7 @@ void BoidTree::build(int maxPerUnit, int level) {
     root = new BoidUnit();
     root->buf = &buf; // 中央バッファを共有
   }
-
+  maxBoidsPerUnit = maxPerUnit;
   root->level = level;
 
   // すべての Boid インデックスを作成
@@ -94,6 +94,7 @@ void BoidTree::build(int maxPerUnit, int level) {
   std::iota(indices.begin(), indices.end(), 0);
 
   buildRecursive(root, indices, maxPerUnit, level);
+  
   //   emscripten::val console = emscripten::val::global("console");
   // // console.call<void>("log", std::string("printTree called."));
   // // printTree(root, 0);
@@ -101,92 +102,104 @@ void BoidTree::build(int maxPerUnit, int level) {
 
 void BoidTree::buildRecursive(BoidUnit *node, const std::vector<int> &indices,
                               int maxPerUnit, int level) {
-  node->level = level;
+    node->level = level;
 
-  // 末端ノード（葉）の処理
-  if ((int)indices.size() <= maxPerUnit) {
-    // ユニット内の speciesId を確認
-    int firstSpeciesId = buf.speciesIds[indices[0]];
+    // 末端ノード（葉）の処理
+    if ((int)indices.size() <= maxPerUnit) {
+        // ユニット内の speciesId を確認
+        int firstSpeciesId = buf.speciesIds[indices[0]];
+        for (int i : indices) {
+            if (buf.speciesIds[i] != firstSpeciesId) {
+                throw std::runtime_error("Mixed speciesId in a single unit");
+            }
+        }
+
+        node->indices = indices;          // インデックスだけコピー
+        node->speciesId = firstSpeciesId; // speciesId を登録
+
+        // 再設定: buf->speciesIds
+        for (int gIdx : indices) {
+            buf.speciesIds[gIdx] = node->speciesId;
+        }
+
+        node->computeBoundingSphere();
+        return;
+    }
+
+    // speciesId ごとにインデックスを分割
+    std::unordered_map<int, std::vector<int>> speciesGroups;
     for (int i : indices) {
-      if (buf.speciesIds[i] != firstSpeciesId) {
-        throw std::runtime_error("Mixed speciesId in a single unit");
-      }
+        speciesGroups[buf.speciesIds[i]].push_back(i);
     }
 
-    node->indices = indices;          // インデックスだけコピー
-    node->speciesId = firstSpeciesId; // speciesId を登録
+    // speciesId ごとに再帰処理
+    for (const auto &[speciesId, groupIndices] : speciesGroups) {
+        if (groupIndices.size() <= maxPerUnit) {
+            // 新しいユニットを作成
+            auto *child = new BoidUnit();
+            child->buf = node->buf;
+            child->indices = groupIndices;
+            child->speciesId = speciesId;
+
+            // 再設定: buf->speciesIds
+            for (int gIdx : groupIndices) {
+                buf.speciesIds[gIdx] = child->speciesId;
+            }
+
+            child->computeBoundingSphere();
+            node->children.push_back(child);
+        } else {
+            // 通常の空間分割処理
+            float mean[3] = {0}, var[3] = {0};
+            for (int i : groupIndices) {
+                const glm::vec3 &p = buf.positions[i];
+                mean[0] += p.x;
+                mean[1] += p.y;
+                mean[2] += p.z;
+            }
+            for (int k = 0; k < 3; ++k)
+                mean[k] /= groupIndices.size();
+
+            for (int i : groupIndices) {
+                const glm::vec3 &p = buf.positions[i];
+                var[0] += (p.x - mean[0]) * (p.x - mean[0]);
+                var[1] += (p.y - mean[1]) * (p.y - mean[1]);
+                var[2] += (p.z - mean[2]) * (p.z - mean[2]);
+            }
+            int axis = (var[1] > var[0]) ? 1 : 0;
+            if (var[2] > var[axis])
+                axis = 2;
+
+            // インデックスをソートして 2 つに分割
+            std::vector<int> sorted = groupIndices;
+            std::sort(sorted.begin(), sorted.end(), [this, axis](int a, int b) {
+                const glm::vec3 &pa = buf.positions[a];
+                const glm::vec3 &pb = buf.positions[b];
+                return (axis == 0)   ? pa.x < pb.x
+                       : (axis == 1) ? pa.y < pb.y
+                                     : pa.z < pb.z;
+            });
+            std::size_t mid = sorted.size() / 2;
+            std::vector<int> left(sorted.begin(), sorted.begin() + mid);
+            std::vector<int> right(sorted.begin() + mid, sorted.end());
+
+            // 子ノードを生成して中央バッファを共有
+            auto *leftChild = new BoidUnit();
+            auto *rightChild = new BoidUnit();
+            leftChild->buf = node->buf;
+            rightChild->buf = node->buf;
+            node->children.push_back(leftChild);
+            node->children.push_back(rightChild);
+
+            // 再帰処理
+            buildRecursive(leftChild, left, maxPerUnit, level + 1);
+            buildRecursive(rightChild, right, maxPerUnit, level + 1);
+        }
+    }
+
+    // 中間ノードには speciesId を設定しない
+    node->speciesId = -1; // -1 を設定して無効化
     node->computeBoundingSphere();
-    return;
-  }
-
-  // speciesId ごとにインデックスを分割
-  std::unordered_map<int, std::vector<int>> speciesGroups;
-  for (int i : indices) {
-    speciesGroups[buf.speciesIds[i]].push_back(i);
-  }
-
-  // speciesId ごとに再帰処理
-  for (const auto &[speciesId, groupIndices] : speciesGroups) {
-    if (groupIndices.size() <= maxPerUnit) {
-      // 新しいユニットを作成
-      auto *child = new BoidUnit();
-      child->buf = node->buf;
-      child->indices = groupIndices;
-      child->speciesId = speciesId;
-      child->computeBoundingSphere();
-      node->children.push_back(child);
-    } else {
-      // 通常の空間分割処理
-      float mean[3] = {0}, var[3] = {0};
-      for (int i : groupIndices) {
-        const glm::vec3 &p = buf.positions[i];
-        mean[0] += p.x;
-        mean[1] += p.y;
-        mean[2] += p.z;
-      }
-      for (int k = 0; k < 3; ++k)
-        mean[k] /= groupIndices.size();
-
-      for (int i : groupIndices) {
-        const glm::vec3 &p = buf.positions[i];
-        var[0] += (p.x - mean[0]) * (p.x - mean[0]);
-        var[1] += (p.y - mean[1]) * (p.y - mean[1]);
-        var[2] += (p.z - mean[2]) * (p.z - mean[2]);
-      }
-      int axis = (var[1] > var[0]) ? 1 : 0;
-      if (var[2] > var[axis])
-        axis = 2;
-
-      // インデックスをソートして 2 つに分割
-      std::vector<int> sorted = groupIndices;
-      std::sort(sorted.begin(), sorted.end(), [this, axis](int a, int b) {
-        const glm::vec3 &pa = buf.positions[a];
-        const glm::vec3 &pb = buf.positions[b];
-        return (axis == 0)   ? pa.x < pb.x
-               : (axis == 1) ? pa.y < pb.y
-                             : pa.z < pb.z;
-      });
-      std::size_t mid = sorted.size() / 2;
-      std::vector<int> left(sorted.begin(), sorted.begin() + mid);
-      std::vector<int> right(sorted.begin() + mid, sorted.end());
-
-      // 子ノードを生成して中央バッファを共有
-      auto *leftChild = new BoidUnit();
-      auto *rightChild = new BoidUnit();
-      leftChild->buf = node->buf;
-      rightChild->buf = node->buf;
-      node->children.push_back(leftChild);
-      node->children.push_back(rightChild);
-
-      // 再帰処理
-      buildRecursive(leftChild, left, maxPerUnit, level + 1);
-      buildRecursive(rightChild, right, maxPerUnit, level + 1);
-    }
-  }
-
-  // 中間ノードには speciesId を設定しない
-  node->speciesId = -1; // -1 を設定して無効化
-  node->computeBoundingSphere();
 }
 
 BoidUnit *BoidTree::findParent(BoidUnit *node, BoidUnit *target) {
@@ -225,11 +238,11 @@ void BoidTree::update(float dt) {
     mergeIndex = 0;
   }
 
-  // 一定フレームごとに木構造を再構築
-  if (frameCount % 17 == 0) { // 再構築頻度を調整
-    build(maxBoidsPerUnit, 0);
-    return;
-  }
+  //一定フレームごとに木構造を再構築
+  // if (frameCount % 17 == 0) { // 再構築頻度を調整
+  //   build(maxBoidsPerUnit, 0);
+  //   return;
+  // }
 
   // 分割と結合の処理
   if (!leafCache.empty()) {

@@ -18,7 +18,7 @@ class BoidUnit
 {
 public:
     static constexpr int MAX_BOIDS = 16;     // Boid数の上限（local index）
-    int speciesId = 0;
+    int speciesId = -1;
     SoABuffers *buf = nullptr;
     std::vector<int> indices;
 

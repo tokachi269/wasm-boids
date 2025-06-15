@@ -9,7 +9,7 @@ inline SpeciesParams scaledParams(const SpeciesParams &src, float spatialScale)
 {
     SpeciesParams dst = src;
     dst.maxSpeed        *= spatialScale;
-   // dst.minSpeed        *= spatialScale;
+    dst.minSpeed        *= dst.maxSpeed * 0.1f;
     dst.separationRange *= spatialScale;
     dst.alignmentRange  *= spatialScale;
     dst.cohesionRange   *= spatialScale;
