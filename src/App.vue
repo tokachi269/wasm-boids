@@ -72,26 +72,26 @@ function fetchTreeStructure() {
 
 const DEFAULT_SETTINGS = [{
   species: 'Boids',         // 種族名
-  count: 5000,             // 群れの数
-  cohesion: 10,             // 凝集
-  cohesionRange: 68,        // 凝集範囲
-  separation: 3.11,         // 分離
-  separationRange: 10,      // 分離範囲
+  count: 10000,             // 群れの数
+  cohesion: 17.12,          // 凝集
+  cohesionRange: 5,         // 凝集範囲
+  separation: 1.91,         // 分離
+  separationRange: 3,       // 分離範囲
   alignment: 8,             // 整列
-  alignmentRange: 35,       // 整列範囲
-  maxSpeed: 0.39,           // 最大速度
-  maxTurnAngle: 0.034,      // 最大旋回角
+  alignmentRange: 6,        // 整列範囲
+  maxSpeed: 0.22,           // 最大速度
+  maxTurnAngle: 0.155,      // 最大旋回角
   maxNeighbors: 4,          // 最大近傍数
   lambda: 0.109,            // 吸引減衰 λ
-  horizontalTorque: 0.004,  // 水平化トルク
+  horizontalTorque: 0.2,    // 水平化トルク
   velocityEpsilon: 0.004,   // 速度閾値 ε
   torqueStrength: 3.398     // 回転トルク強度
 }, {
   species: 'Predator',
-  count: 1,
+  count: 0,
   cohesion: 0.0,                      // 捕食者には使わない
-  separation: 0.0,
-  alignment: 0.0,
+  separation: 5.0,
+  alignment: 2.0,
   maxSpeed: 1.0,                     // 速く逃げられるよう速度は大きめ
   minSpeed: 0.5,
   maxTurnAngle: 0.1,
@@ -100,7 +100,8 @@ const DEFAULT_SETTINGS = [{
   cohesionRange: 0.0,
   maxNeighbors: 0,
   lambda: 0.0,
-  horizontalTorque: 0.0,
+  tau: 2.0, // 捕食者は常に追いかける
+  horizontalTorque: 0.2,
   velocityEpsilon: 0.0,
   torqueStrength: 0.0,
   isPredator: true                // ← 捕食者フラグ
@@ -458,11 +459,16 @@ function drawUnitTree(unit, layer = 0) {
 let positions, velocities, orientations;
 
 let predatorMarker = null; // Predator 用のマーカーを保持
+let lastTime = performance.now(); // 前回のフレームのタイムスタンプ
 
 function animate() {
   stats?.begin();
 
-  if (!paused.value) update(1.0);
+  const currentTime = performance.now(); // 現在のタイムスタンプ
+  const deltaTime = (currentTime - lastTime) / 1000; // 経過時間を秒単位で計算
+  lastTime = currentTime; // 次のフレームのために現在のタイムスタンプを保存
+
+  if (!paused.value) update(deltaTime);
 
   const count = boidCount();
   const heapF32 = wasmModule.HEAPF32.buffer;
@@ -477,7 +483,7 @@ function animate() {
     const predatorMarkerGeometry = new THREE.SphereGeometry(0.2, 16, 16);
     const predatorMarkerMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
     predatorMarker = new THREE.Mesh(predatorMarkerGeometry, predatorMarkerMaterial);
-    scene.add(predatorMarker);
+   // scene.add(predatorMarker);
   }
 
   // 最小限のマトリクス更新用バッファ（パフォーマンス重視）
@@ -545,7 +551,7 @@ function startSimulation() {
       separation: s.separation || 0.0,
       alignment: s.alignment || 0.0,
       maxSpeed: s.maxSpeed || 1.0,
-      minSpeed: s.minSpeed || 0.1, // デフォルト値を補完
+      minSpeed: s.minSpeed || 0.0, // デフォルト値を補完
       maxTurnAngle: s.maxTurnAngle || 0.0,
       separationRange: s.separationRange || 0.0,
       alignmentRange: s.alignmentRange || 0.0,
@@ -559,7 +565,7 @@ function startSimulation() {
     });
   });
   // callInitBoids に渡す（この vector は C++ 側で vector<SpeciesParams> になる）
-  wasmModule.callInitBoids(vector, 0.1, 6, 0.25);
+  wasmModule.callInitBoids(vector, 1, 6, 0.25);
   build(16, 0);
   initInstancedBoids(settings.reduce((sum, s) => sum + s.count, 0));
   animate();
@@ -606,7 +612,7 @@ watch(
           separation: s.separation || 0.0,
           alignment: s.alignment || 0.0,
           maxSpeed: s.maxSpeed || 1.0,
-          minSpeed: s.minSpeed || 0.1, // デフォルト値を補完
+          minSpeed: s.minSpeed || 0.0, // デフォルト値を補完
           maxTurnAngle: s.maxTurnAngle || 0.0,
           separationRange: s.separationRange || 0.0,
           alignmentRange: s.alignmentRange || 0.0,
@@ -619,7 +625,7 @@ watch(
           isPredator: s.isPredator || false,
         });
       });
-      wasmModule.setGlobalSpeciesParamsFromJS(vector, 0.1);
+      wasmModule.setGlobalSpeciesParamsFromJS(vector, 1);
       try {
         localStorage.setItem('boids_settings', JSON.stringify(toRaw(newSettings)));
       } catch (error) {

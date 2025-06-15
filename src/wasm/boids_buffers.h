@@ -18,6 +18,9 @@ struct SoABuffers
     std::vector<uint8_t> isAttracting; // 0: 吸引オフ, 1: 吸引オン
     std::vector<float> attractTimers;  // 吸引が続く残時間 (秒)
 
+    std::vector<int> predatorTargetIndices;   // 捕食者の捕食対象index
+    std::vector<float> predatorTargetTimers;  // 捕食者の捕食対象ターゲット残時間 (秒)
+
     std::unordered_map<int, std::unordered_map<int, float>> cohesionMemories;
 
     void reserveAll(std::size_t n)
@@ -31,6 +34,8 @@ struct SoABuffers
         isAttracting.reserve(n);
         attractTimers.reserve(n);
         orientations.reserve(n);
+        predatorTargetIndices.reserve(n);
+        predatorTargetTimers.reserve(n);
     }
 
     // Boid 数に合わせてフラグをクリア/サイズ調整
@@ -45,5 +50,7 @@ struct SoABuffers
         speciesIds.resize(n);
         isAttracting.resize(n, 0);
         attractTimers.resize(n, 0.0f);
+        predatorTargetIndices.resize(n, -1);
+        predatorTargetTimers.resize(n, 0.0f);
     }
 };

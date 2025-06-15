@@ -47,7 +47,7 @@
     </div>
     <div class="setting-row">
       <label>最大旋回角<br>(Max Turn Angle):</label>
-      <input type="range" v-model.number="settings.maxTurnAngle" min="0.001" max="0.2" step="0.001" />
+      <input type="range" v-model.number="settings.maxTurnAngle" min="0.001" max="0.3" step="0.001" />
       <span>{{ settings.maxTurnAngle }}</span>
     </div>
     <div class="setting-row">
@@ -62,7 +62,7 @@
     </div>
     <div class="setting-row">
       <label>水平化トルク<br>(Horizontal Torque):</label>
-      <input type="range" v-model.number="settings.horizontalTorque" min="0.0" max="0.2" step="0.001" />
+      <input type="range" v-model.number="settings.horizontalTorque" min="0.0" max="1" step="0.001" />
       <span>{{ settings.horizontalTorque }}</span>
     </div>
     <div class="setting-row">

@@ -9,6 +9,7 @@
 #include <glm/gtx/norm.hpp>
 #include <glm/gtx/rotate_vector.hpp>
 #include <glm/gtx/string_cast.hpp>
+#include <random>
 #include <stack>
 #include <vector>
 
@@ -159,7 +160,7 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
         buf->accelerations[idxA] +=
             (sumPos / float(cnt) - buf->positions[idxA]) * selfParams.cohesion;
         buf->accelerations[idxA] += sep * (selfParams.separation * 0.5f);
-        // buf->accelerations[idxA] += escape * 0.8f;
+        buf->accelerations[idxA] += escape * 0.8f;
       }
     }
   }
@@ -266,7 +267,8 @@ void BoidUnit::updateRecursive(float dt) {
         //           std::to_string(globalSpeciesParams[sid].lambda) +
         //           ", tau: " + std::to_string(globalSpeciesParams[sid].tau) +
         //           ", isPredator: " +
-        //           std::to_string(globalSpeciesParams[sid].isPredator) + " }");
+        //           std::to_string(globalSpeciesParams[sid].isPredator) + "
+        //           }");
 
         //   console.call<void>(
         //       "log", "Boid Index: " + std::to_string(gIdx) +
@@ -340,7 +342,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
   glm::vec3 pos;
   glm::vec3 vel;
   int sid = -1; // ← Boidごとの種族IDを取得
-
+  static std::mt19937 rng{std::random_device{}()};
   // -----------------------------------------------
   // 事前計算しておく定数／準備
   // -----------------------------------------------
@@ -389,6 +391,73 @@ void BoidUnit::computeBoidInteraction(float dt) {
 
     // 「距離候補リスト」は毎回クリア
     candidates.clear();
+    if (globalSpeciesParams[sid].isPredator) {
+      int &tgtIdx = buf->predatorTargetIndices[gIdx];
+      float &tgtTime = buf->predatorTargetTimers[gIdx];
+      // console.call<void>(
+      //     "log", "1Predator " + std::to_string(gIdx) +
+      //                " checking target index: " + std::to_string(tgtIdx) +
+      //                ", time left: " + std::to_string(tgtTime) +
+      //                ", dt: " + std::to_string(dt));
+
+      // ── 追跡ターゲットが切れたら新規取得 ─────────────
+      if (tgtTime <= 0.0f || tgtIdx < 0 ||
+          globalSpeciesParams[buf->speciesIds[tgtIdx]].isPredator) {
+        if (tgtTime <= -globalSpeciesParams[sid]
+                            .tau) { // 一定時間経過後に新しいターゲットを選択
+          // console.call<void>(
+          //     "log", "Predator " + std::to_string(gIdx) +
+          //                " checking target index: " + std::to_string(tgtIdx) +
+          //                ", time left: " + std::to_string(tgtTime));
+
+          // ① 親ユニットの子ノードから近いユニットを探索
+          std::vector<BoidUnit *> candidateUnits;
+          if (parent) {
+            for (BoidUnit *unit : parent->children) {
+              if (unit == this)
+                continue;
+              float d2 = glm::length2(unit->center - center);
+              if (d2 < 100.0f) {
+                candidateUnits.push_back(unit);
+              }
+            }
+          }
+
+          // ② 候補ユニット内の Boid をランダムに選択
+          if (!candidateUnits.empty()) {
+            std::uniform_int_distribution<int> unitDist(
+                0, static_cast<int>(candidateUnits.size() - 1));
+            BoidUnit *selectedUnit = candidateUnits[unitDist(rng)];
+
+            if (!selectedUnit->indices.empty()) {
+              std::uniform_int_distribution<int> boidDist(
+                  0, static_cast<int>(selectedUnit->indices.size() - 1));
+              tgtIdx = selectedUnit->indices[boidDist(rng)];
+              tgtTime = globalSpeciesParams[sid].tau; // 追跡時間リセット
+            } else {
+              tgtIdx = -1;
+              tgtTime = 0.0f;
+            }
+          }
+        }
+      }
+
+      if (tgtIdx >= 0) {
+        tgtTime -= dt; // 減少速度を調整
+        glm::vec3 diff = buf->positions[tgtIdx] - pos;
+        float d2 = glm::dot(diff, diff);
+        if (d2 > EPS) {
+          // console.call<void>(
+          //     "log", "Predator " + std::to_string(gIdx) + " chasing target " +
+          //                std::to_string(tgtIdx) +
+          //                ", distance: " + std::to_string(std::sqrt(d2)));
+          glm::vec3 desiredVel =
+              glm::normalize(diff) * globalSpeciesParams[sid].maxSpeed;
+          buf->accelerations[gIdx] +=
+              (desiredVel - vel) * globalSpeciesParams[sid].lambda;
+        }
+      }
+    }
 
     // -------------------------------------------------------
     // ❷ 時間更新＆古くなった記憶の無効化
@@ -746,6 +815,12 @@ void BoidUnit::splitInPlace(int maxBoids) {
 
   auto splits = splitByClustering(4);
 
+  for (auto *child : splits) {
+    child->parent = this;         // 親ノードを設定
+    child->topParent = topParent; // トップノードを継承
+    children.push_back(child);
+  }
+
   // 自分は中間ノードになるので indices を空に
   indices.clear();
 
@@ -902,6 +977,9 @@ void BoidUnit::mergeWith(BoidUnit *other, BoidUnit *parent) {
   for (int gIdx : other->indices) {
     buf->speciesIds[gIdx] = speciesId; // 自ノードの speciesId を適用
   }
+  // 親とトップを設定
+  this->parent = parent;
+  this->topParent = parent ? parent->topParent : this;
 
   // 自ノードを葉に戻す
   children.clear();
