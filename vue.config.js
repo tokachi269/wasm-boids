@@ -3,7 +3,6 @@ const CopyWebpackPlugin = require('copy-webpack-plugin');
 const path = require('path');
 
 module.exports = defineConfig({
-     publicPath: process.env.NODE_ENV === 'production' ? '/wasm-boids/' : '',
     filenameHashing: true,
     transpileDependencies: true,
     devServer: {
@@ -46,7 +45,7 @@ module.exports = defineConfig({
                 ],
             }),
         ],
-         resolve: {
+        resolve: {
             fallback: {
                 fs: false,
                 path: require.resolve("path-browserify"),

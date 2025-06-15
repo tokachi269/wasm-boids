@@ -3,16 +3,11 @@
 #include "scale_utils.h"
 #include <iostream>
 
-
 void Entry::run() {
   std::cout << "WebAssembly entry point initialized!" << std::endl;
 }
 
 extern "C" {
-
-void initBoids(int n, float pr, float vr) {
-  BoidTree::instance().initializeBoids(n, pr, vr);
-}
 void build(int maxPerUnit = 16, int level = 0) {
   BoidTree::instance().build(maxPerUnit, level);
 }
@@ -32,6 +27,6 @@ void setFlockSize(int newSize, float posRange, float velRange) {
  */
 void setSpeciesParams(const SpeciesParams &params,
                       float spatialScale /*=1.0f*/) {
-  setGlobalSpeciesParams(scaledParams(params, spatialScale));
+  BoidTree::instance().setGlobalSpeciesParams(scaledParams(params, spatialScale));
 }
 }

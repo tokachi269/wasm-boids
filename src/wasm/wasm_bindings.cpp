@@ -1,5 +1,4 @@
 #define GLM_ENABLE_EXPERIMENTAL
-#include <emscripten/bind.h>
 #include "boids_tree.h"
 #include "boid.h"
 #include "species_params.h"
@@ -7,45 +6,26 @@
 #include <glm/gtx/norm.hpp>
 #include <glm/gtx/rotate_vector.hpp>
 #include "scale_utils.h"
+#include <stdexcept>
+#include <emscripten/bind.h>
 
 using namespace emscripten;
 
-// JSオブジェクトからグローバルパラメータをセット（undefinedなら現状維持）
-void setGlobalSpeciesParamsFromJS(val jsObj, float spatialScale = 1.0f)
+void setGlobalSpeciesParamsFromJS(const std::vector<SpeciesParams>& speciesParamsList, float spatialScale = 1.0f)
 {
-    SpeciesParams params = getGlobalSpeciesParams();
-    if (!jsObj["cohesion"].isUndefined())
-        params.cohesion = jsObj["cohesion"].as<float>();
-    if (!jsObj["separation"].isUndefined())
-        params.separation = jsObj["separation"].as<float>();
-    if (!jsObj["alignment"].isUndefined())
-        params.alignment = jsObj["alignment"].as<float>();
-    if (!jsObj["maxSpeed"].isUndefined())
-        params.maxSpeed = jsObj["maxSpeed"].as<float>();
-    if (!jsObj["minSpeed"].isUndefined())
-        params.minSpeed = jsObj["minSpeed"].as<float>();
-    if (!jsObj["maxTurnAngle"].isUndefined())
-        params.maxTurnAngle = jsObj["maxTurnAngle"].as<float>();
-    if (!jsObj["separationRange"].isUndefined())
-        params.separationRange = jsObj["separationRange"].as<float>();
-    if (!jsObj["alignmentRange"].isUndefined())
-        params.alignmentRange = jsObj["alignmentRange"].as<float>();
-    if (!jsObj["cohesionRange"].isUndefined())
-        params.cohesionRange = jsObj["cohesionRange"].as<float>();
-    if (!jsObj["maxNeighbors"].isUndefined())
-        params.maxNeighbors = jsObj["maxNeighbors"].as<int>();
-    if (!jsObj["lambda"].isUndefined())
-        params.lambda = jsObj["lambda"].as<float>();
-    if (!jsObj["horizontalTorque"].isUndefined())
-        params.horizontalTorque = jsObj["horizontalTorque"].as<float>();
-    if (!jsObj["velocityEpsilon"].isUndefined())
-        params.velocityEpsilon = jsObj["velocityEpsilon"].as<float>();
-    if (!jsObj["torqueStrength"].isUndefined())
-        params.torqueStrength = jsObj["torqueStrength"].as<float>();
-      setGlobalSpeciesParams(scaledParams(params, spatialScale));
-
+    for (const auto& params : speciesParamsList) {
+        // スケール適用して登録
+        BoidTree::instance().setGlobalSpeciesParams(scaledParams(params, spatialScale));
+    }
 }
-
+void callInitBoids(const std::vector<SpeciesParams>& speciesParamsList, float spatialScale = 1.0f, float posRange = 1.0f, float velRange = 1.0f) {
+    std::vector<SpeciesParams> scaledList;
+    scaledList.reserve(speciesParamsList.size());
+    for (const auto& params : speciesParamsList) {
+        scaledList.push_back(scaledParams(params, spatialScale));
+    }
+    BoidTree::instance().initializeBoids(scaledList, posRange, velRange);
+}
 EMSCRIPTEN_BINDINGS(my_module)
 {
     value_object<glm::vec3>("Vec3")
@@ -53,21 +33,24 @@ EMSCRIPTEN_BINDINGS(my_module)
         .field("y", &glm::vec3::y)
         .field("z", &glm::vec3::z);
 
-    value_object<SpeciesParams>("SpeciesParams")
-        .field("cohesion", &SpeciesParams::cohesion)
-        .field("separation", &SpeciesParams::separation)
-        .field("alignment", &SpeciesParams::alignment)
-        .field("maxSpeed", &SpeciesParams::maxSpeed)
-        .field("minSpeed", &SpeciesParams::minSpeed)
-        .field("maxTurnAngle", &SpeciesParams::maxTurnAngle)
-        .field("separationRange", &SpeciesParams::separationRange)
-        .field("alignmentRange", &SpeciesParams::alignmentRange)
-        .field("cohesionRange", &SpeciesParams::cohesionRange)
-        .field("maxNeighbors", &SpeciesParams::maxNeighbors)
-        .field("lambda", &SpeciesParams::lambda)
-        .field("horizontalTorque", &SpeciesParams::horizontalTorque)
-        .field("velocityEpsilon", &SpeciesParams::velocityEpsilon)
-        .field("torqueStrength", &SpeciesParams::torqueStrength);
+value_object<SpeciesParams>("SpeciesParams")
+    .field("species", &SpeciesParams::species)
+    .field("count", &SpeciesParams::count)
+    .field("cohesion", &SpeciesParams::cohesion)
+    .field("separation", &SpeciesParams::separation)
+    .field("alignment", &SpeciesParams::alignment)
+    .field("maxSpeed", &SpeciesParams::maxSpeed)
+    .field("minSpeed", &SpeciesParams::minSpeed)
+    .field("maxTurnAngle", &SpeciesParams::maxTurnAngle)
+    .field("separationRange", &SpeciesParams::separationRange)
+    .field("alignmentRange", &SpeciesParams::alignmentRange)
+    .field("cohesionRange", &SpeciesParams::cohesionRange)
+    .field("maxNeighbors", &SpeciesParams::maxNeighbors)
+    .field("lambda", &SpeciesParams::lambda)
+    .field("horizontalTorque", &SpeciesParams::horizontalTorque)
+    .field("velocityEpsilon", &SpeciesParams::velocityEpsilon)
+    .field("torqueStrength", &SpeciesParams::torqueStrength)
+    .field("isPredator", &SpeciesParams::isPredator);
 
     class_<Boid>("Boid")
         .constructor<>()
@@ -87,6 +70,8 @@ EMSCRIPTEN_BINDINGS(my_module)
         .function("getVelocitiesPtr", &BoidTree::getVelocitiesPtr)
         .function("getBoidCount", &BoidTree::getBoidCount)
         .function("initializeBoids", &BoidTree::initializeBoids)
+        .function("getGlobalSpeciesParams", &BoidTree::getGlobalSpeciesParams)
+        .function("setGlobalSpeciesParams", &BoidTree::setGlobalSpeciesParams)
         .property("root", &BoidTree::root, allow_raw_pointers());
 
     class_<BoidUnit>("BoidUnit")
@@ -96,8 +81,9 @@ EMSCRIPTEN_BINDINGS(my_module)
 
     register_vector<Boid>("VectorBoid");
     register_vector<BoidUnit *>("VectorBoidUnit");
+    register_vector<SpeciesParams>("VectorSpeciesParams");
 
-    function("getGlobalSpeciesParams", &getGlobalSpeciesParams);
-    function("setGlobalSpeciesParams", &setGlobalSpeciesParams);
     function("setGlobalSpeciesParamsFromJS", &setGlobalSpeciesParamsFromJS);
+    function("callInitBoids", &callInitBoids); // 新しい関数を登録
 }
+

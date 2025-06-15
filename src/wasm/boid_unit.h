@@ -17,8 +17,10 @@ struct SoABuffers;
 class BoidUnit
 {
 public:
+    BoidUnit* parent = nullptr; // 親ノードへのポインタ
+    BoidUnit* topParent = nullptr; // 親ノードへのポインタ
     static constexpr int MAX_BOIDS = 16;     // Boid数の上限（local index）
-
+    int speciesId = -1;
     SoABuffers *buf = nullptr;
     std::vector<int> indices;
 
