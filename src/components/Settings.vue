@@ -46,11 +46,6 @@
       <span>{{ settings.maxSpeed }}</span>
     </div>
     <div class="setting-row">
-      <label>最小速度<br>(Min Speed):</label>
-      <input type="range" v-model.number="settings.minSpeed" min="0.1" max="2" step="0.01" />
-      <span>{{ settings.minSpeed }}</span>
-    </div>
-    <div class="setting-row">
       <label>最大旋回角<br>(Max Turn Angle):</label>
       <input type="range" v-model.number="settings.maxTurnAngle" min="0.001" max="0.2" step="0.001" />
       <span>{{ settings.maxTurnAngle }}</span>

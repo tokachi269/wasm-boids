@@ -72,7 +72,7 @@ function fetchTreeStructure() {
 
 const DEFAULT_SETTINGS = [{
   species: 'Boids',         // 種族名
-  count: 10000,             // 群れの数
+  count: 500,             // 群れの数
   cohesion: 10,             // 凝集
   cohesionRange: 68,        // 凝集範囲
   separation: 3.11,         // 分離
@@ -457,6 +457,8 @@ function drawUnitTree(unit, layer = 0) {
 }
 let positions, velocities, orientations;
 
+let predatorMarker = null; // Predator 用のマーカーを保持
+
 function animate() {
   stats?.begin();
 
@@ -470,6 +472,14 @@ function animate() {
   const identityMatrix = new THREE.Matrix4();
   const camPos = camera.position;
 
+  // Predator 用のマーカーを初期化（初回のみ）
+  if (!predatorMarker) {
+    const predatorMarkerGeometry = new THREE.SphereGeometry(0.2, 16, 16);
+    const predatorMarkerMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+    predatorMarker = new THREE.Mesh(predatorMarkerGeometry, predatorMarkerMaterial);
+    scene.add(predatorMarker);
+  }
+
   // 最小限のマトリクス更新用バッファ（パフォーマンス重視）
   for (let i = 0; i < count; ++i) {
     dummy.position.fromArray(positions, i * 3);
@@ -481,6 +491,11 @@ function animate() {
 
     (useHigh ? instancedMeshHigh : instancedMeshLow).setMatrixAt(i, dummy.matrix);
     (useHigh ? instancedMeshLow : instancedMeshHigh).setMatrixAt(i, identityMatrix);
+
+    // Predator の speciesId が 1 と仮定して強調表示
+    if (i === count - 1 && settings[1]?.isPredator) { // Predator のインデックスを仮定
+      predatorMarker.position.copy(dummy.position); // マーカーの位置を更新
+    }
   }
 
   instancedMeshHigh.instanceMatrix.needsUpdate = true;
@@ -520,8 +535,6 @@ function drawTreeStructure(treeData) {
   treeData.forEach((rootNode) => drawNode(rootNode));
 }
 function startSimulation() {
-  console.log('settings:', toRaw(settings));
-
   // WebAssembly モジュール用に SpeciesParams を初期化
   const vector = new wasmModule.VectorSpeciesParams();
   settings.forEach((s) => {
@@ -582,7 +595,6 @@ function isMobileDevice() {
 watch(
   settings,
   (val) => {
-    console.log('Settings changed:', val);
     if (wasmModule && wasmModule.setGlobalSpeciesParamsFromJS) {
       const vector = new wasmModule.VectorSpeciesParams();
 

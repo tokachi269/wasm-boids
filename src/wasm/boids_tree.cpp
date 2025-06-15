@@ -9,10 +9,11 @@
 #include <glm/gtx/rotate_vector.hpp>
 #include <glm/gtx/string_cast.hpp>
 #include <iostream>
+#include <mutex>
 #include <numeric>
 #include <random>
 #include <vector>
-#include <mutex>
+
 
 // グローバル共通
 std::vector<SpeciesParams> globalSpeciesParams; // 配列に変更
@@ -46,7 +47,7 @@ void BoidTree::setGlobalSpeciesParams(const SpeciesParams &params) {
     console.call<void>(
         "log", std::string("species: ") + sp.species + ", isPredator: (" +
                    (sp.isPredator ? "true" : "false") +
-                   "), cohesion: " + std::to_string(sp.cohesion));
+                   "), maxSpeed: " + std::to_string(sp.maxSpeed));
   }
 }
 
@@ -61,13 +62,19 @@ void printTree(const BoidUnit *node, int depth) {
   emscripten::val console = emscripten::val::global("console");
 
   std::string indent(depth * 2, ' ');
-  console.call<void>("log", indent + "Level: " + std::to_string(node->level) +
-                          " | Boids: " + std::to_string(node->indices.size()) +
-                          " | Children: " + std::to_string(node->children.size()) +
-                          " | Center: (" + std::to_string(node->center.x) + ", " +
-                          std::to_string(node->center.y) + ", " +
-                          std::to_string(node->center.z) + ")" +
-                          " | Radius: " + std::to_string(node->radius));
+  // speciesIdを出す
+  std::string speciesIdsStr;
+  speciesIdsStr = node->speciesId;
+
+  console.call<void>(
+      "log", indent + "Level: " + std::to_string(node->level) +
+                 " | Boids: " + std::to_string(node->indices.size()) +
+                 " | Children: " + std::to_string(node->children.size()) +
+                 " | Center: (" + std::to_string(node->center.x) + ", " +
+                 std::to_string(node->center.y) + ", " +
+                 std::to_string(node->center.z) + ")" +
+                 " | Radius: " + std::to_string(node->radius) +
+                 " | speciesIds: [" + std::to_string(node->speciesId) + "]");
 
   for (const auto *child : node->children)
     printTree(child, depth + 1);
@@ -87,10 +94,9 @@ void BoidTree::build(int maxPerUnit, int level) {
   std::iota(indices.begin(), indices.end(), 0);
 
   buildRecursive(root, indices, maxPerUnit, level);
-    emscripten::val console = emscripten::val::global("console");
-  // console.call<void>("log", std::string("printTree called."));
-  // printTree(root, 0);
-
+  //   emscripten::val console = emscripten::val::global("console");
+  // // console.call<void>("log", std::string("printTree called."));
+  // // printTree(root, 0);
 }
 
 void BoidTree::buildRecursive(BoidUnit *node, const std::vector<int> &indices,
@@ -99,54 +105,87 @@ void BoidTree::buildRecursive(BoidUnit *node, const std::vector<int> &indices,
 
   // 末端ノード（葉）の処理
   if ((int)indices.size() <= maxPerUnit) {
-    node->indices = indices; // インデックスだけコピー
+    // ユニット内の speciesId を確認
+    int firstSpeciesId = buf.speciesIds[indices[0]];
+    for (int i : indices) {
+      if (buf.speciesIds[i] != firstSpeciesId) {
+        throw std::runtime_error("Mixed speciesId in a single unit");
+      }
+    }
+
+    node->indices = indices;          // インデックスだけコピー
+    node->speciesId = firstSpeciesId; // speciesId を登録
     node->computeBoundingSphere();
     return;
   }
 
-  // 分割軸を決定するため平均と分散を計算
-  float mean[3] = {0}, var[3] = {0};
+  // speciesId ごとにインデックスを分割
+  std::unordered_map<int, std::vector<int>> speciesGroups;
   for (int i : indices) {
-    const glm::vec3 &p = buf.positions[i];
-    mean[0] += p.x;
-    mean[1] += p.y;
-    mean[2] += p.z;
+    speciesGroups[buf.speciesIds[i]].push_back(i);
   }
-  for (int k = 0; k < 3; ++k)
-    mean[k] /= indices.size();
 
-  for (int i : indices) {
-    const glm::vec3 &p = buf.positions[i];
-    var[0] += (p.x - mean[0]) * (p.x - mean[0]);
-    var[1] += (p.y - mean[1]) * (p.y - mean[1]);
-    var[2] += (p.z - mean[2]) * (p.z - mean[2]);
+  // speciesId ごとに再帰処理
+  for (const auto &[speciesId, groupIndices] : speciesGroups) {
+    if (groupIndices.size() <= maxPerUnit) {
+      // 新しいユニットを作成
+      auto *child = new BoidUnit();
+      child->buf = node->buf;
+      child->indices = groupIndices;
+      child->speciesId = speciesId;
+      child->computeBoundingSphere();
+      node->children.push_back(child);
+    } else {
+      // 通常の空間分割処理
+      float mean[3] = {0}, var[3] = {0};
+      for (int i : groupIndices) {
+        const glm::vec3 &p = buf.positions[i];
+        mean[0] += p.x;
+        mean[1] += p.y;
+        mean[2] += p.z;
+      }
+      for (int k = 0; k < 3; ++k)
+        mean[k] /= groupIndices.size();
+
+      for (int i : groupIndices) {
+        const glm::vec3 &p = buf.positions[i];
+        var[0] += (p.x - mean[0]) * (p.x - mean[0]);
+        var[1] += (p.y - mean[1]) * (p.y - mean[1]);
+        var[2] += (p.z - mean[2]) * (p.z - mean[2]);
+      }
+      int axis = (var[1] > var[0]) ? 1 : 0;
+      if (var[2] > var[axis])
+        axis = 2;
+
+      // インデックスをソートして 2 つに分割
+      std::vector<int> sorted = groupIndices;
+      std::sort(sorted.begin(), sorted.end(), [this, axis](int a, int b) {
+        const glm::vec3 &pa = buf.positions[a];
+        const glm::vec3 &pb = buf.positions[b];
+        return (axis == 0)   ? pa.x < pb.x
+               : (axis == 1) ? pa.y < pb.y
+                             : pa.z < pb.z;
+      });
+      std::size_t mid = sorted.size() / 2;
+      std::vector<int> left(sorted.begin(), sorted.begin() + mid);
+      std::vector<int> right(sorted.begin() + mid, sorted.end());
+
+      // 子ノードを生成して中央バッファを共有
+      auto *leftChild = new BoidUnit();
+      auto *rightChild = new BoidUnit();
+      leftChild->buf = node->buf;
+      rightChild->buf = node->buf;
+      node->children.push_back(leftChild);
+      node->children.push_back(rightChild);
+
+      // 再帰処理
+      buildRecursive(leftChild, left, maxPerUnit, level + 1);
+      buildRecursive(rightChild, right, maxPerUnit, level + 1);
+    }
   }
-  int axis = (var[1] > var[0]) ? 1 : 0;
-  if (var[2] > var[axis])
-    axis = 2;
 
-  // インデックスをソートして 2 つに分割
-  std::vector<int> sorted = indices;
-  std::sort(sorted.begin(), sorted.end(), [this, axis](int a, int b) {
-    const glm::vec3 &pa = buf.positions[a];
-    const glm::vec3 &pb = buf.positions[b];
-    return (axis == 0) ? pa.x < pb.x : (axis == 1) ? pa.y < pb.y : pa.z < pb.z;
-  });
-  std::size_t mid = sorted.size() / 2;
-  std::vector<int> left(sorted.begin(), sorted.begin() + mid);
-  std::vector<int> right(sorted.begin() + mid, sorted.end());
-
-  // 子ノードを生成して中央バッファを共有
-  auto *leftChild = new BoidUnit();
-  auto *rightChild = new BoidUnit();
-  leftChild->buf = node->buf;
-  rightChild->buf = node->buf;
-  node->children = {leftChild, rightChild};
-
-  // 再帰処理
-  buildRecursive(leftChild, left, maxPerUnit, level + 1);
-  buildRecursive(rightChild, right, maxPerUnit, level + 1);
-
+  // 中間ノードには speciesId を設定しない
+  node->speciesId = -1; // -1 を設定して無効化
   node->computeBoundingSphere();
 }
 
@@ -234,14 +273,18 @@ void BoidTree::trySplitRecursive(BoidUnit *node) {
   for (auto *c : node->children)
     trySplitRecursive(c);
 }
-   std::mutex coutMutex;
+std::mutex coutMutex;
 
-void BoidTree::initializeBoids(const std::vector<SpeciesParams> &speciesParamsList, float posRange, float velRange) {
-    emscripten::val console = emscripten::val::global("console");
-    console.call<void>("log", std::string("speciesParamsList size: ") + std::to_string(speciesParamsList.size()));
-    for (const auto& species : speciesParamsList) {
-        console.call<void>("log", std::string("Species: ") + species.species + ", Count: " + std::to_string(species.count));
-    }
+void BoidTree::initializeBoids(
+    const std::vector<SpeciesParams> &speciesParamsList, float posRange,
+    float velRange) {
+  emscripten::val console = emscripten::val::global("console");
+  console.call<void>("log", std::string("speciesParamsList size: ") +
+                                std::to_string(speciesParamsList.size()));
+  for (const auto &species : speciesParamsList) {
+    console.call<void>("log", std::string("Species: ") + species.species +
+                                  ", Count: " + std::to_string(species.count));
+  }
 
   // globalSpeciesParams を更新
   try {
