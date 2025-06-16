@@ -324,7 +324,7 @@ void BoidTree::initializeBoids(
   buf.speciesIds.resize(totalCount);
   buf.predatorTargetIndices.resize(totalCount);
   buf.predatorTargetTimers.resize(totalCount);
-
+  
   // 各種族の個体を生成
   int offset = 0;
   std::random_device rd;

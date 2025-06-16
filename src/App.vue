@@ -73,35 +73,35 @@ function fetchTreeStructure() {
 const DEFAULT_SETTINGS = [{
   species: 'Boids',         // 種族名
   count: 10000,             // 群れの数
-  cohesion: 17.12,          // 凝集
-  cohesionRange: 5,         // 凝集範囲
-  separation: 1.91,         // 分離
-  separationRange: 3,       // 分離範囲
+  cohesion: 12,             // 凝集
+  cohesionRange: 10,        // 凝集範囲
+  separation: 5,            // 分離
+  separationRange: 10,      // 分離範囲
   alignment: 8,             // 整列
   alignmentRange: 6,        // 整列範囲
   maxSpeed: 0.22,           // 最大速度
   maxTurnAngle: 0.155,      // 最大旋回角
   maxNeighbors: 4,          // 最大近傍数
   lambda: 0.109,            // 吸引減衰 λ
-  horizontalTorque: 0.2,    // 水平化トルク
+  horizontalTorque: 0.024,  // 水平化トルク
   velocityEpsilon: 0.004,   // 速度閾値 ε
   torqueStrength: 3.398     // 回転トルク強度
 }, {
   species: 'Predator',
-  count: 0,
-  cohesion: 0.0,                      // 捕食者には使わない
-  separation: 5.0,
-  alignment: 2.0,
-  maxSpeed: 1.0,                     // 速く逃げられるよう速度は大きめ
-  minSpeed: 0.5,
-  maxTurnAngle: 0.1,
-  separationRange: 0.0,
-  alignmentRange: 0.0,
-  cohesionRange: 0.0,
+  count: 1,
+  cohesion: 5.58,                     // 捕食者には使わない
+  separation: 0.0,
+  alignment: 0.0,
+  maxSpeed: 0.66,                     // 速く逃げられるよう速度は大きめ
+  minSpeed: 0.4,
+  maxTurnAngle: 0.221,
+  separationRange: 14.0,
+  alignmentRange: 11.0,
+  cohesionRange: 77.0,
   maxNeighbors: 0,
-  lambda: 0.0,
+  lambda: 0.041,
   tau: 2.0, // 捕食者は常に追いかける
-  horizontalTorque: 0.2,
+  horizontalTorque: 0.022,
   velocityEpsilon: 0.0,
   torqueStrength: 0.0,
   isPredator: true                // ← 捕食者フラグ
@@ -483,7 +483,7 @@ function animate() {
     const predatorMarkerGeometry = new THREE.SphereGeometry(0.2, 16, 16);
     const predatorMarkerMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
     predatorMarker = new THREE.Mesh(predatorMarkerGeometry, predatorMarkerMaterial);
-   // scene.add(predatorMarker);
+    scene.add(predatorMarker);
   }
 
   // 最小限のマトリクス更新用バッファ（パフォーマンス重視）

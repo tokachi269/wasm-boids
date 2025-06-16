@@ -11,7 +11,7 @@ struct SoABuffers
     std::vector<glm::vec3, A16<glm::vec3>> velocities;
     std::vector<glm::vec3, A16<glm::vec3>> accelerations;
     std::vector<glm::quat, A16<glm::quat>> orientations;
-
+    std::vector<glm::vec3, A16<glm::vec3>> predatorInfluences;
     std::vector<int> ids;
     std::vector<float> stresses;
     std::vector<int> speciesIds;
@@ -36,6 +36,7 @@ struct SoABuffers
         orientations.reserve(n);
         predatorTargetIndices.reserve(n);
         predatorTargetTimers.reserve(n);
+        predatorInfluences.reserve(n);
     }
 
     // Boid 数に合わせてフラグをクリア/サイズ調整
@@ -52,5 +53,6 @@ struct SoABuffers
         attractTimers.resize(n, 0.0f);
         predatorTargetIndices.resize(n, -1);
         predatorTargetTimers.resize(n, 0.0f);
+        predatorInfluences.resize(n, glm::vec3(0.0f));
     }
 };
