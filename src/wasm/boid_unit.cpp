@@ -114,20 +114,70 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
     // 再構築頻度でない場合は何もしない
     return;
   }
+
+  // 捕食者ユニットなら、トップ階層から木構造を使って再帰的に探索する
+  if (isBoidUnit() && globalSpeciesParams[speciesId].isPredator) {
+    // トップ階層から探索を開始
+    BoidUnit *root = this->topParent ? this->topParent : this;
+
+    std::stack<BoidUnit *> stack;
+    stack.push(root);
+
+    constexpr float predatorRange = 4.0f;
+    constexpr float predatorRangeSq = predatorRange * predatorRange;
+    constexpr float predatorEffectRange = 8.0f;
+
+    while (!stack.empty()) {
+      BoidUnit *current = stack.top();
+      stack.pop();
+
+      // 捕食者は radius を無視して影響範囲で判定
+      glm::vec3 diff = current->center - center;
+      float dist2 = glm::dot(diff, diff);
+      float range = predatorEffectRange + current->radius;
+
+      // ユニットが重なっていない場合はスキップ
+      if (dist2 > range * range) {
+        continue;
+      }
+
+      if (current->isBoidUnit()) {
+        // 葉ノードの場合: Boid単位で逃避影響を適用
+        for (int idxA : indices) {
+          for (int idxB : current->indices) {
+            int sidB = current->buf->speciesIds[idxB];
+            if (globalSpeciesParams[sidB].isPredator) continue;
+
+            glm::vec3 toTarget = current->buf->positions[idxB] - buf->positions[idxA];
+            float d2 = glm::dot(toTarget, toTarget);
+            if (d2 < predatorRangeSq && d2 > 1e-4f) {
+              glm::vec3 escapeDir = glm::normalize(buf->positions[idxA] - current->buf->positions[idxB]);
+              float escapeStrength = (1.0f - std::sqrt(d2) / predatorRange);
+              buf->predatorInfluences[idxA] += escapeDir * escapeStrength;
+              buf->stresses[idxA] = 1.0f;
+            }
+          }
+        }
+      } else {
+        // 中間ノード: 子ノードを積む
+        for (BoidUnit *child : current->children) {
+          stack.push(child);
+        }
+      }
+    }
+    return;
+  }
+
+  // 通常の影響処理（非捕食者または通常時）
   if (!indices.empty() && !other->indices.empty()) {
     for (int idxA : indices) {
-
       glm::vec3 sumVel = glm::vec3(0.00001f);
       glm::vec3 sumPos = glm::vec3(0.00001f);
       glm::vec3 sep = glm::vec3(0.00001f);
-      glm::vec3 escape = glm::vec3(0.00001f); // 逃げる方向の加速度
       int cnt = 0;
-      int sidA = speciesId; // 自分の種
-      const float predatorEffectRange = 16.0f; // 捕食者の影響範囲
+      int sidA = speciesId;
 
       for (int idxB : other->indices) {
-        int sidB = other->speciesId; // 相手の種
-
         glm::vec3 diff = buf->positions[idxA] - other->buf->positions[idxB];
         float d2 = glm::dot(diff, diff);
 
@@ -138,32 +188,16 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
           sumVel += other->buf->velocities[idxB] * w;
           sumPos += other->buf->positions[idxB] * w;
           sep += (diff / (d2 + 1.0f)) * w;
-
-          // 捕食者から逃げる処理（範囲内のみ適用）
-          if (globalSpeciesParams[sidB].isPredator &&
-              d2 < predatorEffectRange) {
-            emscripten::val console = emscripten::val::global("console");
-            console.call<void>("log", std::string("逃げる"));
-
-            // 逃げる方向を強調
-            buf->predatorInfluences[idxA] = (diff / (d2 + 1.0f));
-
-            // stress を 1 に設定
-            buf->stresses[idxA] = 1.0f;
-          }
-
           ++cnt;
         }
       }
 
       if (cnt > 0) {
         buf->accelerations[idxA] +=
-            (sumVel / float(cnt) - buf->velocities[idxA]) *
-            globalSpeciesParams[sidA].alignment;
+            (sumVel / float(cnt) - buf->velocities[idxA]) * globalSpeciesParams[sidA].alignment;
         buf->accelerations[idxA] +=
             (sumPos / float(cnt) - buf->positions[idxA]) * globalSpeciesParams[sidA].cohesion;
         buf->accelerations[idxA] += sep * (globalSpeciesParams[sidA].separation * 0.5f);
-        buf->accelerations[idxA] += escape;
       }
     }
   }
@@ -475,18 +509,20 @@ void BoidUnit::computeBoidInteraction(float dt) {
       }
 
       if (tgtIdx >= 0) {
-        tgtTime -= dt; // 減少速度を調整
+        tgtTime -= dt * 0.1f; // 減少速度を調整
         glm::vec3 diff = buf->positions[tgtIdx] - pos;
         float d2 = glm::dot(diff, diff);
         if (d2 > EPS) {
-          // console.call<void>(
-          //     "log", "Predator " + std::to_string(gIdx) + " chasing target "
-          //     +
-          //                std::to_string(tgtIdx) +
-          //                ", distance: " + std::to_string(std::sqrt(d2)));
-          glm::vec3 desiredVel =
-              glm::normalize(diff) * globalSpeciesParams[sid].maxSpeed;
-          buf->accelerations[gIdx] += (desiredVel - vel);
+          console.call<void>(
+              "log", "Predator " + std::to_string(gIdx) + " chasing target "
+              +
+                         std::to_string(tgtIdx) +
+                         ", distance: " + std::to_string(std::sqrt(d2)));
+        glm::vec3 direction = glm::normalize(diff); // ターゲットへの正規化方向
+        float trackingStrength = globalSpeciesParams[sid].maxSpeed * 1.5f; // 加速度の強さを設定
+
+        // ターゲット方向に一定の加速度を適用
+        buf->accelerations[gIdx] += direction * trackingStrength;
         }
       }
     }
