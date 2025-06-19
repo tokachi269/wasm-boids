@@ -92,7 +92,7 @@ const DEFAULT_SETTINGS = [{
   cohesion: 5.58,                     // 捕食者には使わない
   separation: 0.0,
   alignment: 0.0,
-  maxSpeed: 0.66,                     // 速く逃げられるよう速度は大きめ
+  maxSpeed: 0.45,                     // 速く逃げられるよう速度は大きめ
   minSpeed: 0.4,
   maxTurnAngle: 0.221,
   separationRange: 14.0,
@@ -100,7 +100,7 @@ const DEFAULT_SETTINGS = [{
   cohesionRange: 77.0,
   maxNeighbors: 0,
   lambda: 0.041,
-  tau: 2.0, // 捕食者は常に追いかける
+  tau: 1.0, // 捕食者は常に追いかける
   horizontalTorque: 0.022,
   velocityEpsilon: 0.0,
   torqueStrength: 0.0,
