@@ -16,10 +16,13 @@
           <label style="margin-left:1em;">
             <input type="checkbox" v-model="showUnitSpheres" />
             スフィアのみ表示
-          </label>
-          <label style="margin-left:1em;">
+          </label> <label style="margin-left:1em;">
             <input type="checkbox" v-model="showUnitLines" />
             線のみ表示
+          </label>
+          <label style="margin-left:1em;">
+            <input type="checkbox" v-model="showUnitColors" />
+            Unit色分け
           </label>
           <label style="margin-left:1em;">
             表示レイヤ下限: <input type="range" min="1" max="20" v-model="unitLayer" />
@@ -60,7 +63,8 @@ const boidCount = wasmModule.cwrap('boidCount', 'number', [])
 const build = wasmModule.cwrap('build', 'void', ['number', 'number'])
 const update = wasmModule.cwrap('update', 'void', ['number'])
 const setFlockSize = wasmModule.cwrap('setFlockSize', 'void', ['number', 'number', 'number'])
-const exportTreeStructure = wasmModule.cwrap('exportTreeStructure', 'object', []);
+const exportTreeStructure = wasmModule.cwrap('exportTreeStructure', 'object', [])
+const boidUnitMappingPtr = wasmModule.cwrap('boidUnitMappingPtr', 'number', []);
 // const getUnitCount = wasmModule.cwrap('getUnitCount', 'number', []);
 // const getUnitCentersPtr = wasmModule.cwrap('getUnitCentersPtr', 'number', []);
 // const getUnitParentIndicesPtr = wasmModule.cwrap('getUnitParentIndicesPtr', 'number', []);
@@ -132,6 +136,7 @@ const paused = ref(false);
 const showUnits = ref(true);
 const showUnitSpheres = ref(false);
 const showUnitLines = ref(false);
+const showUnitColors = ref(false);
 const unitLayer = ref(1);
 
 let unitSpheres = [];
@@ -256,6 +261,7 @@ function onWindowResize() {
   renderer.setSize(width, height);
 }
 
+// 一時的に従来方式に戻す - instancedMeshを単一で使用
 let instancedMeshHigh = null; // 高ポリゴン用
 let instancedMeshLow = null;  // 低ポリゴン用
 
@@ -266,6 +272,24 @@ boidGeometryHigh.scale(0.5, 0.5, 2.0); // 少し小さくする
 boidGeometryLow.scale(0.5, 0.5, 2.0); // 少し小さくする
 let boidModel = null; // 読み込んだモデルを保持
 let boidModelLod = null; // 読み込んだモデルを保持
+let originalMaterial = null; // 元のマテリアルを保持
+let originalMaterialLod = null; // 元のLODマテリアルを保持
+
+// 起動時の正しいテクスチャマテリアルを保持
+let originalHighMat = null;
+let originalLowMat = null;
+
+// シンプルな色分け用マテリアル
+let colorHighMat = null;
+let colorLowMat = null;
+
+// テクスチャ用メッシュ（通常表示）
+let textureMeshHigh = null;
+let textureMeshLow = null;
+
+// 色分け用メッシュ（Unit色分け表示）
+let colorMeshHigh = null;
+let colorMeshLow = null;
 
 function initInstancedBoids(count) {
   if (!boidModel.children || !boidModel.children[0]) {
@@ -273,35 +297,118 @@ function initInstancedBoids(count) {
     return;
   }
 
-  if (instancedMeshHigh) {
-    scene.remove(instancedMeshHigh);
-  }
-  if (instancedMeshLow) {
-    scene.remove(instancedMeshLow);
-  }
+  // 既存のメッシュを削除
+  if (instancedMeshHigh) scene.remove(instancedMeshHigh);
+  if (instancedMeshLow) scene.remove(instancedMeshLow);
 
-  const dummy = new THREE.Object3D();
-
-  // 高ポリゴンメッシュ
+  // 従来方式: 単一のInstancedMeshでマテリアル切り替え
   instancedMeshHigh = new THREE.InstancedMesh(
     boidModel.children[0].geometry,
-    boidModel.children[0].material,
+    originalMaterial, // 初期はテクスチャマテリアル
     count
   );
   instancedMeshHigh.castShadow = true;
   instancedMeshHigh.receiveShadow = true;
 
-  // 低ポリゴンメッシュ
   instancedMeshLow = new THREE.InstancedMesh(
     boidModelLod.children[0].geometry,
-    boidModelLod.children[0].material,
+    originalMaterialLod, // 初期はテクスチャマテリアル
     count
-  );
-  instancedMeshLow.castShadow = true;
+  );  instancedMeshLow.castShadow = true;
   instancedMeshLow.receiveShadow = true;
 
+  // インスタンスカラーを初期化（色分け用マテリアル用）
+  const whiteColor = new THREE.Color(1, 1, 1);
+  for (let i = 0; i < count; i++) {
+    instancedMeshHigh.setColorAt(i, whiteColor);
+    instancedMeshLow.setColorAt(i, whiteColor);
+  }
+  instancedMeshHigh.instanceColor.needsUpdate = true;
+  instancedMeshLow.instanceColor.needsUpdate = true;  // シーンに追加
   scene.add(instancedMeshHigh);
   scene.add(instancedMeshLow);
+  
+  // 起動時の正しいテクスチャマテリアルを保存
+  originalHighMat = instancedMeshHigh.material;
+  originalLowMat = instancedMeshLow.material;
+  
+  // シンプルな色分け用マテリアルを作成
+  colorHighMat = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.5,
+    metalness: 0,
+    vertexColors: true,
+    transparent: false
+  });
+  colorLowMat = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.5,
+    metalness: 0,
+    vertexColors: true,
+    transparent: false
+  });
+  
+  console.log('✅ Materials initialized:', {
+    originalHighHasMap: !!originalHighMat.map,
+    originalLowHasMap: !!originalLowMat.map,
+    colorHighVertexColors: colorHighMat.vertexColors,
+    colorLowVertexColors: colorLowMat.vertexColors
+  });
+  
+  console.log('Traditional instanced meshes created');
+}
+
+// シンプルなマテリアル切り替え関数
+function switchMeshVisibility() {
+  if (!instancedMeshHigh) return;
+
+  console.log('🔄 switchMeshVisibility called with showUnitColors:', showUnitColors.value);
+
+  if (showUnitColors.value) {
+    // Unit色分けON: 色分け用マテリアルに切り替え
+    instancedMeshHigh.material = colorHighMat;
+    instancedMeshLow.material = colorLowMat;
+    
+    // ONにした瞬間に色設定を再実行
+    const count = boidCount();
+    const mappingPtrValue = boidUnitMappingPtr();
+    const heapI32 = wasmModule.HEAP32.buffer;
+    const unitMappings = new Int32Array(heapI32, mappingPtrValue, count * 2);
+    
+    for (let i = 0; i < count; i++) {
+      let unitId = -1;
+      for (let j = 0; j < unitMappings.length; j += 2) {
+        if (unitMappings[j] === i) {
+          unitId = unitMappings[j + 1];
+          break;
+        }
+      }
+      
+      const color = unitId >= 0 ? 
+        new THREE.Color().setHSL((unitId % 100) / 100, 0.8, 0.6) :
+        new THREE.Color(1, 0, 0);
+        
+      instancedMeshHigh.setColorAt(i, color);
+      instancedMeshLow.setColorAt(i, color);
+    }
+    instancedMeshHigh.instanceColor.needsUpdate = true;
+    instancedMeshLow.instanceColor.needsUpdate = true;
+    
+    console.log('✓ Switched to COLOR materials + set colors');
+  } else {
+    // Unit色分けOFF: 起動時の正しいテクスチャマテリアルに切り替え
+    instancedMeshHigh.material = originalHighMat;
+    instancedMeshLow.material = originalLowMat;
+    console.log('✓ Switched to ORIGINAL TEXTURE materials');
+  }
+  
+  console.log('📊 Current material state:', {
+    showUnitColors: showUnitColors.value,
+    highMaterialVertexColors: instancedMeshHigh.material.vertexColors,
+    lowMaterialVertexColors: instancedMeshLow.material.vertexColors,
+    highMaterialHasMap: !!instancedMeshHigh.material.map,
+    lowMaterialHasMap: !!instancedMeshLow.material.map
+  });
 }
 
 function loadBoidModel(callback) {
@@ -332,13 +439,13 @@ function loadBoidModel(callback) {
   texture.colorSpace = THREE.SRGBColorSpace; // sRGBカラー空間を使用
   textureLod.flipY = false;
   textureLod.colorSpace = THREE.SRGBColorSpace;
-
-  let boidMaterial = new THREE.MeshStandardMaterial({
+   let boidMaterial = new THREE.MeshStandardMaterial({
     roughness: 0.5,
     metalness: 0,
     transparent: false, // 半透明を有効化
     alphaTest: 0.5,    // アルファテストを設定
     map: texture,      // テクスチャを設定
+    vertexColors: false, // 通常時は無効
   });
 
   let boidLodMaterial = new THREE.MeshStandardMaterial({
@@ -347,8 +454,27 @@ function loadBoidModel(callback) {
     transparent: false, // 半透明を有効化
     alphaTest: 0.5,    // アルファテストを設定
     map: textureLod,      // テクスチャを設定
+    vertexColors: false, // 通常時は無効
+  });  // Unit色分け用マテリアル（vertexColors有効、白ベース）
+  let boidMaterialColor = new THREE.MeshStandardMaterial({
+    roughness: 0.5,
+    metalness: 0,
+    transparent: false,
+    alphaTest: 0.5,
+    color: 0xffffff, // 白色ベース
+    vertexColors: true, // 個体ごとの色を有効
   });
 
+  let boidLodMaterialColor = new THREE.MeshStandardMaterial({
+    roughness: 0.5,
+    metalness: 0,
+    transparent: false,
+    alphaTest: 0.5,
+    color: 0xffffff, // 白色ベース
+    vertexColors: true, // 個体ごとの色を有効
+  });  // 元のマテリアルを保存
+  originalMaterial = boidMaterial;
+  originalMaterialLod = boidLodMaterial;
   loader.load(
     `./models/boidModel.glb`, // モデルのパス
     (gltf) => {
@@ -464,29 +590,30 @@ let lastTime = performance.now(); // 前回のフレームのタイムスタン�
 function animate() {
   stats?.begin();
 
-  const currentTime = performance.now(); // 現在のタイムスタンプ
-  const deltaTime = (currentTime - lastTime) / 1000; // 経過時間を秒単位で計算
-  lastTime = currentTime; // 次のフレームのために現在のタイムスタンプを保存
+  const currentTime = performance.now();
+  const deltaTime = (currentTime - lastTime) / 1000;
+  lastTime = currentTime;
 
   if (!paused.value) update(deltaTime);
-
   const count = boidCount();
   const heapF32 = wasmModule.HEAPF32.buffer;
   const positions = new Float32Array(heapF32, posPtr(), count * 3);
   const orientations = new Float32Array(heapF32, oriPtr(), count * 4);
+
   const dummy = new THREE.Object3D();
   const identityMatrix = new THREE.Matrix4();
   const camPos = camera.position;
 
-  // Predator 用のマーカーを初期化（初回のみ）
+  // Predator用マーカーの初期化
   if (!predatorMarker) {
     const predatorMarkerGeometry = new THREE.SphereGeometry(0.2, 16, 16);
     const predatorMarkerMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
     predatorMarker = new THREE.Mesh(predatorMarkerGeometry, predatorMarkerMaterial);
     scene.add(predatorMarker);
-  }
-
-  // 最小限のマトリクス更新用バッファ（パフォーマンス重視）
+  }  // 使用するメッシュを決定
+  let activeMeshHigh = instancedMeshHigh;
+  let activeMeshLow = instancedMeshLow;
+  // 各Boidの位置のみを更新（色は切り替え時のみ設定）
   for (let i = 0; i < count; ++i) {
     dummy.position.fromArray(positions, i * 3);
     dummy.quaternion.fromArray(orientations, i * 4);
@@ -495,17 +622,22 @@ function animate() {
     const distSq = camPos.distanceToSquared(dummy.position);
     const useHigh = distSq < 4;
 
-    (useHigh ? instancedMeshHigh : instancedMeshLow).setMatrixAt(i, dummy.matrix);
-    (useHigh ? instancedMeshLow : instancedMeshHigh).setMatrixAt(i, identityMatrix);
-
-    // Predator の speciesId が 1 と仮定して強調表示
-    if (i === count - 1 && settings[1]?.isPredator) { // Predator のインデックスを仮定
-      predatorMarker.position.copy(dummy.position); // マーカーの位置を更新
+    // マトリクスを設定（位置のみ）
+    if (useHigh) {
+      activeMeshHigh.setMatrixAt(i, dummy.matrix);
+      activeMeshLow.setMatrixAt(i, identityMatrix);
+    } else {
+      activeMeshHigh.setMatrixAt(i, identityMatrix);
+      activeMeshLow.setMatrixAt(i, dummy.matrix);
     }
-  }
 
-  instancedMeshHigh.instanceMatrix.needsUpdate = true;
-  instancedMeshLow.instanceMatrix.needsUpdate = true;
+    // Predatorの特別表示
+    if (i === count - 1 && settings[1]?.isPredator) {
+      predatorMarker.position.copy(dummy.position);
+    }
+  }  // マトリクスの更新
+  activeMeshHigh.instanceMatrix.needsUpdate = true;
+  activeMeshLow.instanceMatrix.needsUpdate = true;
 
   controls.update();
 
@@ -653,6 +785,30 @@ function resetSettings() {
   settings.length = 0;
   DEFAULT_SETTINGS.forEach(s => settings.push({ ...s }));
 }
+
+// showUnitColorsの変更を監視して即座に反映
+watch(showUnitColors, (newValue) => {
+  console.log(`🔄 showUnitColors changed to ${newValue}`);
+  switchMeshVisibility();
+});
+
+// Unit可視化の変更を監視
+watch(showUnits, (newValue) => {
+  console.log('showUnits changed to:', newValue);
+  if (!newValue) {
+    // Unit可視化をオフにした場合、既存の可視化要素をクリア
+    clearUnitVisuals();
+  }
+});
+
+// Unit表示モードの変更を監視
+watch([showUnitSpheres, showUnitLines], ([newSpheres, newLines]) => {
+  console.log('Unit display mode changed - Spheres:', newSpheres, 'Lines:', newLines);
+  // 表示モードが変更されたら既存の表示をクリアして再描画
+  if (showUnits.value) {
+    clearUnitVisuals();
+  }
+});
 </script>
 
 <style>

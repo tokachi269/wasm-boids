@@ -39,7 +39,7 @@ set(EMCC_LINK_FLAGS
     "-sENVIRONMENT=web,worker"
     "-sALLOW_MEMORY_GROWTH=1"
     "-sEXPORTED_FUNCTIONS=['_main','_boidUnitMappingPtr','_oriPtr','_setSpeciesParams','_setFlockSize','_update','_build','_posPtr','_velPtr','_boidCount','_malloc','_free']"
-    "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAPF32']"
+    "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAPF32','HEAP32']"
     "--bind"
     "-pthread" # スレッドを有効化
     "-sUSE_PTHREADS=1" # POSIXスレッドを有効化
@@ -69,7 +69,7 @@ set(EMCC_LINK_FLAGS_RELEASE
     "-sENVIRONMENT=web,worker"
     "-sALLOW_MEMORY_GROWTH=1"
     "-sEXPORTED_FUNCTIONS=['_main','_boidUnitMappingPtr','_oriPtr','_setSpeciesParams','_setFlockSize','_update','_build','_posPtr','_velPtr','_boidCount','_malloc','_free']"
-    "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAPF32']"
+    "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAPF32','HEAP32']"
     "--bind"
     "-pthread"
     "-sUSE_PTHREADS=1"
