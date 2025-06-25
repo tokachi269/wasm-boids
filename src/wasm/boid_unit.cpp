@@ -125,7 +125,7 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
     std::stack<BoidUnit *> stack;
     stack.push(root);
 
-    constexpr float predatorRange = 2.0f;
+    constexpr float predatorRange = 2.5f;
     constexpr float predatorRangeSq = predatorRange * predatorRange;
     constexpr float predatorEffectRange = 8.0f;
 
@@ -155,8 +155,8 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
             if (d2 < predatorRangeSq) {
               glm::vec3 escapeDir = glm::normalize(
                   buf->positions[idxB] - current->buf->positions[idxA]);
-              // stress が 0.5 未満の場合のみ更新
-              if (buf->stresses[idxB] < 0.5f) {
+              // stress が 0.8 未満の場合のみ更新
+              if (buf->stresses[idxB] < 0.8f) {
                 // 距離に応じたイージングを適用
                 float normalizedDistance =
                     std::sqrt(d2) / predatorRange; // 距離を正規化
@@ -331,7 +331,7 @@ void BoidUnit::updateRecursive(float dt) {
           // 共通処理: stress/predatorInfluence のブレンド(被捕食者のみ)
           // -----------------------------------------------
         } else if (current->buf->stresses[gIdx] > 0.0f) {
-          float stress = current->buf->stresses[gIdx];
+          float stress = 0.5f;
           acceleration = acceleration * (1.0f - stress) +
                          current->buf->predatorInfluences[gIdx] * stress;
           // console.call<void>("log", "STRESS: gIdx=" + std::to_string(gIdx) +
@@ -342,7 +342,7 @@ void BoidUnit::updateRecursive(float dt) {
         }
 
         // stress に基づく maxSpeed の調整
-        float stressFactor = 1.0f + current->buf->stresses[gIdx];
+        float stressFactor = 1.0f + current->buf->stresses[gIdx] * 1.2f;
         float maxSpeed = globalSpeciesParams[sid].maxSpeed * stressFactor;
 
         // -----------------------------------------------
@@ -357,7 +357,7 @@ void BoidUnit::updateRecursive(float dt) {
         float angle = acosf(glm::clamp(dotProduct, -1.0f, 1.0f));
 
         // 捕食者は回転制限を緩和（必要に応じて）
-        float maxTurnAngle = globalSpeciesParams[sid].maxTurnAngle;
+        float maxTurnAngle = globalSpeciesParams[sid].maxTurnAngle * stressFactor;
         if (globalSpeciesParams[sid].isPredator &&
             current->buf->predatorTargetIndices[gIdx] >= 0) {
           maxTurnAngle *= 1.5f; // 捕食者の追跡時は回転制限を緩和
@@ -404,7 +404,7 @@ void BoidUnit::updateRecursive(float dt) {
 
         // stress を時間経過で減少
         if (current->buf->stresses[gIdx] > 0.0f) {
-          current->buf->stresses[gIdx] -= BoidUnit::easeOut(dt);
+          current->buf->stresses[gIdx] -= BoidUnit::easeOut(dt * 0.4f);
           if (current->buf->stresses[gIdx] < 0.0f) {
             current->buf->stresses[gIdx] = 0.0f;
           }
@@ -746,7 +746,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
         float wCoh = glm::clamp(dist / globalSpeciesParams[sid].cohesionRange,
                                 0.0f, 1.0f);
         // stress に応じて凝集強度を増加
-        float stressFactor = 1.0f + buf->stresses[gIdx] * 0.5f;
+        float stressFactor = 1.0f + buf->stresses[gIdx] * 0.2f;
         wCoh *= stressFactor;
 
         sumCoh += buf->positions[gNeighbor] * wCoh; // 凝集

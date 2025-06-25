@@ -12,7 +12,7 @@
     </div>
     <div class="setting-row">
       <label>凝集<br>(Cohesion):</label>
-      <input type="range" v-model.number="settings.cohesion" min="0" max="20" step="0.01" />
+      <input type="range" v-model.number="settings.cohesion" min="0" max="40" step="0.01" />
       <span>{{ settings.cohesion }}</span>
     </div>
     <div class="setting-row">
@@ -32,7 +32,7 @@
     </div>
     <div class="setting-row">
       <label>整列<br>(Alignment):</label>
-      <input type="range" v-model.number="settings.alignment" min="0" max="10" step="0.01" />
+      <input type="range" v-model.number="settings.alignment" min="0" max="20" step="0.01" />
       <span>{{ settings.alignment }}</span>
     </div>
     <div class="setting-row">

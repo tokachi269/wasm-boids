@@ -14,9 +14,10 @@
 #include <random>
 #include <vector>
 
-
 // グローバル共通
 std::vector<SpeciesParams> globalSpeciesParams; // 配列に変更
+// 静的メンバー変数の初期化
+int BoidUnit::nextId = 0;
 
 SpeciesParams BoidTree::getGlobalSpeciesParams(const std::string species) {
   auto it = std::find_if(
@@ -97,111 +98,109 @@ void BoidTree::build(int maxPerUnit, int level) {
   std::iota(indices.begin(), indices.end(), 0);
 
   buildRecursive(root, indices, maxPerUnit, level);
- // printTree(root, 0);
+  // printTree(root, 0);
 }
 
 void BoidTree::buildRecursive(BoidUnit *node, const std::vector<int> &indices,
                               int maxPerUnit, int level) {
-    node->level = level;
+  node->level = level;
 
-    // 既存の children をクリア
-    node->children.clear();
+  // 既存の children をクリア
+  node->children.clear();
 
-    // 末端ノード（葉）の処理
-    if ((int)indices.size() <= maxPerUnit) {
-        node->indices = indices;
+  // 末端ノード（葉）の処理
+  if ((int)indices.size() <= maxPerUnit) {
+    node->indices = indices;
 
-        // 種が 1 種類かどうかを判定
-        int firstSpeciesId = buf.speciesIds[indices[0]];
-        bool mixedSpecies = false;
-        for (int i : indices) {
-            if (buf.speciesIds[i] != firstSpeciesId) {
-                mixedSpecies = true;
-                break;
-            }
+    // 種が 1 種類かどうかを判定
+    int firstSpeciesId = buf.speciesIds[indices[0]];
+    bool mixedSpecies = false;
+    for (int i : indices) {
+      if (buf.speciesIds[i] != firstSpeciesId) {
+        mixedSpecies = true;
+        break;
+      }
+    }
+
+    if (!mixedSpecies) {
+      // 種が 1 種類の場合
+      node->speciesId = firstSpeciesId;
+    } else {
+      // 種が混在している場合、種ごとに再分割
+      std::unordered_map<int, std::vector<int>> speciesGroups;
+      for (int i : indices) {
+        speciesGroups[buf.speciesIds[i]].push_back(i);
+      }
+
+      for (const auto &[speciesId, groupIndices] : speciesGroups) {
+        auto *child = new BoidUnit();
+        child->buf = node->buf;
+        child->parent = node;
+        child->topParent = node->topParent ? node->topParent : node;
+        child->indices = groupIndices;
+        child->speciesId = speciesId;
+
+        for (int gIdx : groupIndices) {
+          buf.speciesIds[gIdx] = child->speciesId;
         }
 
-        if (!mixedSpecies) {
-            // 種が 1 種類の場合
-            node->speciesId = firstSpeciesId;
-        } else {
-            // 種が混在している場合、種ごとに再分割
-            std::unordered_map<int, std::vector<int>> speciesGroups;
-            for (int i : indices) {
-                speciesGroups[buf.speciesIds[i]].push_back(i);
-            }
-
-            for (const auto &[speciesId, groupIndices] : speciesGroups) {
-                auto *child = new BoidUnit();
-                child->buf = node->buf;
-                child->parent = node;
-                child->topParent = node->topParent ? node->topParent : node;
-                child->indices = groupIndices;
-                child->speciesId = speciesId;
-
-                for (int gIdx : groupIndices) {
-                    buf.speciesIds[gIdx] = child->speciesId;
-                }
-
-                child->computeBoundingSphere();
-                node->children.push_back(child);
-            }
-        }
-
-        node->computeBoundingSphere();
-        return;
+        child->computeBoundingSphere();
+        node->children.push_back(child);
+      }
     }
 
-    // 空間的に分割
-    float mean[3] = {0}, var[3] = {0};
-    for (int i : indices) {
-        const glm::vec3 &p = buf.positions[i];
-        mean[0] += p.x;
-        mean[1] += p.y;
-        mean[2] += p.z;
-    }
-    for (int k = 0; k < 3; ++k)
-        mean[k] /= indices.size();
-
-    for (int i : indices) {
-        const glm::vec3 &p = buf.positions[i];
-        var[0] += (p.x - mean[0]) * (p.x - mean[0]);
-        var[1] += (p.y - mean[1]) * (p.y - mean[1]);
-        var[2] += (p.z - mean[2]) * (p.z - mean[2]);
-    }
-    int axis = (var[1] > var[0]) ? 1 : 0;
-    if (var[2] > var[axis])
-        axis = 2;
-
-    std::vector<int> sorted = indices;
-    std::sort(sorted.begin(), sorted.end(), [this, axis](int a, int b) {
-        const glm::vec3 &pa = buf.positions[a];
-        const glm::vec3 &pb = buf.positions[b];
-        return (axis == 0)   ? pa.x < pb.x
-               : (axis == 1) ? pa.y < pb.y
-                             : pa.z < pb.z;
-    });
-    std::size_t mid = sorted.size() / 2;
-    std::vector<int> left(sorted.begin(), sorted.begin() + mid);
-    std::vector<int> right(sorted.begin() + mid, sorted.end());
-
-    auto *leftChild = new BoidUnit();
-    auto *rightChild = new BoidUnit();
-    leftChild->buf = node->buf;
-    rightChild->buf = node->buf;
-    leftChild->parent = node;
-    rightChild->parent = node;
-    leftChild->topParent = node->topParent ? node->topParent : node;
-    rightChild->topParent = node->topParent ? node->topParent : node;
-
-    node->children.push_back(leftChild);
-    node->children.push_back(rightChild);
-
-    buildRecursive(leftChild, left, maxPerUnit, level + 1);
-    buildRecursive(rightChild, right, maxPerUnit, level + 1);
-
-    node->speciesId = -1; // 内部ノードは種を持たない
     node->computeBoundingSphere();
+    return;
+  }
+
+  // 空間的に分割
+  float mean[3] = {0}, var[3] = {0};
+  for (int i : indices) {
+    const glm::vec3 &p = buf.positions[i];
+    mean[0] += p.x;
+    mean[1] += p.y;
+    mean[2] += p.z;
+  }
+  for (int k = 0; k < 3; ++k)
+    mean[k] /= indices.size();
+
+  for (int i : indices) {
+    const glm::vec3 &p = buf.positions[i];
+    var[0] += (p.x - mean[0]) * (p.x - mean[0]);
+    var[1] += (p.y - mean[1]) * (p.y - mean[1]);
+    var[2] += (p.z - mean[2]) * (p.z - mean[2]);
+  }
+  int axis = (var[1] > var[0]) ? 1 : 0;
+  if (var[2] > var[axis])
+    axis = 2;
+
+  std::vector<int> sorted = indices;
+  std::sort(sorted.begin(), sorted.end(), [this, axis](int a, int b) {
+    const glm::vec3 &pa = buf.positions[a];
+    const glm::vec3 &pb = buf.positions[b];
+    return (axis == 0) ? pa.x < pb.x : (axis == 1) ? pa.y < pb.y : pa.z < pb.z;
+  });
+  std::size_t mid = sorted.size() / 2;
+  std::vector<int> left(sorted.begin(), sorted.begin() + mid);
+  std::vector<int> right(sorted.begin() + mid, sorted.end());
+
+  auto *leftChild = new BoidUnit();
+  auto *rightChild = new BoidUnit();
+  leftChild->buf = node->buf;
+  rightChild->buf = node->buf;
+  leftChild->parent = node;
+  rightChild->parent = node;
+  leftChild->topParent = node->topParent ? node->topParent : node;
+  rightChild->topParent = node->topParent ? node->topParent : node;
+
+  node->children.push_back(leftChild);
+  node->children.push_back(rightChild);
+
+  buildRecursive(leftChild, left, maxPerUnit, level + 1);
+  buildRecursive(rightChild, right, maxPerUnit, level + 1);
+
+  node->speciesId = -1; // 内部ノードは種を持たない
+  node->computeBoundingSphere();
 }
 
 BoidUnit *BoidTree::findParent(BoidUnit *node, BoidUnit *target) {
@@ -240,7 +239,7 @@ void BoidTree::update(float dt) {
     mergeIndex = 0;
   }
 
-  //一定フレームごとに木構造を再構築
+  // 一定フレームごとに木構造を再構築
   if (frameCount % 17 == 0) { // 再構築頻度を調整
     build(maxBoidsPerUnit, 0);
     return;
@@ -324,7 +323,7 @@ void BoidTree::initializeBoids(
   buf.speciesIds.resize(totalCount);
   buf.predatorTargetIndices.resize(totalCount);
   buf.predatorTargetTimers.resize(totalCount);
-  
+
   // 各種族の個体を生成
   int offset = 0;
   std::random_device rd;
@@ -424,6 +423,31 @@ void BoidTree::collectLeaves(const BoidUnit *node,
         collectLeaves(child, leaves);
     }
   }
+}
+
+std::unordered_map<int, int> BoidTree::collectBoidUnitMapping() {
+  std::unordered_map<int, int> boidUnitMapping;
+
+  std::stack<BoidUnit *> stack;
+  stack.push(root);
+
+  while (!stack.empty()) {
+    BoidUnit *current = stack.top();
+    stack.pop();
+
+    if (current->isBoidUnit()) {
+      for (int boidIdx : current->indices) {
+        boidUnitMapping[boidIdx] =
+            current->id; // BoidのインデックスとユニットIDを対応付け
+      }
+    } else {
+      for (BoidUnit *child : current->children) {
+        stack.push(child);
+      }
+    }
+  }
+
+  return boidUnitMapping;
 }
 
 uintptr_t BoidTree::getPositionsPtr() {

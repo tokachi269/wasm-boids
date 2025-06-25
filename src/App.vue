@@ -76,14 +76,14 @@ const DEFAULT_SETTINGS = [{
   cohesion: 12,             // 凝集
   cohesionRange: 10,        // 凝集範囲
   separation: 5,            // 分離
-  separationRange: 10,      // 分離範囲
+  separationRange: 8,       // 分離範囲
   alignment: 8,             // 整列
   alignmentRange: 6,        // 整列範囲
   maxSpeed: 0.22,           // 最大速度
   maxTurnAngle: 0.155,      // 最大旋回角
   maxNeighbors: 4,          // 最大近傍数
   lambda: 0.109,            // 吸引減衰 λ
-  horizontalTorque: 0.024,  // 水平化トルク
+  horizontalTorque: 0.019,  // 水平化トルク
   velocityEpsilon: 0.004,   // 速度閾値 ε
   torqueStrength: 3.398     // 回転トルク強度
 }, {

@@ -17,6 +17,8 @@ struct SoABuffers;
 class BoidUnit
 {
 public:
+    static int nextId; // 次の ID を管理する静的変数
+    int id;            // 各 BoidUnit のユニークな ID
     BoidUnit* parent = nullptr; // 親ノードへのポインタ
     BoidUnit* topParent = nullptr; // 親ノードへのポインタ
     static constexpr int MAX_BOIDS = 16;     // Boid数の上限（local index）
@@ -34,7 +36,7 @@ public:
     glm::vec3 influence{};
     int frameCount = 0;
 
-    BoidUnit() {
+    BoidUnit() : id(nextId++) {
         cohesionMemories.resize(MAX_BOIDS, 0.0f);
     }
 
@@ -54,8 +56,8 @@ public:
     void addRepulsionToAllBoids(BoidUnit *unit, const glm::vec3 &repulsion);
     glm::vec3 fixRoll(const glm::vec3 &direction);
     static glm::quat dirToQuatRollZero(const glm::vec3 &forward);
- void applyPredatorInfluence(int gIdx, glm::vec3 &acceleration, const glm::vec3 &position);
- static float easeOut(float t);
+    void applyPredatorInfluence(int gIdx, glm::vec3 &acceleration, const glm::vec3 &position);
+    static float easeOut(float t);
 };
 
 void printTree(const BoidUnit *node, int depth = 0);
