@@ -16,11 +16,17 @@
 
 bool BoidUnit::isBoidUnit() const { return children.empty(); }
 
+/**
+ * 小角度近似を使用した軽量回転関数。
+ *
+ * 近似条件: sinθ ≈ θ, cosθ ≈ 1
+ * 軸がほぼゼロベクトルの場合は回転をスキップ
+ */
 inline glm::vec3 approxRotate(const glm::vec3 &v, const glm::vec3 &axis,
                               float angle) {
   // 軽量化: 小角度近似をさらに簡略化
   // sinθ ≈ θ, cosθ ≈ 1 を前提に、外積計算を最小化
-  constexpr float EPSILON = 1e-6f; // 極小値判定用
+  constexpr float EPSILON = 1e-6f;
   float axisLength2 = glm::length2(axis);
 
   // 軸がほぼゼロベクトルの場合は回転をスキップ
@@ -95,31 +101,25 @@ void BoidUnit::computeBoundingSphere() {
 }
 const int targetIndex = 50; // ログを出力する特定の Boid のインデックス
 
-/**
- * 他のユニットとの相互作用を計算し、加速度に影響を加える。
+/** * 他のユニットとの相互作用を計算し、加速度に影響を加える。
  *
  * @param other 他の BoidUnit へのポインタ
  *
  * 処理内容:
- * - **最下位層の場合**:
- *   - Boid 間の詳細な相互作用を計算し、分離、整列、凝集ルールを適用。
- * - **片方が中間ノードの場合**:
- *   - 再帰的に子ノードを処理。
- * - **両方が中間ノードの場合**:
- *   - 代表値（中心、平均速度）を用いて近似計算を行う。
+ * - **捕食者の場合**: 木構造を使って再帰的に獲物を探索し、捕食圧を適用
+ * - **通常の場合**: ユニット間でBoidの相互作用を計算
  *
- * 使用例:
- * - 階層構造内で異なるユニット間の影響を計算する際に使用。
+ * 機能:
+ * - 捕食者の逃避反応とストレス計算
+ * - ユニット間のBoid相互作用による分離・凝集・整列
  */
 void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
   if (frameCount % 6 != 0) {
-    // 再構築頻度でない場合は何もしない
     return;
   }
 
-  // 捕食者ユニットなら、トップ階層から木構造を使って再帰的に探索する
+  // 捕食者ユニットの処理
   if (isBoidUnit() && globalSpeciesParams[speciesId].isPredator) {
-    // トップ階層から探索を開始
     BoidUnit *root = this->topParent ? this->topParent : this;
 
     std::stack<BoidUnit *> stack;
@@ -133,12 +133,10 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
       BoidUnit *current = stack.top();
       stack.pop();
 
-      // 捕食者は radius を無視して影響範囲で判定
       glm::vec3 diff = current->center - center;
       float dist2 = glm::dot(diff, diff);
       float range = predatorEffectRange + current->radius;
 
-      // ユニットが重なっていない場合はスキップ
       if (dist2 > range * range)
         continue;
 
@@ -155,25 +153,21 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
             if (d2 < predatorRangeSq) {
               glm::vec3 escapeDir = glm::normalize(
                   buf->positions[idxB] - current->buf->positions[idxA]);
-              // stress が 0.8 未満の場合のみ更新
               if (buf->stresses[idxB] < 0.8f) {
-                // 距離に応じたイージングを適用
-                float normalizedDistance =
-                    std::sqrt(d2) / predatorRange; // 距離を正規化
+                float normalizedDistance = std::sqrt(d2) / predatorRange;
                 float escapeStrength =
                     glm::clamp(1.0f - normalizedDistance, 0.0f, 1.0f);
                 escapeStrength =
                     escapeStrength * escapeStrength *
-                    (3.0f - 2.0f * escapeStrength); // イージング関数
+                    (3.0f - 2.0f * escapeStrength);
 
                 buf->predatorInfluences[idxB] += escapeDir * escapeStrength;
-                buf->stresses[idxB] = 1.0f; // ストレスを増加
+                buf->stresses[idxB] = 1.0f;
               }
             }
           }
         }
       } else {
-        // 中間ノード: 子ノードを積む
         for (BoidUnit *child : current->children) {
           stack.push(child);
         }
@@ -181,7 +175,7 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
     }
   }
 
-  // 通常の影響処理（非捕食者または通常時）
+  // 通常の影響処理
   if (!indices.empty() && !other->indices.empty()) {
     for (int idxA : indices) {
       glm::vec3 sumVel = glm::vec3(0.00001f);
@@ -242,14 +236,14 @@ void BoidUnit::updateRecursive(float dt) {
   std::stack<BoidUnit *, std::vector<BoidUnit *>> stack;
   stack.push(this);
   static std::vector<std::future<void>> asyncTasks;
-  asyncTasks.reserve(64);       // 任意。再確保を抑える
-  auto &pool = getThreadPool(); // シングルトン取得
+  asyncTasks.reserve(64);       // 任意。再確保を抑える  auto &pool = getThreadPool();
 
-  // 第一段階: acceleration をすべて計算
-  while (!stack.empty()) {
+  // -----------------------------------------------
+  // 1. Compute accelerations for all boids in parallel
+  // -----------------------------------------------  while (!stack.empty()) {
     BoidUnit *current = stack.top();
     stack.pop();
-    // Leaf は並列実行
+    // Execute leaf units in parallel for boid interaction computation
     if (current->isBoidUnit()) {
       asyncTasks.emplace_back(
           pool.enqueue([current, dt] { current->computeBoidInteraction(dt); }));
@@ -357,7 +351,8 @@ void BoidUnit::updateRecursive(float dt) {
         float angle = acosf(glm::clamp(dotProduct, -1.0f, 1.0f));
 
         // 捕食者は回転制限を緩和（必要に応じて）
-        float maxTurnAngle = globalSpeciesParams[sid].maxTurnAngle * stressFactor;
+        float maxTurnAngle =
+            globalSpeciesParams[sid].maxTurnAngle * stressFactor;
         if (globalSpeciesParams[sid].isPredator &&
             current->buf->predatorTargetIndices[gIdx] >= 0) {
           maxTurnAngle *= 1.5f; // 捕食者の追跡時は回転制限を緩和
@@ -432,8 +427,16 @@ inline glm::quat BoidUnit::dirToQuatRollZero(const glm::vec3 &forward) {
   return glm::quat_cast(R);  // 正規化済 quat
 }
 
+/**
+ * ユニット内の各Boidについて近傍Boidとの相互作用を計算し、加速度を更新する。
+ *
+ * 機能:
+ * - 動的近傍管理（cohesionMemories, activeNeighbors）
+ * - 群れの3要素（分離・整列・凝集）に基づく加速度計算
+ * - Fast-start吸引制御による群れの縁での強制凝集
+ * - 捕食者の追跡ターゲット選択と更新
+ */
 void BoidUnit::computeBoidInteraction(float dt) {
-  // ■ 各 Boid に対する一時変数（繰り返し再利用）
   glm::vec3 separation;
   glm::vec3 alignment;
   glm::vec3 cohesion;
@@ -441,17 +444,15 @@ void BoidUnit::computeBoidInteraction(float dt) {
   int gIdx = 0;
   glm::vec3 pos;
   glm::vec3 vel;
-  int sid = -1; // ← Boidごとの種族IDを取得
+  int sid = -1;
   static std::mt19937 rng{std::random_device{}()};
   // -----------------------------------------------
   // 事前計算しておく定数／準備
   // -----------------------------------------------
-  // ① 視界範囲 (cohesionRange) の二乗
-
-  // ③ 非ゼロ判定用イプシロン
+  // 非ゼロ判定用イプシロン
   constexpr float EPS = 1e-8f;
 
-  // ④ 候補距離を入れてソート/部分ソートするための領域
+  // 候補距離を入れてソート/部分ソートするための領域
   std::vector<std::pair<float, int>> candidates;
   if (candidates.capacity() < indices.size()) {
     candidates.reserve(indices.size());
@@ -460,16 +461,16 @@ void BoidUnit::computeBoidInteraction(float dt) {
   // -----------------------------------------------
   // 各 Boid（leafノード内）ごとの反復
   // -----------------------------------------------
-  for (size_t index = 0; index < indices.size(); ++index) {
-    // -------------------------------------------------------
-    // ❶ 初期化フェーズ
-    //    ・加速度計算用に separation/alignment/cohesion をリセット
-    //    ・対象 Boid のグローバルインデックスと位置・速度を取得
+  for (size_t index = 0; index < indices.size();
+       ++index) { // -------------------------------------------------------
+    // 1. 初期化フェーズ
+    //    - 加速度計算用に separation/alignment/cohesion をリセット
+    //    - 対象 Boid のグローバルインデックスと位置・速度を取得
     // -------------------------------------------------------
     separation = glm::vec3(0.00001f);
     alignment = glm::vec3(0.00001f);
     cohesion = glm::vec3(0.00001f);
-    sid = speciesId; // Boidの種族IDを取得
+    sid = speciesId;
     gIdx = indices[index];
     pos = buf->positions[gIdx];
     vel = buf->velocities[gIdx];
@@ -484,12 +485,11 @@ void BoidUnit::computeBoidInteraction(float dt) {
     //                              std::to_string(viewRangeSq) +
     //                              ", maxNeighbors: " +
     //                              std::to_string(globalSpeciesParams[sid].maxNeighbors));
-    // ② 視界角度（FOV in degrees）の半分をラジアンに変換 & そのコサイン
+    // 視界角度（FOV in degrees）の半分をラジアンに変換
     float halfFovRad =
         glm::radians(globalSpeciesParams[sid].fieldOfViewDeg * 0.5f);
     float cosHalfFov = std::cos(halfFovRad);
 
-    // 「距離候補リスト」は毎回クリア
     candidates.clear();
     if (globalSpeciesParams[sid].isPredator) {
       int &tgtIdx = buf->predatorTargetIndices[gIdx];
@@ -498,20 +498,18 @@ void BoidUnit::computeBoidInteraction(float dt) {
       //     "log", "1Predator " + std::to_string(gIdx) +
       //                " checking target index: " + std::to_string(tgtIdx) +
       //                ", time left: " + std::to_string(tgtTime) +
-      //                ", dt: " + std::to_string(dt));
-
-      // ── 追跡ターゲットが切れたら新規取得 ─────────────
+      //                ", dt: " + std::to_string(dt));      //
+      //                追跡ターゲットが切れたら新規取得
       if (tgtTime <= 0.0f || tgtIdx < 0 ||
           globalSpeciesParams[buf->speciesIds[tgtIdx]].isPredator) {
-        if (tgtTime <= -globalSpeciesParams[sid]
-                            .tau) { // 一定時間経過後に新しいターゲットを選択
+        if (tgtTime <= -globalSpeciesParams[sid].tau) {
           // console.call<void>(
           //     "log", "Predator " + std::to_string(gIdx) +
           //                " checking target index: " + std::to_string(tgtIdx)
           //                +
           //                ", time left: " + std::to_string(tgtTime));
 
-          // ① 親ユニットの子ノードから近いユニットを探索
+          // 親ユニットの子ノードから近いユニットを探索
           std::vector<BoidUnit *> candidateUnits;
           if (parent) {
             for (BoidUnit *unit : parent->children) {
@@ -524,7 +522,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
             }
           }
 
-          // ② 候補ユニット内の Boid をランダムに選択
+          // 候補ユニット内の Boid をランダムに選択
           if (!candidateUnits.empty()) {
             std::uniform_int_distribution<int> unitDist(
                 0, static_cast<int>(candidateUnits.size() - 1));
@@ -534,7 +532,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
               std::uniform_int_distribution<int> boidDist(
                   0, static_cast<int>(selectedUnit->indices.size() - 1));
               tgtIdx = selectedUnit->indices[boidDist(rng)];
-              tgtTime = globalSpeciesParams[sid].tau; // 追跡時間リセット
+              tgtTime = globalSpeciesParams[sid].tau;
             } else {
               tgtIdx = -1;
               tgtTime = 0.0f;
@@ -542,9 +540,8 @@ void BoidUnit::computeBoidInteraction(float dt) {
           }
         }
       }
-
       if (tgtIdx >= 0) {
-        tgtTime -= dt * 0.1f; // 減少速度を調整
+        tgtTime -= dt * 0.1f;
         glm::vec3 diff = buf->positions[tgtIdx] - pos;
         float d2 = glm::dot(diff, diff);
         if (d2 > EPS) {
@@ -554,8 +551,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
           //                std::to_string(tgtIdx) +
           //                ", vel: " +
           //                glm::to_string(buf->velocities[tgtIdx]));
-          glm::vec3 direction =
-              glm::normalize(diff); // ターゲットへの正規化方向
+          glm::vec3 direction = glm::normalize(diff);
 
           // ターゲット方向に一定の加速度を適用
           // buf->accelerations[gIdx] += direction;
@@ -564,10 +560,10 @@ void BoidUnit::computeBoidInteraction(float dt) {
     }
 
     // -------------------------------------------------------
-    // ❷ 時間更新＆古くなった記憶の無効化
-    //    ・cohesionMemories[i] > 0 のものは時間を加算
-    //    ・tau を超えたら 0 に戻して、ビットをクリア
-    //    ・activeCount には有効な隣接 Boid 数を数える
+    // 2. 時間更新と古くなった記憶の無効化
+    //    - cohesionMemories[i] > 0 のものは時間を加算
+    //    - tau を超えたら 0 に戻してビットをクリア
+    //    - activeCount には有効な隣接 Boid 数を数える
     // -------------------------------------------------------
     int activeCount = 0;
     for (size_t i = 0; i < indices.size(); ++i) {
@@ -580,57 +576,50 @@ void BoidUnit::computeBoidInteraction(float dt) {
           activeCount++;
         }
       }
-    }
-
-    // -------------------------------------------------------
-    // ❸ 未登録の Boid で「最も近い (距離かつ視界内)」ものを
-    //     上位 toAdd 件分見つける
-    //    ・activeCount < maxNeighbors のときだけ行う
-    //    ・距離判定: distSq < viewRangeSq
-    //    ・視界判定: (速度方向がほぼゼロでなければ)
-    //    normalized(diff)·normalized(vel) >= cosHalfFov
+    } // -------------------------------------------------------
+    // 3. 未登録Boidで最も近い（距離かつ視界内）ものを探索
+    //    - activeCount < maxNeighbors のときだけ実行
+    //    - 距離判定: distSq < viewRangeSq
+    //    - 視界判定: normalized(diff)·normalized(vel) >= cosHalfFov
     // -------------------------------------------------------
     if (activeCount < globalSpeciesParams[sid].maxNeighbors) {
-      // — 速度ベクトル vel がほぼゼロかどうかチェック
+      // 速度ベクトル vel がほぼゼロかどうかチェック
       float velLen2 = glm::length2(vel);
 
       bool hasVel = (velLen2 > EPS);
       glm::vec3 forward;
       if (hasVel) {
         float invVelLen = 1.0f / glm::sqrt(velLen2);
-        forward = vel * invVelLen; // 速度方向の正規化ベクトル
+        forward = vel * invVelLen;
       }
 
       for (size_t i = 0; i < indices.size(); ++i) {
         if (i == index)
-          continue; // 自分自身をスキップ
+          continue;
         if (activeNeighbors.test(i) || cohesionMemories[i] > 0.0f)
-          continue; // 登録済み or 有効な隣接Boidはスキップ
+          continue;
 
         int gNeighbor = indices[i];
         glm::vec3 diff = buf->positions[gNeighbor] - pos;
         float distSq = glm::dot(diff, diff);
         if (distSq >= viewRangeSq)
-          continue; // 視界/距離外ならスキップ
+          continue;
 
-        // — 速度ゼロでなければ視界内かどうかを確認
+        // 速度ゼロでなければ視界内かどうかを確認
         if (hasVel) {
           float invDist = 1.0f / glm::sqrt(distSq);
           glm::vec3 diffNorm = diff * invDist;
           float dotVal = glm::dot(forward, diffNorm);
           if (dotVal < cosHalfFov)
-            continue; // 視界外 → スキップ
+            continue;
         }
 
-        // 条件をすべてクリアしたので候補リストに追加（距離², ローカル index）
         candidates.emplace_back(distSq, (int)i);
       }
-    }
-
-    // -------------------------------------------------------
-    // ❹ 候補リストの中から最も近い toAdd 件を選んで登録
-    //    ・toAdd = maxNeighbors - activeCount
-    //    ・部分ソート (nth_element) して上位 toAdd 件だけ取り出す
+    } // -------------------------------------------------------
+    // 4. 候補リストから最も近いものを選んで登録
+    //    - toAdd = maxNeighbors - activeCount
+    //    - 部分ソート (nth_element) で上位toAdd件を取得
     // -------------------------------------------------------
     int toAdd = globalSpeciesParams[sid].maxNeighbors - activeNeighbors.count();
     if (toAdd > 0 && !candidates.empty()) {
@@ -644,37 +633,32 @@ void BoidUnit::computeBoidInteraction(float dt) {
           activeNeighbors.set(idx2);
         }
       } else {
-        // 候補数 <= toAdd の場合は全件登録
         for (auto &pr : candidates) {
           int idx2 = pr.second;
           cohesionMemories[idx2] = dt;
           activeNeighbors.set(idx2);
         }
       }
-    }
-
-    // -------------------------------------------------------
-    // ❺ 「有効な Boid」だけで最終的な加速度を計算
-    //    ・activeNeighbors.test(i)==true の i についてのみ
-    //    ・分離 (separation)、凝集 (cohesion)、整列 (alignment) の Contribution
-    //    を合算 ・最後に回転トルク (alignment を向くための補正)
-    //    を行い加速度に加える
+    } // -------------------------------------------------------
+    // 5. 有効なBoidだけで最終的な加速度を計算
+    //    - activeNeighbors.test(i)==true のもののみ
+    //    - 分離・凝集・整列の力を合算
+    //    - 回転トルクで alignment方向へ向ける補正を実行
     // -------------------------------------------------------
     // -------------------------------------------------------
-    // ❺-A  近傍不足 Fast-start 吸引制御  (φᵢ = |Lᵢ| / Nu)
-    //        ・φᵢ < 1 なら吸引 ON, タイマー τ をリセット
-    //        ・φᵢ = 1 なら τ カウントダウン → 0 で OFF
+    // 5-A. 近傍不足 Fast-start 吸引制御 (φᵢ = |Lᵢ| / Nu)
+    //      - φᵢ < 1 なら吸引 ON, タイマー τ をリセット
+    //      - φᵢ = 1 なら τ カウントダウン → 0 で OFF
     // -------------------------------------------------------
     const int neighborCount = static_cast<int>(activeNeighbors.count());
     const float phi =
         float(neighborCount) / float(globalSpeciesParams[sid].maxNeighbors);
-
     if (phi < 1.0f) {
-      // 群れの縁に出た ⇒ 吸引 ON & タイマー毎フレーム再スタート
+      // 群れの縁に出た場合は吸引ONでタイマーリセット
       buf->isAttracting[gIdx] = 1;
       buf->attractTimers[gIdx] = globalSpeciesParams[sid].tau;
     } else if (buf->isAttracting[gIdx]) {
-      // 内部に戻っていれば τ カウントダウン
+      // 内部に戻った場合はタイマーカウントダウン
       buf->attractTimers[gIdx] -= dt;
       if (buf->attractTimers[gIdx] <= 0.0f) {
         buf->isAttracting[gIdx] = 0;
@@ -683,7 +667,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
     }
 
     // -------------------------------------------------------
-    // ❺-B  Fast-start 吸引項の加算 (isAttracting==1 の間)
+    // 5-B. Fast-start 吸引項の加算 (isAttracting==1 の間)
     // -------------------------------------------------------
     if (buf->isAttracting[gIdx]) {
       glm::vec3 dirSum(0.0f);
@@ -722,26 +706,26 @@ void BoidUnit::computeBoidInteraction(float dt) {
       glm::vec3 sumSep = glm::vec3(0.0f);
       glm::vec3 sumAlign = glm::vec3(0.0f);
       glm::vec3 sumCoh = glm::vec3(0.0f);
-      float invN = 1.0f / float(neighborCount);
-
-      // activeNeighbors 内の「立っているビット」を単純ループで探索
+      float invN =
+          1.0f /
+          float(neighborCount); // activeNeighbors内の立っているビットを探索
       for (size_t i = 0; i < indices.size(); ++i) {
         if (!activeNeighbors.test(i))
           continue;
 
         if (cohesionMemories[i] <= 0.0f)
-          continue; // 念のためガード
+          continue;
 
         int gNeighbor = indices[i];
         glm::vec3 diff = buf->positions[gNeighbor] - pos;
         float distSq = glm::dot(diff, diff);
         if (distSq <= 1e-4f)
-          continue; // ほぼ同一位置ならスキップ
+          continue;
 
         float dist = glm::sqrt(distSq);
         float wSep = 1.0f - (dist / globalSpeciesParams[sid].separationRange);
         wSep = glm::clamp(wSep, 0.0f, 1.0f);
-        sumSep += (diff * wSep) * (-1.0f); // 分離
+        sumSep += (diff * wSep) * (-1.0f);
 
         float wCoh = glm::clamp(dist / globalSpeciesParams[sid].cohesionRange,
                                 0.0f, 1.0f);
@@ -749,12 +733,10 @@ void BoidUnit::computeBoidInteraction(float dt) {
         float stressFactor = 1.0f + buf->stresses[gIdx] * 0.2f;
         wCoh *= stressFactor;
 
-        sumCoh += buf->positions[gNeighbor] * wCoh; // 凝集
+        sumCoh += buf->positions[gNeighbor] * wCoh;
 
-        sumAlign += buf->velocities[gNeighbor]; // 整列
-      }
-
-      // --- 分離の最終ベクトル ---
+        sumAlign += buf->velocities[gNeighbor];
+      } // 分離の最終ベクトル
       glm::vec3 totalSeparation = glm::vec3(0.0f);
       float sepLen2 = glm::length2(sumSep);
       if (sepLen2 > EPS) {
@@ -762,7 +744,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
                           globalSpeciesParams[sid].separation;
       }
 
-      // --- 凝集の最終ベクトル ---
+      // 凝集の最終ベクトル
       glm::vec3 avgCohPos = sumCoh * invN;
       glm::vec3 totalCohesion = glm::vec3(0.0f);
       glm::vec3 cohDir = avgCohPos - pos;
@@ -772,7 +754,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
                         globalSpeciesParams[sid].cohesion;
       }
 
-      // --- 整列の最終ベクトル ---
+      // 整列の最終ベクトル
       glm::vec3 avgAlignVel = sumAlign * invN;
       glm::vec3 totalAlignment = glm::vec3(0.0f);
       glm::vec3 aliDir = avgAlignVel - vel;
@@ -827,7 +809,14 @@ void BoidUnit::computeBoidInteraction(float dt) {
   }
 }
 
-// 分割が必要か判定 (indices + 中央バッファ版)
+/**
+ * 分割が必要か判定する。
+ *
+ * 判定条件:
+ * - Boid数が上限を超過
+ * - 半径が閾値を超過
+ * - 方向のバラつきが閾値を超過
+ */
 bool BoidUnit::needsSplit(float splitRadius, float directionVarThresh,
                           int maxBoids) const {
   if (static_cast<int>(indices.size()) > maxBoids)
@@ -853,7 +842,14 @@ bool BoidUnit::needsSplit(float splitRadius, float directionVarThresh,
   return false;
 }
 
-// 最大分散軸で分割 → 任意分割 (indices 版)
+/**
+ * 最大分散軸で指定数に分割する。
+ *
+ * 処理内容:
+ * - 最大分散軸を特定
+ * - 等間隔でグループ分け
+ * - 各グループに新しいBoidUnitを作成
+ */
 std::vector<BoidUnit *> BoidUnit::split(int numSplits) {
   if (numSplits < 2)
     numSplits = 2;
@@ -920,8 +916,15 @@ std::vector<BoidUnit *> BoidUnit::split(int numSplits) {
   return result;
 }
 
-// 現在のユニットを分割し子ノードとして配置
-// 現在のユニットを分割し子ノードとして配置
+/**
+ * 現在のユニットを分割し子ノードとして配置する。
+ *
+ * 処理内容:
+ * - 分割必要性を判定
+ * - クラスタリングで4分割
+ * - 各子ノードの親/トップを設定
+ * - 自身は中間ノードに変更
+ */
 void BoidUnit::splitInPlace(int maxBoids) {
   if (!needsSplit(80.0f, 0.5f, maxBoids))
     return;
@@ -929,22 +932,26 @@ void BoidUnit::splitInPlace(int maxBoids) {
   auto splits = splitByClustering(4);
 
   for (auto *child : splits) {
-    child->parent = this;         // 親ノードを設定
-    child->topParent = topParent; // トップノードを継承
+    child->parent = this;
+    child->topParent = topParent;
     children.push_back(child);
   }
 
-  // 自分は中間ノードになるので indices を空に
   indices.clear();
 
-  // 子ノードを登録
   children = std::move(splits);
 
-  // バウンディングスフィアを再計算
   computeBoundingSphere();
 }
 
-// k-means 風クラスタリングで indices をグループ化
+/**
+ * k-means風クラスタリングでindicesをグループ化する。
+ *
+ * 処理内容:
+ * - 初期中心を先頭から選択
+ * - 5回の反復でクラスタリング実行
+ * - 各グループに新しいBoidUnitを作成
+ */
 std::vector<BoidUnit *> BoidUnit::splitByClustering(int numClusters) {
   if ((int)indices.size() < numClusters)
     numClusters = static_cast<int>(indices.size());
@@ -1020,19 +1027,13 @@ std::vector<BoidUnit *> BoidUnit::splitByClustering(int numClusters) {
 }
 
 /**
- * 指定されたユニット内のすべての Boid に反発力を加える。
+ * 指定されたユニットと結合可能か判定する。
  *
- * @param unit 対象の BoidUnit
- * @param repulsion 反発力ベクトル
- *
- * 処理内容:
- * - **最下位層の場合**:
- *   - Boid の位置に基づいて反発力を計算し、加速度に加算。
- * - **中間ノードの場合**:
- *   - 再帰的に子ノードを処理。
- *
- * 使用例:
- * - Boid 間の衝突回避やユニット間の分離を実現する際に使用。
+ * 判定条件:
+ * - 中心間距離が閾値以下
+ * - 平均速度差が閾値以下
+ * - 結合後のBoid数が上限以下
+ * - 結合後の半径が上限以下
  */
 bool BoidUnit::canMergeWith(const BoidUnit &other, float mergeDist,
                             float velThresh, float maxRadius,
@@ -1067,21 +1068,35 @@ bool BoidUnit::canMergeWith(const BoidUnit &other, float mergeDist,
   return newRadius <= maxRadius;
 }
 
-// 他ユニットを結合（値渡し版）
+/**
+ * 他ユニットを結合する（値渡し版）。
+ *
+ * 処理内容:
+ * - indicesを結合
+ * - speciesIdを更新
+ * - バウンディングスフィアを再計算
+ */
 void BoidUnit::mergeWith(const BoidUnit &other) {
   // indices を結合
   indices.insert(indices.end(), other.indices.begin(), other.indices.end());
 
   // buf->speciesIds を更新
   for (int gIdx : other.indices) {
-    buf->speciesIds[gIdx] = speciesId; // 自ノードの speciesId を適用
+    buf->speciesIds[gIdx] = speciesId;
   }
 
-  // バウンディングスフィアを再計算
   computeBoundingSphere();
 }
 
-// 他ユニットを結合（ポインタ／親ノード付き版）
+/**
+ * 他ユニットを結合する（ポインタ／親ノード付き版）。
+ *
+ * 処理内容:
+ * - indicesを結合
+ * - speciesIdを更新
+ * - 親とトップを設定
+ * - 自ノードを葉に変更
+ */
 void BoidUnit::mergeWith(BoidUnit *other, BoidUnit *parent) {
   // indices を結合
   indices.insert(indices.end(), other->indices.begin(), other->indices.end());
