@@ -80,8 +80,6 @@ void printTree(const BoidUnit *node, int depth) {
   for (const auto *child : node->children)
     printTree(child, depth + 1);
 }
-
-// ---- BoidTree::build ----
 void BoidTree::build(int maxPerUnit, int level) {
   // 既存の root を削除して再生成
   if (root) {
@@ -99,6 +97,118 @@ void BoidTree::build(int maxPerUnit, int level) {
 
   buildRecursive(root, indices, maxPerUnit, level);
   // printTree(root, 0);
+}
+// void BoidTree::build(int maxPerUnit, int level) {
+//   // rootが存在する場合は再利用して再構築
+//   if (root) {
+//     std::vector<BoidUnit *> existingUnits;
+//     collectLeaves(root, existingUnits); // 既存の葉ノードを収集
+
+//     // 新しいルートノードを作成
+//     auto *newRoot = new BoidUnit();
+//     newRoot->buf = &buf; // 中央バッファを共有
+//     newRoot->level = level;
+
+//     // 既存のユニットを再利用して再構築
+//     rebuildTreeWithUnits(newRoot, existingUnits, maxPerUnit, level);
+
+//     // 古いルートを削除
+//     delete root;
+//     root = newRoot;
+//   } else {
+//     // rootが存在しない場合は新規作成
+//     root = new BoidUnit();
+//     root->buf = &buf; // 中央バッファを共有
+//     maxBoidsPerUnit = maxPerUnit;
+//     root->level = level;
+
+//     // すべての Boid インデックスを作成
+//     std::vector<int> indices(buf.positions.size());
+//     std::iota(indices.begin(), indices.end(), 0);
+
+//     buildRecursive(root, indices, maxPerUnit, level);
+//   }
+// }
+
+// 既存のユニットを再利用して木構造を再構築する関数
+void BoidTree::rebuildTreeWithUnits(BoidUnit *node,
+                                    const std::vector<BoidUnit *> &units,
+                                    int maxPerUnit, int level) {
+  node->level = level;
+
+  // 既存の children をクリア
+  node->children.clear();
+
+  // 空間的に分割
+  if ((int)units.size() <= maxPerUnit) {
+    // 葉ノードとしてユニットを直接保持
+    for (auto *unit : units) {
+      unit->parent = node; // 親ノードを設定
+      unit->topParent =
+          node->topParent ? node->topParent : node; // トップノードを継承
+
+      // 必要な変数をリセットしつつ indices を保持
+      unit->cohesionMemories.assign(BoidUnit::MAX_BOIDS, 0.0f);
+      unit->activeNeighbors.reset();
+      unit->frameCount = 0;
+
+      node->children.push_back(unit);
+    }
+    node->computeBoundingSphere(); // バウンディングスフィアを計算
+    return;
+  }
+
+  // 分割軸を決定
+  float mean[3] = {0}, var[3] = {0};
+  for (const auto *unit : units) {
+    const glm::vec3 &p = unit->center;
+    mean[0] += p.x;
+    mean[1] += p.y;
+    mean[2] += p.z;
+  }
+  for (int k = 0; k < 3; ++k)
+    mean[k] /= units.size();
+
+  for (const auto *unit : units) {
+    const glm::vec3 &p = unit->center;
+    var[0] += (p.x - mean[0]) * (p.x - mean[0]);
+    var[1] += (p.y - mean[1]) * (p.y - mean[1]);
+    var[2] += (p.z - mean[2]) * (p.z - mean[2]);
+  }
+  int axis = (var[1] > var[0]) ? 1 : 0;
+  if (var[2] > var[axis])
+    axis = 2;
+
+  // ユニットを分割
+  std::vector<BoidUnit *> sortedUnits = units;
+  std::sort(sortedUnits.begin(), sortedUnits.end(),
+            [axis](BoidUnit *a, BoidUnit *b) {
+              const glm::vec3 &pa = a->center;
+              const glm::vec3 &pb = b->center;
+              return (axis == 0)   ? pa.x < pb.x
+                     : (axis == 1) ? pa.y < pb.y
+                                   : pa.z < pb.z;
+            });
+  std::size_t mid = sortedUnits.size() / 2;
+  std::vector<BoidUnit *> left(sortedUnits.begin(), sortedUnits.begin() + mid);
+  std::vector<BoidUnit *> right(sortedUnits.begin() + mid, sortedUnits.end());
+
+  auto *leftChild = new BoidUnit();
+  auto *rightChild = new BoidUnit();
+  leftChild->buf = node->buf;
+  rightChild->buf = node->buf;
+  leftChild->parent = node;
+  rightChild->parent = node;
+  leftChild->topParent = node->topParent ? node->topParent : node;
+  rightChild->topParent = node->topParent ? node->topParent : node;
+
+  node->children.push_back(leftChild);
+  node->children.push_back(rightChild);
+
+  rebuildTreeWithUnits(leftChild, left, maxPerUnit, level + 1);
+  rebuildTreeWithUnits(rightChild, right, maxPerUnit, level + 1);
+
+  node->computeBoundingSphere(); // バウンディングスフィアを計算
 }
 
 void BoidTree::buildRecursive(BoidUnit *node, const std::vector<int> &indices,
@@ -222,7 +332,7 @@ void BoidTree::update(float dt) {
   // 木構造全体を再帰的に更新
   if (root) {
     try {
-      root->updateRecursive(dt * 5);
+      root->updateRecursive(glm::clamp(dt, 0.0f, 0.1f) * 5);
     } catch (const std::exception &e) {
       std::cerr << "Exception caught: " << e.what() << std::endl;
     } catch (...) {
@@ -235,21 +345,27 @@ void BoidTree::update(float dt) {
   // 一定フレームごとに葉ノードを再収集
   if (frameCount % 5 == 0) {
     leafCache.clear();
+    //  collectLeaves(root, leafCache); // 葉ノードを収集
     splitIndex = 0;
     mergeIndex = 0;
   }
 
   // 一定フレームごとに木構造を再構築
-  if (frameCount % 17 == 0) { // 再構築頻度を調整
+  if (frameCount % 2 == 0) { // 再構築頻度を調整
     build(maxBoidsPerUnit, 0);
+    // printTree(root, 0); // ツリー構造をログに出力
+
     return;
   }
 
   // 分割と結合の処理
   if (!leafCache.empty()) {
     // 分割
-    for (int i = 0; i < 5 && splitIndex < (int)leafCache.size();
+    for (int i = 0; i < 12 && splitIndex < (int)leafCache.size();
          ++i, ++splitIndex) {
+      emscripten::val console = emscripten::val::global("console");
+      console.call<void>("log", std::string("分割"));
+
       BoidUnit *u = leafCache[splitIndex];
       if (u && u->needsSplit(40.0f, 0.5f, maxBoidsPerUnit)) {
         u->splitInPlace(maxBoidsPerUnit);
@@ -259,8 +375,11 @@ void BoidTree::update(float dt) {
     }
 
     // 結合
-    for (int i = 0; i < 5 && mergeIndex < (int)leafCache.size();
+    for (int i = 0; i < 12 && mergeIndex < (int)leafCache.size();
          ++i, ++mergeIndex) {
+      emscripten::val console = emscripten::val::global("console");
+      console.call<void>("log", std::string("結合"));
+
       for (int j = mergeIndex + 1; j < (int)leafCache.size(); ++j) {
         BoidUnit *a = leafCache[mergeIndex];
         BoidUnit *b = leafCache[j];

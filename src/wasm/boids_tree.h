@@ -37,6 +37,9 @@ public:
     std::unordered_map<int, int> collectBoidUnitMapping();
     SpeciesParams getGlobalSpeciesParams(std::string species);
     void setGlobalSpeciesParams(const SpeciesParams &params);
+    void rebuildTreeWithUnits(BoidUnit *node,
+                              const std::vector<BoidUnit *> &units,
+                              int maxPerUnit, int level);
 };
 
 extern std::vector<SpeciesParams> globalSpeciesParams;

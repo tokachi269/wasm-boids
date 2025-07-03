@@ -33,7 +33,6 @@ public:
     glm::vec3 center{}, averageVelocity{};
     float radius = 0.0f;
     int level = 0;
-    glm::vec3 influence{};
     int frameCount = 0;
 
     BoidUnit() : id(nextId++) {
