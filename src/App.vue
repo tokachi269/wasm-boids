@@ -78,9 +78,9 @@ function fetchTreeStructure() {
 const DEFAULT_SETTINGS = [{
   species: 'Boids',         // 種族名
   count: 5000,             // 群れの数
-  cohesion: 20,             // 凝集
+  cohesion: 30,             // 凝集
   cohesionRange: 30,        // 凝集範囲
-  separation: 10,            // 分離
+  separation: 7,            // 分離
   separationRange: 1,       // 分離範囲
   alignment: 8,             // 整列
   alignmentRange: 6,        // 整列範囲
@@ -95,7 +95,7 @@ const DEFAULT_SETTINGS = [{
   cohesion: 5.58,                     // 捕食者には使わない
   separation: 0.0,
   alignment: 0.0,
-  maxSpeed: 0.45,                     // 速く逃げられるよう速度は大きめ
+  maxSpeed: 0.74,                     // 速く逃げられるよう速度は大きめ
   minSpeed: 0.4,
   maxTurnAngle: 0.221,
   separationRange: 14.0,
@@ -273,8 +273,10 @@ boidGeometryHigh.scale(0.5, 0.5, 2.0); // 少し小さくする
 boidGeometryLow.scale(0.5, 0.5, 2.0); // 少し小さくする
 let boidModel = null; // 読み込んだモデルを保持
 let boidModelLod = null; // 読み込んだモデルを保持
+let predatorModel = null; // 捕食者モデルを保持
 let originalMaterial = null; // 元のマテリアルを保持
 let originalMaterialLod = null; // 元のLODマテリアルを保持
+let predatorMaterial = null; // 捕食者用マテリアル
 
 // 起動時の正しいテクスチャマテリアルを保持
 let originalHighMat = null;
@@ -337,25 +339,34 @@ function initInstancedBoids(count) {
 function loadBoidModel(callback) {
   const loader = new GLTFLoader();
   const textureLoader = new THREE.TextureLoader();
-  
+
   const texture = textureLoader.load(
     './models/fish.png',
     () => console.log('Texture loaded successfully.'),
     undefined,
     (error) => console.error('An error occurred while loading the texture:', error)
   );
-  
+
   const textureLod = textureLoader.load(
     './models/fish_lod.png',
     () => console.log('Texture loaded successfully.'),
     undefined,
     (error) => console.error('An error occurred while loading the texture:', error)
   );
-  
+
+  const predatorTexture = textureLoader.load(
+    './models/fishPredetor.png',
+    () => console.log('Predator texture loaded successfully.'),
+    undefined,
+    (error) => console.error('An error occurred while loading the predator texture:', error)
+  );
+
   texture.flipY = false;
   texture.colorSpace = THREE.SRGBColorSpace;
   textureLod.flipY = false;
   textureLod.colorSpace = THREE.SRGBColorSpace;
+  predatorTexture.flipY = false;
+  predatorTexture.colorSpace = THREE.SRGBColorSpace;
 
   boidMaterial = new THREE.MeshStandardMaterial({
     color: 0xffffff,
@@ -379,9 +390,30 @@ function loadBoidModel(callback) {
     vertexColor: 0xffffff
   });
 
+  predatorMaterial = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.5,
+    metalness: 0,
+    transparent: false,
+    alphaTest: 0.5,
+    map: predatorTexture,
+    vertexColors: false,
+    vertexColor: 0xffffff
+  });
+
   originalMaterial = boidMaterial;
   originalMaterialLod = boidLodMaterial;
-  
+
+  let modelsLoaded = 0;
+  const totalModels = 3;
+
+  const checkAllLoaded = () => {
+    modelsLoaded++;
+    if (modelsLoaded === totalModels) {
+      callback();
+    }
+  };
+
   loader.load(
     `./models/boidModel.glb`,
     (gltf) => {
@@ -391,7 +423,7 @@ function loadBoidModel(callback) {
           child.material = boidMaterial;
         }
       });
-      callback();
+      checkAllLoaded();
     },
     undefined,
     (error) => console.error('An error occurred while loading the model:', error)
@@ -406,10 +438,25 @@ function loadBoidModel(callback) {
           child.material = boidLodMaterial;
         }
       });
-      callback();
+      checkAllLoaded();
     },
     undefined,
     (error) => console.error('An error occurred while loading the LOD model:', error)
+  );
+
+  loader.load(
+    `./models/boidPredetorModel.glb`,
+    (gltf) => {
+      predatorModel = gltf.scene;
+      predatorModel.traverse((child) => {
+        if (child.isMesh) {
+          child.material = predatorMaterial;
+        }
+      });
+      checkAllLoaded();
+    },
+    undefined,
+    (error) => console.error('An error occurred while loading the predator model:', error)
   );
 }
 
@@ -504,14 +551,16 @@ function animate() {
   const dummy = new THREE.Object3D();
   const identityMatrix = new THREE.Matrix4();
   const camPos = camera.position;
-
   // Predator用マーカーの初期化
-  if (!predatorMarker) {
-    const predatorMarkerGeometry = new THREE.SphereGeometry(0.2, 16, 16);
-    const predatorMarkerMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-    predatorMarker = new THREE.Mesh(predatorMarkerGeometry, predatorMarkerMaterial);
+  if (!predatorMarker && predatorModel) {
+    predatorMarker = predatorModel.clone();
+    predatorMarker.traverse((child) => {
+      if (child.isMesh) {
+        child.material = predatorMaterial;
+      }
+    });
     scene.add(predatorMarker);
-  }  // 使用するメッシュを決定
+  }// 使用するメッシュを決定
   let activeMeshHigh = instancedMeshHigh;
   let activeMeshLow = instancedMeshLow;  // 各Boidの位置と色を更新
   for (let i = 0; i < count; ++i) {
@@ -529,11 +578,10 @@ function animate() {
     } else {
       activeMeshHigh.setMatrixAt(i, identityMatrix);
       activeMeshLow.setMatrixAt(i, dummy.matrix);
-    }
-
-    // Predatorの特別表示
-    if (i === count - 1 && settings[1]?.isPredator) {
+    }    // Predatorの特別表示
+    if (i === count - 1 && settings[1]?.isPredator && predatorMarker) {
       predatorMarker.position.copy(dummy.position);
+      predatorMarker.quaternion.copy(dummy.quaternion);
     }
   }
   // 頂点カラーの更新（毎フレーム）

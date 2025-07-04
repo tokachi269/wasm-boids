@@ -77,11 +77,11 @@ void BoidUnit::computeBoundingSphere() {
     radius = mean + 1.0f * stddev;
   } else {
     if (children.empty())
-      return;    // 子ノードの中心を計算 - パフォーマンス最適化
+      return; // 子ノードの中心を計算 - パフォーマンス最適化
     center = glm::vec3(0.0f);
     const size_t childrenSize = children.size();
-    const BoidUnit* const* childrenData = children.data();
-    
+    const BoidUnit *const *childrenData = children.data();
+
     for (size_t i = 0; i < childrenSize; ++i) {
       center += childrenData[i]->center;
     }
@@ -90,7 +90,7 @@ void BoidUnit::computeBoundingSphere() {
     // 子ノード中心までの平均距離 + 子ノード半径 - パフォーマンス最適化
     float sum = 0.0f, sum2 = 0.0f;
     for (size_t i = 0; i < childrenSize; ++i) {
-      const BoidUnit* child = childrenData[i];
+      const BoidUnit *child = childrenData[i];
       float d = glm::distance(center, child->center) + child->radius;
       sum += d;
       sum2 += d * d;
@@ -130,9 +130,9 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
     std::stack<BoidUnit *> stack;
     stack.push(root);
 
-    constexpr float predatorRange = 3.0f;
+    constexpr float predatorRange = 2.0f;
     constexpr float predatorRangeSq = predatorRange * predatorRange;
-    constexpr float predatorEffectRange = 8.0f;
+    constexpr float predatorEffectRange = 3.0f;
 
     while (!stack.empty()) {
       BoidUnit *current = stack.top();
@@ -156,31 +156,36 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
 
             glm::vec3 toTarget =
                 current->buf->positions[idxB] - buf->positions[idxA];
-            float d2 = glm::dot(toTarget, toTarget);            if (d2 < predatorRangeSq) {
+            float d2 = glm::dot(toTarget, toTarget);
+            if (d2 < predatorRangeSq) {
               glm::vec3 escapeDir = glm::normalize(
                   buf->positions[idxB] - current->buf->positions[idxA]);
-              
-              // 距離に応じたストレスレベルを計算
-              float distance = std::sqrt(d2);
-              float normalizedDistance = distance / predatorRange; // 距離を正規化
-              float escapeStrength = glm::clamp(1.0f - normalizedDistance, 0.0f, 1.0f);
-              escapeStrength = escapeStrength * escapeStrength * (3.0f - 2.0f * escapeStrength); // イージング関数
-              
-              // 距離に応じたストレスレベル（近いほど高ストレス）
-              float stressLevel = 0.3f + escapeStrength * 0.7f; // 0.3-1.0の範囲
-              
-              // 既存のストレスより高い場合のみ更新（パニック状態の維持）
-              if (buf->stresses[idxB] < stressLevel) {
-                buf->stresses[idxB] = stressLevel;
+              // stress が 0.8 未満の場合のみ更新
+              if (buf->stresses[idxB] < 0.8f) {                // 距離に応じたイージングを適用
+                float normalizedDistance =
+                    std::sqrt(d2) / predatorRange; // 距離を正規化
+                float escapeStrength =
+                    glm::clamp(1.0f - normalizedDistance, 0.0f, 1.0f);
+                escapeStrength =
+                    escapeStrength * escapeStrength *
+                    (3.0f - 2.0f * escapeStrength); // イージング関数
+
+                // 逃走力を大幅に強化（放射線状逃走のため）
+                buf->predatorInfluences[idxB] += escapeDir * escapeStrength * 5.0f; // 5倍強化
+                
+                // ストレスレベルを距離に応じて設定
+                float stressLevel = 0.5f + escapeStrength * 0.5f; // 0.5-1.0の範囲
+                if (buf->stresses[idxB] < stressLevel) {
+                  buf->stresses[idxB] = stressLevel; // より高いストレスのみ更新
+                }
               }
-              
-              buf->predatorInfluences[idxB] += escapeDir * escapeStrength;
             }
           }
-        }      } else {
+        }
+      } else {
         // 中間ノード: 子ノードを積む - パフォーマンス最適化
         const size_t childrenSize = current->children.size();
-        BoidUnit** childrenData = current->children.data();
+        BoidUnit **childrenData = current->children.data();
         for (size_t i = 0; i < childrenSize; ++i) {
           stack.push(childrenData[i]);
         }
@@ -195,45 +200,53 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
       glm::vec3 sumPos = glm::vec3(0.00001f);
       glm::vec3 sep = glm::vec3(0.00001f);
       int cnt = 0;
-      int sidA = speciesId;      for (int idxB : other->indices) {
-        // GLMベクトルアクセス最適化: 位置成分を直接計算
-        const glm::vec3& posA = buf->positions[idxA];
-        const glm::vec3& posB = other->buf->positions[idxB];
-        
-        float dx = posA.x - posB.x;
-        float dy = posA.y - posB.y;
-        float dz = posA.z - posB.z;
-        float d2 = dx * dx + dy * dy + dz * dz;
+      int sidA = speciesId;
+      for (int idxB : other->indices) {
+        // 種族IDチェック: 異なる種族同士では群れ行動を行わない
+        int sidB = other->buf->speciesIds[idxB];
+        if (sidA != sidB) {
+          continue; // 異なる種族とは群れ行動しない
+        }
+
+        glm::vec3 diff = buf->positions[idxA] - other->buf->positions[idxB];
+        float d2 = glm::dot(diff, diff);
 
         if (d2 < 100.0f && d2 > 1e-4f) {
           float d = std::sqrt(d2);
           float w = std::max(0.0f, 1.0f - (d / 40.0f));
 
           sumVel += other->buf->velocities[idxB] * w;
-          sumPos += posB * w;
-          
-          // 分離力計算も最適化
-          glm::vec3 diff(dx, dy, dz);
+          sumPos += other->buf->positions[idxB] * w;
           sep += (diff / (d2 + 1.0f)) * w;
           ++cnt;
         }
       }      if (cnt > 0) {
-        // ストレス時は群れ行動を抑制（特に凝集力）
-        float stressReduction = 1.0f;
-        if (buf->stresses[idxA] > 0.3f) {
-          // ストレスが高いほど群れ行動を抑制
-          stressReduction = 1.0f - (buf->stresses[idxA] - 0.3f) * 0.8f; // 最大80%抑制
-          stressReduction = glm::clamp(stressReduction, 0.1f, 1.0f); // 最低10%は維持
+        // ストレス状態に応じた段階的動作制御
+        float currentStress = buf->stresses[idxA];
+        float cohesionMultiplier = 1.0f;
+        float speedMultiplier = 1.0f;
+        
+        // 逃走後の再結集フェーズ（中程度ストレス時）
+        if (currentStress > 0.2f && currentStress < 0.6f) {
+          cohesionMultiplier = 3.0f; // 凝集力を3倍に強化
+          speedMultiplier = 1.5f;    // 移動速度を1.5倍に向上
+        }
+        // 高ストレス時は逃走優先（凝集力抑制）
+        else if (currentStress >= 0.6f) {
+          cohesionMultiplier = 0.2f; // 凝集力を大幅に抑制
         }
         
         buf->accelerations[idxA] +=
             (sumVel / float(cnt) - buf->velocities[idxA]) *
-            globalSpeciesParams[sidA].alignment * stressReduction;
+            globalSpeciesParams[sidA].alignment;
         buf->accelerations[idxA] +=
             (sumPos / float(cnt) - buf->positions[idxA]) *
-            globalSpeciesParams[sidA].cohesion * stressReduction * 0.5f; // 凝集力は特に抑制
+            globalSpeciesParams[sidA].cohesion * cohesionMultiplier; // 凝集強化
         buf->accelerations[idxA] +=
-            sep * (globalSpeciesParams[sidA].separation * 0.5f); // 分離力はストレス時も維持
+            sep * (globalSpeciesParams[sidA].separation * 0.5f);
+            
+        // 再結集中の速度向上を後で適用するため、ストレス情報を保持
+        buf->stresses[idxA] = glm::max(buf->stresses[idxA], speedMultiplier - 1.0f);
       }
     }
   }
@@ -268,31 +281,32 @@ void BoidUnit::updateRecursive(float dt) {
   while (!stack.empty()) {
     BoidUnit *current = stack.top();
     stack.pop();
-  // パフォーマンス最適化: children ベクトルのサイズを事前キャッシュ
-  const size_t childrenSize = current->children.size();
-  BoidUnit** childrenData = current->children.data(); // 直接ポインタアクセス
-  
-  // Leaf は並列実行
-  if (current->isBoidUnit()) {
-    asyncTasks.emplace_back(
-        pool.enqueue([current, dt] { current->computeBoidInteraction(dt); }));
-  } else {
-    // パフォーマンス最適化: インデックスアクセスで begin() 呼び出しを削減
-    for (size_t i = 0; i < childrenSize; ++i) {
-      stack.push(childrenData[i]);
-    }
+    // パフォーマンス最適化: children ベクトルのサイズを事前キャッシュ
+    const size_t childrenSize = current->children.size();
+    BoidUnit **childrenData = current->children.data(); // 直接ポインタアクセス
 
-    // 子ユニット間の相互作用をサブツリー単位で非同期処理
-    if (childrenSize > 1) {
-      asyncTasks.emplace_back(pool.enqueue([childrenData, childrenSize] {
-        // パフォーマンス最適化: 直接ポインタアクセスで operator[] 呼び出しを削減
-        for (size_t a = 0; a < childrenSize; ++a) {
-          for (size_t b = a + 1; b < childrenSize; ++b) {
-            childrenData[a]->applyInterUnitInfluence(childrenData[b]);
+    // Leaf は並列実行
+    if (current->isBoidUnit()) {
+      asyncTasks.emplace_back(
+          pool.enqueue([current, dt] { current->computeBoidInteraction(dt); }));
+    } else {
+      // パフォーマンス最適化: インデックスアクセスで begin() 呼び出しを削減
+      for (size_t i = 0; i < childrenSize; ++i) {
+        stack.push(childrenData[i]);
+      }
+
+      // 子ユニット間の相互作用をサブツリー単位で非同期処理
+      if (childrenSize > 1) {
+        asyncTasks.emplace_back(pool.enqueue([childrenData, childrenSize] {
+          // パフォーマンス最適化: 直接ポインタアクセスで operator[]
+          // 呼び出しを削減
+          for (size_t a = 0; a < childrenSize; ++a) {
+            for (size_t b = a + 1; b < childrenSize; ++b) {
+              childrenData[a]->applyInterUnitInfluence(childrenData[b]);
+            }
           }
-        }
-      }));
-    }
+        }));
+      }
 
       current->computeBoundingSphere();
     }
@@ -302,7 +316,7 @@ void BoidUnit::updateRecursive(float dt) {
     f.get();
   asyncTasks.clear();
 
-  // 第二段階: acceleration 適用 → velocity / position 更新
+  // 第二段階: 位置と速度を更新
   stack.push(this);
   while (!stack.empty()) {
     BoidUnit *current = stack.top();
@@ -357,44 +371,50 @@ void BoidUnit::updateRecursive(float dt) {
             //           std::to_string(glm::length(chaseAcc)));
             // }
             acceleration += chaseAcc;
-          }
-          // -----------------------------------------------
+          }          // -----------------------------------------------
           // 共通処理: stress/predatorInfluence のブレンド(被捕食者のみ)
-          // -----------------------------------------------        } else if (current->buf->stresses[gIdx] > 0.0f) {
-          // ストレスレベルに応じた逃走力の重み調整
+          // -----------------------------------------------
+        } else if (current->buf->stresses[gIdx] > 0.1f || 
+                   glm::length(current->buf->predatorInfluences[gIdx]) > 0.001f) {
+          
+          // 実際のストレスレベルを使用（敵が近いほど逃走を優先）
           float currentStress = current->buf->stresses[gIdx];
-          float escapeWeight = 0.3f; // 基本逃走重み
-          
-          if (currentStress > 0.7f) {
-            // パニック状態：逃走力を最優先（群れ行動を大幅に抑制）
-            escapeWeight = 0.9f;
-          } else if (currentStress > 0.4f) {
-            // 中程度のストレス：逃走力を重視
-            escapeWeight = 0.7f;
-          }
-          
-          // predatorInfluence の大きさを確認して調整
           float predatorInfluenceMagnitude = glm::length(current->buf->predatorInfluences[gIdx]);
-          if (predatorInfluenceMagnitude > 0.01f) {
-            // 逃走力が存在する場合のみ混合、そうでなければ通常行動
-            acceleration = acceleration * (1.0f - escapeWeight) +
-                          current->buf->predatorInfluences[gIdx] * escapeWeight;
+          
+          // 逃走重みを大幅に強化（放射線状逃走を実現）
+          float escapeWeight = 0.8f; // 基本80%で逃走を優先
+          if (currentStress > 0.7f || predatorInfluenceMagnitude > 2.0f) {
+            escapeWeight = 0.95f; // 高ストレス時は95%逃走優先
+          } else if (currentStress > 0.4f || predatorInfluenceMagnitude > 1.0f) {
+            escapeWeight = 0.9f;  // 中ストレス時は90%逃走優先
           }
           
+          // 逃走方向を正規化して強化（放射線状逃走）
+          glm::vec3 escapeForce = current->buf->predatorInfluences[gIdx];
+          if (predatorInfluenceMagnitude > 0.001f) {
+            escapeForce = glm::normalize(escapeForce) * 10.0f; // 強い逃走力
+          }
+          
+          acceleration = acceleration * (1.0f - escapeWeight) + escapeForce * escapeWeight;
           // console.call<void>("log", "STRESS: gIdx=" + std::to_string(gIdx) +
-          //                               " stress=" + std::to_string(currentStress) +
-          //                               " escapeWeight=" + std::to_string(escapeWeight) +
-          //                               " acc=" + glm::to_string(acceleration));
-        }// ストレス時の緊急回避機能強化
+          //                               " stress=" + std::to_string(stress) +
+          //                               " acc=" +
+          //                               glm::to_string(acceleration) + "
+          //                               pos=" + glm::to_string(position));
+        }        // stress に基づく段階的速度調整
         float currentStress = current->buf->stresses[gIdx];
-        float stressFactor = 1.0f + currentStress * 1.2f;
+        float stressFactor = 1.0f;
         
-        // ストレス時の旋回能力向上（非線形な反応）
-        float panicFactor = 1.0f;
-        if (currentStress > 0.3f) {
-          // ストレスが0.3以上で急激に旋回能力が向上
-          float panicLevel = (currentStress - 0.3f) / 0.7f; // 0.3-1.0を0-1にマップ
-          panicFactor = 1.0f + panicLevel * panicLevel * 2.5f; // 非線形に増加
+        // 段階的な速度制御
+        if (currentStress > 0.6f) {
+          // 高ストレス時: 逃走優先で高速移動
+          stressFactor = 1.0f + currentStress * 1.5f; // 最大2.5倍速
+        } else if (currentStress > 0.2f) {
+          // 中ストレス時: 再結集のための高速移動
+          stressFactor = 1.0f + currentStress * 2.0f; // 最大2.2倍速（再結集強化）
+        } else {
+          // 低ストレス時: 通常速度
+          stressFactor = 1.0f + currentStress * 0.5f; // 軽度の速度向上
         }
         
         float maxSpeed = globalSpeciesParams[sid].maxSpeed * stressFactor;
@@ -409,14 +429,18 @@ void BoidUnit::updateRecursive(float dt) {
 
         float dotProduct = glm::dot(oldDir, newDir);
         float angle = acosf(glm::clamp(dotProduct, -1.0f, 1.0f));
+        float maxTurnAngle =
+            globalSpeciesParams[sid].maxTurnAngle * stressFactor;
 
-        // ストレス時の旋回角度大幅向上（パニック状態では3倍以上の旋回能力）
-        float maxTurnAngle = globalSpeciesParams[sid].maxTurnAngle * stressFactor * panicFactor;
-        
-        // 捕食者は回転制限を緩和（必要に応じて）
         if (globalSpeciesParams[sid].isPredator &&
             current->buf->predatorTargetIndices[gIdx] >= 0) {
           maxTurnAngle *= 1.5f; // 捕食者の追跡時は回転制限を緩和
+        }        // ストレス時の緊急回避用に旋回角度を緩やかに緩和（振動防止）
+        if (currentStress > 0.7f) {
+          // 高ストレス時のみ、穏やかに旋回能力を向上（振動防止）
+          float emergencyTurnFactor =
+              1.0f + (currentStress - 0.7f) * 5.0f; // 最大6.0倍の旋回能力
+          maxTurnAngle *= emergencyTurnFactor;
         }
 
         if (angle > maxTurnAngle) {
@@ -451,36 +475,26 @@ void BoidUnit::updateRecursive(float dt) {
         // 共通処理: 速度クランプと位置更新
         // -----------------------------------------------
         float finalSpeed =
-            glm::clamp(speed, globalSpeciesParams[sid].minSpeed, maxSpeed);        current->buf->velocities[gIdx] = newDir * finalSpeed;
-        current->buf->positions[gIdx] += current->buf->velocities[gIdx] * dt;
-        current->buf->accelerations[gIdx] = glm::vec3(0.0f);
-        current->buf->predatorInfluences[gIdx] = glm::vec3(0.0f); // 次フレーム用にリセット
-        current->buf->orientations[gIdx] = BoidUnit::dirToQuatRollZero(newDir);// ストレスの時間経過による減少（改善版）
+            glm::clamp(speed, globalSpeciesParams[sid].minSpeed, maxSpeed);
+
+        current->buf->velocities[gIdx] = newDir * finalSpeed;
+        current->buf->positions[gIdx] += current->buf->velocities[gIdx] * dt;        current->buf->accelerations[gIdx] = glm::vec3(0.0f);
+        // predatorInfluences を減衰させて逃走時間を調整
+        current->buf->predatorInfluences[gIdx] *= 0.5f; // 50%減衰で早期終了
+        current->buf->orientations[gIdx] = BoidUnit::dirToQuatRollZero(newDir);// stress を時間経過で減少（逃走時間を短縮）
         if (current->buf->stresses[gIdx] > 0.0f) {
-          float currentStress = current->buf->stresses[gIdx];
-          
-          // ストレスレベルに応じた減少率（高ストレス時はゆっくり回復）
-          float baseDecayRate = 0.4f;
-          float stressDecayRate = baseDecayRate;
-          
-          if (currentStress > 0.7f) {
-            // パニック状態（ストレス0.7以上）では回復が遅い
-            stressDecayRate = baseDecayRate * 0.3f;
-          } else if (currentStress > 0.4f) {
-            // 中程度のストレスでは通常の回復
-            stressDecayRate = baseDecayRate * 0.7f;
-          }
-          // 軽度のストレス（0.4以下）では通常の回復率
-          
-          current->buf->stresses[gIdx] -= BoidUnit::easeOut(dt * stressDecayRate);
+          // ストレス減衰を大幅に速くして、適度な逃走時間を実現
+          float decayRate = 1.5f; // 0.4f から 1.5f に増加（約4倍早い回復）
+          current->buf->stresses[gIdx] -= BoidUnit::easeOut(dt * decayRate);
           if (current->buf->stresses[gIdx] < 0.0f) {
             current->buf->stresses[gIdx] = 0.0f;
           }
         }
-      }    } else {
+      }
+    } else {
       // パフォーマンス最適化: children の直接ポインタアクセス
       const size_t childrenSize = current->children.size();
-      BoidUnit** childrenData = current->children.data();
+      BoidUnit **childrenData = current->children.data();
       for (size_t i = 0; i < childrenSize; ++i) {
         stack.push(childrenData[i]);
       }
@@ -583,28 +597,15 @@ void BoidUnit::computeBoidInteraction(float dt) {
           //     "log", "Predator " + std::to_string(gIdx) +
           //                " checking target index: " + std::to_string(tgtIdx)
           //                +
-          //                ", time left: " + std::to_string(tgtTime));          // 親ユニットの子ノードから近いユニットを探索 - パフォーマンス最適化
+          //                ", time left: " + std::to_string(tgtTime));
+
+          // 親ユニットの子ノードから近いユニットを探索
           std::vector<BoidUnit *> candidateUnits;
           if (parent) {
-            const size_t parentChildrenSize = parent->children.size();
-            BoidUnit** parentChildrenData = parent->children.data();
-            
-            // ベクトル成分をキャッシュしてGLMアクセスを最適化
-            const float centerX = center.x;
-            const float centerY = center.y; 
-            const float centerZ = center.z;
-            
-            for (size_t i = 0; i < parentChildrenSize; ++i) {
-              BoidUnit* unit = parentChildrenData[i];
-              if (unit == this) continue;
-              
-              // GLMベクトルアクセス最適化: 成分を直接計算
-              const glm::vec3& unitCenter = unit->center;
-              float dx = unitCenter.x - centerX;
-              float dy = unitCenter.y - centerY;
-              float dz = unitCenter.z - centerZ;
-              float d2 = dx * dx + dy * dy + dz * dz;
-              
+            for (BoidUnit *unit : parent->children) {
+              if (unit == this)
+                continue;
+              float d2 = glm::length2(unit->center - center);
               if (d2 < 100.0f) {
                 candidateUnits.push_back(unit);
               }
