@@ -544,7 +544,7 @@ function drawUnitTree(unit, layer = 0) {
 }
 let positions, velocities, orientations;
 
-let predatorMarker = null; // Predator 用のマーカーを保持
+let predatorMarkers = []; // Predator 用のマーカーを保持（複数対応）
 let lastTime = performance.now(); // 前回のフレームのタイムスタンプ
 
 // アニメーション継続用の命名関数（匿名関数を避けてパフォーマンス改善）
@@ -566,19 +566,33 @@ function animate() {
 
   const dummy = new THREE.Object3D();
   const identityMatrix = new THREE.Matrix4();
-  const camPos = camera.position;
-  // Predator用マーカーの初期化
-  if (!predatorMarker && predatorModel) {
-    predatorMarker = predatorModel.clone();
-    predatorMarker.traverse((child) => {
+  const camPos = camera.position;  // Predator用マーカーの初期化（複数対応）
+  const predatorCount = settings.filter(s => s.isPredator).reduce((total, s) => total + s.count, 0);
+  console.log('Predator count:', predatorCount, 'Existing markers:', predatorMarkers.length);
+  
+  // 必要な捕食者マーカー数を確保
+  while (predatorMarkers.length < predatorCount && predatorModel) {
+    const newPredatorMarker = predatorModel.clone();
+    newPredatorMarker.traverse((child) => {
       if (child.isMesh) {
         child.material = predatorMaterial;
       }
     });
-    scene.add(predatorMarker);
+    scene.add(newPredatorMarker);
+    predatorMarkers.push(newPredatorMarker);
+    console.log('Added predator marker, total:', predatorMarkers.length);
+  }
+  
+  // 余分なマーカーを削除
+  while (predatorMarkers.length > predatorCount) {
+    const marker = predatorMarkers.pop();
+    scene.remove(marker);
   }// 使用するメッシュを決定
   let activeMeshHigh = instancedMeshHigh;
   let activeMeshLow = instancedMeshLow;  // 各Boidの位置と色を更新
+  let predatorIndex = 0; // 捕食者マーカーのインデックス
+  let currentSpeciesStart = 0; // 現在の種族の開始インデックス
+  
   for (let i = 0; i < count; ++i) {
     dummy.position.fromArray(positions, i * 3);
     dummy.quaternion.fromArray(orientations, i * 4);
@@ -594,10 +608,29 @@ function animate() {
     } else {
       activeMeshHigh.setMatrixAt(i, identityMatrix);
       activeMeshLow.setMatrixAt(i, dummy.matrix);
-    }    // Predatorの特別表示
-    if (i === count - 1 && settings[1]?.isPredator && predatorMarker) {
-      predatorMarker.position.copy(dummy.position);
-      predatorMarker.quaternion.copy(dummy.quaternion);
+    }
+
+    // 捕食者の特別表示（複数対応）
+    // どの種族に属するかを判定
+    let speciesIndex = -1;
+    let offsetInSpecies = i;
+    let totalBoids = 0;
+    
+    for (let s = 0; s < settings.length; s++) {
+      if (offsetInSpecies < settings[s].count) {
+        speciesIndex = s;
+        break;
+      }
+      offsetInSpecies -= settings[s].count;
+      totalBoids += settings[s].count;
+    }
+    
+    // 捕食者の場合、対応するマーカーを更新
+    if (speciesIndex >= 0 && settings[speciesIndex].isPredator && predatorIndex < predatorMarkers.length) {
+      const marker = predatorMarkers[predatorIndex];
+      marker.position.copy(dummy.position);
+      marker.quaternion.copy(dummy.quaternion);
+      predatorIndex++;
     }
   }
   // 頂点カラーの更新（毎フレーム）

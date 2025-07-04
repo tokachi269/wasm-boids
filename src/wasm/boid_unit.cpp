@@ -161,7 +161,7 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
               glm::vec3 escapeDir = glm::normalize(
                   buf->positions[idxB] - current->buf->positions[idxA]);
               // stress が 0.8 未満の場合のみ更新
-              if (buf->stresses[idxB] < 0.8f) {                // 距離に応じたイージングを適用
+              if (buf->stresses[idxB] < 0.8f) { // 距離に応じたイージングを適用
                 float normalizedDistance =
                     std::sqrt(d2) / predatorRange; // 距離を正規化
                 float escapeStrength =
@@ -171,10 +171,12 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
                     (3.0f - 2.0f * escapeStrength); // イージング関数
 
                 // 逃走力を大幅に強化（放射線状逃走のため）
-                buf->predatorInfluences[idxB] += escapeDir * escapeStrength * 5.0f; // 5倍強化
-                
+                buf->predatorInfluences[idxB] +=
+                    escapeDir * escapeStrength * 5.0f; // 5倍強化
+
                 // ストレスレベルを距離に応じて設定
-                float stressLevel = 0.5f + escapeStrength * 0.5f; // 0.5-1.0の範囲
+                float stressLevel =
+                    0.5f + escapeStrength * 0.5f; // 0.5-1.0の範囲
                 if (buf->stresses[idxB] < stressLevel) {
                   buf->stresses[idxB] = stressLevel; // より高いストレスのみ更新
                 }
@@ -220,12 +222,13 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
           sep += (diff / (d2 + 1.0f)) * w;
           ++cnt;
         }
-      }      if (cnt > 0) {
+      }
+      if (cnt > 0) {
         // ストレス状態に応じた段階的動作制御
         float currentStress = buf->stresses[idxA];
         float cohesionMultiplier = 1.0f;
         float speedMultiplier = 1.0f;
-        
+
         // 逃走後の再結集フェーズ（中程度ストレス時）
         if (currentStress > 0.2f && currentStress < 0.6f) {
           cohesionMultiplier = 3.0f; // 凝集力を3倍に強化
@@ -235,7 +238,7 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
         else if (currentStress >= 0.6f) {
           cohesionMultiplier = 0.2f; // 凝集力を大幅に抑制
         }
-        
+
         buf->accelerations[idxA] +=
             (sumVel / float(cnt) - buf->velocities[idxA]) *
             globalSpeciesParams[sidA].alignment;
@@ -244,9 +247,10 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
             globalSpeciesParams[sidA].cohesion * cohesionMultiplier; // 凝集強化
         buf->accelerations[idxA] +=
             sep * (globalSpeciesParams[sidA].separation * 0.5f);
-            
+
         // 再結集中の速度向上を後で適用するため、ストレス情報を保持
-        buf->stresses[idxA] = glm::max(buf->stresses[idxA], speedMultiplier - 1.0f);
+        buf->stresses[idxA] =
+            glm::max(buf->stresses[idxA], speedMultiplier - 1.0f);
       }
     }
   }
@@ -371,42 +375,46 @@ void BoidUnit::updateRecursive(float dt) {
             //           std::to_string(glm::length(chaseAcc)));
             // }
             acceleration += chaseAcc;
-          }          // -----------------------------------------------
+          } // -----------------------------------------------
           // 共通処理: stress/predatorInfluence のブレンド(被捕食者のみ)
           // -----------------------------------------------
-        } else if (current->buf->stresses[gIdx] > 0.1f || 
-                   glm::length(current->buf->predatorInfluences[gIdx]) > 0.001f) {
-          
+        } else if (current->buf->stresses[gIdx] > 0.1f ||
+                   glm::length(current->buf->predatorInfluences[gIdx]) >
+                       0.001f) {
+
           // 実際のストレスレベルを使用（敵が近いほど逃走を優先）
           float currentStress = current->buf->stresses[gIdx];
-          float predatorInfluenceMagnitude = glm::length(current->buf->predatorInfluences[gIdx]);
-          
+          float predatorInfluenceMagnitude =
+              glm::length(current->buf->predatorInfluences[gIdx]);
+
           // 逃走重みを大幅に強化（放射線状逃走を実現）
           float escapeWeight = 0.8f; // 基本80%で逃走を優先
           if (currentStress > 0.7f || predatorInfluenceMagnitude > 2.0f) {
             escapeWeight = 0.95f; // 高ストレス時は95%逃走優先
-          } else if (currentStress > 0.4f || predatorInfluenceMagnitude > 1.0f) {
-            escapeWeight = 0.9f;  // 中ストレス時は90%逃走優先
+          } else if (currentStress > 0.4f ||
+                     predatorInfluenceMagnitude > 1.0f) {
+            escapeWeight = 0.9f; // 中ストレス時は90%逃走優先
           }
-          
+
           // 逃走方向を正規化して強化（放射線状逃走）
           glm::vec3 escapeForce = current->buf->predatorInfluences[gIdx];
           if (predatorInfluenceMagnitude > 0.001f) {
             escapeForce = glm::normalize(escapeForce) * 10.0f; // 強い逃走力
           }
-          
-          acceleration = acceleration * (1.0f - escapeWeight) + escapeForce * escapeWeight;
+
+          acceleration =
+              acceleration * (1.0f - escapeWeight) + escapeForce * escapeWeight;
           // console.call<void>("log", "STRESS: gIdx=" + std::to_string(gIdx) +
           //                               " stress=" + std::to_string(stress) +
           //                               " acc=" +
           //                               glm::to_string(acceleration) + "
           //                               pos=" + glm::to_string(position));
-        }        // stress に基づく滑らかな速度調整
+        } // stress に基づく滑らかな速度調整
         float currentStress = current->buf->stresses[gIdx];
         float stressFactor = 1.0f;
-        
+
         // 滑らかな遷移による速度制御（閾値なしの連続関数）
-        if (currentStress > 0.8f) {
+        if (currentStress > 0.9f) {
           // 高ストレス時: 逃走優先で高速移動
           float t = (currentStress - 0.8f) / 0.2f; // 0.8-1.0を0-1に正規化
           stressFactor = 1.0f + 1.6f + t * 0.9f; // 2.6倍から3.5倍へ滑らかに遷移
@@ -415,13 +423,14 @@ void BoidUnit::updateRecursive(float dt) {
           float t = (currentStress - 0.2f) / 0.6f; // 0.2-0.8を0-1に正規化
           // スムーズステップ関数で滑らかな遷移
           float smoothT = t * t * (3.0f - 2.0f * t);
-          stressFactor = 1.0f + 0.4f + smoothT * 1.2f; // 1.4倍から2.6倍へ滑らかに遷移
+          stressFactor =
+              1.0f + 0.4f + smoothT * 1.2f; // 1.4倍から2.6倍へ滑らかに遷移
         } else {
           // 低ストレス時: 通常速度からの滑らかな移行
           float t = currentStress / 0.2f; // 0-0.2を0-1に正規化
           stressFactor = 1.0f + t * 0.4f; // 1.0倍から1.4倍へ滑らかに遷移
         }
-        
+
         float maxSpeed = globalSpeciesParams[sid].maxSpeed * stressFactor;
 
         // -----------------------------------------------
@@ -440,7 +449,7 @@ void BoidUnit::updateRecursive(float dt) {
         if (globalSpeciesParams[sid].isPredator &&
             current->buf->predatorTargetIndices[gIdx] >= 0) {
           maxTurnAngle *= 1.5f; // 捕食者の追跡時は回転制限を緩和
-        }        // ストレス時の緊急回避用に旋回角度を緩やかに緩和（振動防止）
+        } // ストレス時の緊急回避用に旋回角度を緩やかに緩和（振動防止）
         if (currentStress > 0.7f) {
           // 高ストレス時のみ、穏やかに旋回能力を向上（振動防止）
           float emergencyTurnFactor =
@@ -483,13 +492,15 @@ void BoidUnit::updateRecursive(float dt) {
             glm::clamp(speed, globalSpeciesParams[sid].minSpeed, maxSpeed);
 
         current->buf->velocities[gIdx] = newDir * finalSpeed;
-        current->buf->positions[gIdx] += current->buf->velocities[gIdx] * dt;        current->buf->accelerations[gIdx] = glm::vec3(0.0f);
+        current->buf->positions[gIdx] += current->buf->velocities[gIdx] * dt;
+        current->buf->accelerations[gIdx] = glm::vec3(0.0f);
         // predatorInfluences を減衰させて逃走時間を調整
         current->buf->predatorInfluences[gIdx] *= 0.5f; // 50%減衰で早期終了
-        current->buf->orientations[gIdx] = BoidUnit::dirToQuatRollZero(newDir);// stress を時間経過で減少（逃走時間を短縮）
+        current->buf->orientations[gIdx] = BoidUnit::dirToQuatRollZero(
+            newDir); // stress を時間経過で減少（逃走時間を短縮）
         if (current->buf->stresses[gIdx] > 0.0f) {
           // ストレス減衰を大幅に速くして、適度な逃走時間を実現
-          float decayRate = 1.5f; // 0.4f から 1.5f に増加（約4倍早い回復）
+          float decayRate = 1.0f;
           current->buf->stresses[gIdx] -= BoidUnit::easeOut(dt * decayRate);
           if (current->buf->stresses[gIdx] < 0.0f) {
             current->buf->stresses[gIdx] = 0.0f;
