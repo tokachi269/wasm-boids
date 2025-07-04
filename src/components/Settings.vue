@@ -12,7 +12,7 @@
     </div>
     <div class="setting-row">
       <label>凝集<br>(Cohesion):</label>
-      <input type="range" v-model.number="settings.cohesion" min="0" max="20" step="0.01" />
+      <input type="range" v-model.number="settings.cohesion" min="0" max="40" step="0.01" />
       <span>{{ settings.cohesion }}</span>
     </div>
     <div class="setting-row">
@@ -27,12 +27,12 @@
     </div>
     <div class="setting-row">
       <label>分離範囲<br>(Separation Range):</label>
-      <input type="range" v-model.number="settings.separationRange" min="1" max="100" step="1" />
+      <input type="range" v-model.number="settings.separationRange" min="0.1" max="10" step="0.1" />
       <span>{{ settings.separationRange }}</span>
     </div>
     <div class="setting-row">
       <label>整列<br>(Alignment):</label>
-      <input type="range" v-model.number="settings.alignment" min="0" max="10" step="0.01" />
+      <input type="range" v-model.number="settings.alignment" min="0" max="20" step="0.01" />
       <span>{{ settings.alignment }}</span>
     </div>
     <div class="setting-row">
@@ -56,19 +56,9 @@
       <span>{{ settings.maxNeighbors }}</span>
     </div>
     <div class="setting-row">
-      <label>吸引減衰λ<br>(Lambda):</label>
-      <input type="range" v-model.number="settings.lambda" min="0.0" max="0.2" step="0.001" />
-      <span>{{ settings.lambda }}</span>
-    </div>
-    <div class="setting-row">
       <label>水平化トルク<br>(Horizontal Torque):</label>
       <input type="range" v-model.number="settings.horizontalTorque" min="0.0" max="0.2" step="0.001" />
       <span>{{ settings.horizontalTorque }}</span>
-    </div>
-    <div class="setting-row">
-      <label>速度閾値ε<br>(Velocity Epsilon):</label>
-      <input type="range" v-model.number="settings.velocityEpsilon" min="0.0" max="0.01" step="0.00001" />
-      <span>{{ settings.velocityEpsilon }}</span>
     </div>
     <div class="setting-row">
       <label>回転トルク強度<br>(Torque Strength):</label>

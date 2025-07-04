@@ -19,14 +19,20 @@ void update(float dt) { BoidTree::instance().update(dt); }
 void setFlockSize(int newSize, float posRange, float velRange) {
   BoidTree::instance().setFlockSize(newSize, posRange, velRange);
 }
-/**
- * params         … UI で入力されたそのままの値
- * spatialScale   … “今回モデルをどれだけ縮小したか”
- *                  例）モデル寸法 10 倍 → 0.1,   100 分の 1 → 0.01
- *                  迷ったら 1.0 にしておくと従来通り
- */
+
 void setSpeciesParams(const SpeciesParams &params,
                       float spatialScale /*=1.0f*/) {
-  BoidTree::instance().setGlobalSpeciesParams(scaledParams(params, spatialScale));
+  BoidTree::instance().setGlobalSpeciesParams(
+      scaledParams(params, spatialScale));
+}
+uintptr_t boidUnitMappingPtr() {
+  static std::vector<std::pair<int, int>> boidUnitMappingVec;
+  boidUnitMappingVec.clear();
+  const auto& mapping = BoidTree::instance().collectBoidUnitMapping();
+  boidUnitMappingVec.reserve(mapping.size());
+  for (const auto& kv : mapping) {
+    boidUnitMappingVec.push_back(kv);
+  }
+  return reinterpret_cast<uintptr_t>(boidUnitMappingVec.data());
 }
 }

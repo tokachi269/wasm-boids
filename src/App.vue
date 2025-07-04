@@ -16,10 +16,13 @@
           <label style="margin-left:1em;">
             <input type="checkbox" v-model="showUnitSpheres" />
             スフィアのみ表示
-          </label>
-          <label style="margin-left:1em;">
+          </label> <label style="margin-left:1em;">
             <input type="checkbox" v-model="showUnitLines" />
             線のみ表示
+          </label>
+          <label style="margin-left:1em;">
+            <input type="checkbox" v-model="showUnitColors" />
+            Unit色分け
           </label>
           <label style="margin-left:1em;">
             表示レイヤ下限: <input type="range" min="1" max="20" v-model="unitLayer" />
@@ -47,6 +50,7 @@ import { SSAOPass } from 'three/examples/jsm/postprocessing/SSAOPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
 import { color } from 'three/tsl';
+import { vertexColor } from 'three/tsl';
 
 const wasmModule = inject('wasmModule');
 if (!wasmModule) {
@@ -60,7 +64,8 @@ const boidCount = wasmModule.cwrap('boidCount', 'number', [])
 const build = wasmModule.cwrap('build', 'void', ['number', 'number'])
 const update = wasmModule.cwrap('update', 'void', ['number'])
 const setFlockSize = wasmModule.cwrap('setFlockSize', 'void', ['number', 'number', 'number'])
-const exportTreeStructure = wasmModule.cwrap('exportTreeStructure', 'object', []);
+const exportTreeStructure = wasmModule.cwrap('exportTreeStructure', 'object', [])
+const boidUnitMappingPtr = wasmModule.cwrap('boidUnitMappingPtr', 'number', []);
 // const getUnitCount = wasmModule.cwrap('getUnitCount', 'number', []);
 // const getUnitCentersPtr = wasmModule.cwrap('getUnitCentersPtr', 'number', []);
 // const getUnitParentIndicesPtr = wasmModule.cwrap('getUnitParentIndicesPtr', 'number', []);
@@ -72,19 +77,17 @@ function fetchTreeStructure() {
 
 const DEFAULT_SETTINGS = [{
   species: 'Boids',         // 種族名
-  count: 10000,             // 群れの数
-  cohesion: 12,             // 凝集
-  cohesionRange: 10,        // 凝集範囲
-  separation: 5,            // 分離
-  separationRange: 10,      // 分離範囲
+  count: 5000,             // 群れの数
+  cohesion: 20,             // 凝集
+  cohesionRange: 30,        // 凝集範囲
+  separation: 10,            // 分離
+  separationRange: 1,       // 分離範囲
   alignment: 8,             // 整列
   alignmentRange: 6,        // 整列範囲
   maxSpeed: 0.22,           // 最大速度
-  maxTurnAngle: 0.155,      // 最大旋回角
+  maxTurnAngle: 0.2,        // 最大旋回角
   maxNeighbors: 4,          // 最大近傍数
-  lambda: 0.109,            // 吸引減衰 λ
-  horizontalTorque: 0.024,  // 水平化トルク
-  velocityEpsilon: 0.004,   // 速度閾値 ε
+  horizontalTorque: 0.019,  // 水平化トルク
   torqueStrength: 3.398     // 回転トルク強度
 }, {
   species: 'Predator',
@@ -99,10 +102,8 @@ const DEFAULT_SETTINGS = [{
   alignmentRange: 11.0,
   cohesionRange: 77.0,
   maxNeighbors: 0,
-  lambda: 0.041,
   tau: 1.0, // 捕食者は常に追いかける
   horizontalTorque: 0.022,
-  velocityEpsilon: 0.0,
   torqueStrength: 0.0,
   isPredator: true                // ← 捕食者フラグ
 }];
@@ -132,6 +133,7 @@ const paused = ref(false);
 const showUnits = ref(true);
 const showUnitSpheres = ref(false);
 const showUnitLines = ref(false);
+const showUnitColors = ref(false);
 const unitLayer = ref(1);
 
 let unitSpheres = [];
@@ -142,6 +144,10 @@ let stats = null;
 
 let animationTimer = null;
 const FRAME_INTERVAL = 1000 / 60;//1000 / 60; // 60FPS
+
+// マテリアル変数をグローバルスコープで定義
+let boidMaterial = null;
+let boidLodMaterial = null;
 
 // ツリーの最大深さを計算
 function calcMaxDepth(unit, depth = 0) {
@@ -256,6 +262,7 @@ function onWindowResize() {
   renderer.setSize(width, height);
 }
 
+// 一時的に従来方式に戻す - instancedMeshを単一で使用
 let instancedMeshHigh = null; // 高ポリゴン用
 let instancedMeshLow = null;  // 低ポリゴン用
 
@@ -266,6 +273,15 @@ boidGeometryHigh.scale(0.5, 0.5, 2.0); // 少し小さくする
 boidGeometryLow.scale(0.5, 0.5, 2.0); // 少し小さくする
 let boidModel = null; // 読み込んだモデルを保持
 let boidModelLod = null; // 読み込んだモデルを保持
+let originalMaterial = null; // 元のマテリアルを保持
+let originalMaterialLod = null; // 元のLODマテリアルを保持
+
+// 起動時の正しいテクスチャマテリアルを保持
+let originalHighMat = null;
+let originalLowMat = null;
+
+// 前回のshowUnitColorsの状態を保持（OFF→ONの検知用）
+let lastShowUnitColors = false;
 
 function initInstancedBoids(count) {
   if (!boidModel.children || !boidModel.children[0]) {
@@ -273,120 +289,127 @@ function initInstancedBoids(count) {
     return;
   }
 
-  if (instancedMeshHigh) {
-    scene.remove(instancedMeshHigh);
-  }
-  if (instancedMeshLow) {
-    scene.remove(instancedMeshLow);
-  }
+  // 既存のメッシュを削除
+  if (instancedMeshHigh) scene.remove(instancedMeshHigh);
+  if (instancedMeshLow) scene.remove(instancedMeshLow);
+  // InstancedMeshを作成（最初はvertexColors無効でテクスチャ表示）
+  const highMaterial = originalMaterial.clone();
+  highMaterial.vertexColors = false; // 最初はテクスチャ表示
 
-  const dummy = new THREE.Object3D();
+  const lowMaterial = originalMaterialLod.clone();
+  lowMaterial.vertexColors = false; // 最初はテクスチャ表示
 
-  // 高ポリゴンメッシュ
   instancedMeshHigh = new THREE.InstancedMesh(
     boidModel.children[0].geometry,
-    boidModel.children[0].material,
+    highMaterial,
     count
   );
   instancedMeshHigh.castShadow = true;
   instancedMeshHigh.receiveShadow = true;
 
-  // 低ポリゴンメッシュ
   instancedMeshLow = new THREE.InstancedMesh(
     boidModelLod.children[0].geometry,
-    boidModelLod.children[0].material,
+    lowMaterial,
     count
   );
   instancedMeshLow.castShadow = true;
   instancedMeshLow.receiveShadow = true;
 
+  // インスタンスカラーを白で初期化
+  const whiteColor = new THREE.Color(1, 1, 1);
+  for (let i = 0; i < count; i++) {
+    instancedMeshHigh.setColorAt(i, whiteColor);
+    instancedMeshLow.setColorAt(i, whiteColor);
+  }
+  instancedMeshHigh.instanceColor.needsUpdate = true;
+  instancedMeshLow.instanceColor.needsUpdate = true;
+
+  // シーンに追加
   scene.add(instancedMeshHigh);
   scene.add(instancedMeshLow);
+
+  console.log('InstancedMeshes created with vertex colors enabled');
 }
 
+
+
+// 初期化時のコールバック（頻度が低いため匿名関数でも問題なし）
 function loadBoidModel(callback) {
   const loader = new GLTFLoader();
-  const basePath = process.env.BASE_URL || '/'; // publicPath を取得
   const textureLoader = new THREE.TextureLoader();
+  
   const texture = textureLoader.load(
-    './models/fish.png', // テクスチャのパス
-    () => {
-      console.log('Texture loaded successfully.');
-    },
+    './models/fish.png',
+    () => console.log('Texture loaded successfully.'),
     undefined,
-    (error) => {
-      console.error('An error occurred while loading the texture:', error);
-    }
+    (error) => console.error('An error occurred while loading the texture:', error)
   );
+  
   const textureLod = textureLoader.load(
-    './models/fish_lod.png', // テクスチャのパス
-    () => {
-      console.log('Texture loaded successfully.');
-    },
+    './models/fish_lod.png',
+    () => console.log('Texture loaded successfully.'),
     undefined,
-    (error) => {
-      console.error('An error occurred while loading the texture:', error);
-    }
+    (error) => console.error('An error occurred while loading the texture:', error)
   );
+  
   texture.flipY = false;
-  texture.colorSpace = THREE.SRGBColorSpace; // sRGBカラー空間を使用
+  texture.colorSpace = THREE.SRGBColorSpace;
   textureLod.flipY = false;
   textureLod.colorSpace = THREE.SRGBColorSpace;
 
-  let boidMaterial = new THREE.MeshStandardMaterial({
+  boidMaterial = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
     roughness: 0.5,
     metalness: 0,
-    transparent: false, // 半透明を有効化
-    alphaTest: 0.5,    // アルファテストを設定
-    map: texture,      // テクスチャを設定
+    transparent: false,
+    alphaTest: 0.5,
+    map: texture,
+    vertexColors: true,
+    vertexColor: 0xffffff
   });
 
-  let boidLodMaterial = new THREE.MeshStandardMaterial({
+  boidLodMaterial = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
     roughness: 0.5,
     metalness: 0,
-    transparent: false, // 半透明を有効化
-    alphaTest: 0.5,    // アルファテストを設定
-    map: textureLod,      // テクスチャを設定
+    transparent: false,
+    alphaTest: 0.5,
+    map: textureLod,
+    vertexColors: false,
+    vertexColor: 0xffffff
   });
 
+  originalMaterial = boidMaterial;
+  originalMaterialLod = boidLodMaterial;
+  
   loader.load(
-    `./models/boidModel.glb`, // モデルのパス
+    `./models/boidModel.glb`,
     (gltf) => {
       boidModel = gltf.scene;
-
-      // マテリアルの transparent と alphaTest を変更
       boidModel.traverse((child) => {
         if (child.isMesh) {
-          child.material = boidMaterial; // 半透明を有効化
+          child.material = boidMaterial;
         }
       });
-
       callback();
     },
     undefined,
-    (error) => {
-      console.error('An error occurred while loading the model:', error);
-    }
+    (error) => console.error('An error occurred while loading the model:', error)
   );
 
   loader.load(
-    `./models/boidModel_lod.glb`, // LODモデルのパス
+    `./models/boidModel_lod.glb`,
     (gltf) => {
       boidModelLod = gltf.scene;
-
-      // マテリアルの transparent と alphaTest を変更
       boidModelLod.traverse((child) => {
         if (child.isMesh) {
-          child.material = boidLodMaterial; // 半透明を有効化
+          child.material = boidLodMaterial;
         }
       });
-
       callback();
     },
     undefined,
-    (error) => {
-      console.error('An error occurred while loading the LOD model:', error);
-    }
+    (error) => console.error('An error occurred while loading the LOD model:', error)
   );
 }
 
@@ -461,32 +484,36 @@ let positions, velocities, orientations;
 let predatorMarker = null; // Predator 用のマーカーを保持
 let lastTime = performance.now(); // 前回のフレームのタイムスタンプ
 
+// アニメーション継続用の命名関数（匿名関数を避けてパフォーマンス改善）
+function scheduleNextFrame() {
+  animationTimer = setTimeout(animate, FRAME_INTERVAL);
+}
+
 function animate() {
   stats?.begin();
 
-  const currentTime = performance.now(); // 現在のタイムスタンプ
-  const deltaTime = (currentTime - lastTime) / 1000; // 経過時間を秒単位で計算
-  lastTime = currentTime; // 次のフレームのために現在のタイムスタンプを保存
-
+  const currentTime = performance.now();
+  const deltaTime = (currentTime - lastTime) / 1000;
+  lastTime = currentTime;
   if (!paused.value) update(deltaTime);
-
   const count = boidCount();
   const heapF32 = wasmModule.HEAPF32.buffer;
   const positions = new Float32Array(heapF32, posPtr(), count * 3);
   const orientations = new Float32Array(heapF32, oriPtr(), count * 4);
+
   const dummy = new THREE.Object3D();
   const identityMatrix = new THREE.Matrix4();
   const camPos = camera.position;
 
-  // Predator 用のマーカーを初期化（初回のみ）
+  // Predator用マーカーの初期化
   if (!predatorMarker) {
     const predatorMarkerGeometry = new THREE.SphereGeometry(0.2, 16, 16);
     const predatorMarkerMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
     predatorMarker = new THREE.Mesh(predatorMarkerGeometry, predatorMarkerMaterial);
     scene.add(predatorMarker);
-  }
-
-  // 最小限のマトリクス更新用バッファ（パフォーマンス重視）
+  }  // 使用するメッシュを決定
+  let activeMeshHigh = instancedMeshHigh;
+  let activeMeshLow = instancedMeshLow;  // 各Boidの位置と色を更新
   for (let i = 0; i < count; ++i) {
     dummy.position.fromArray(positions, i * 3);
     dummy.quaternion.fromArray(orientations, i * 4);
@@ -495,55 +522,104 @@ function animate() {
     const distSq = camPos.distanceToSquared(dummy.position);
     const useHigh = distSq < 4;
 
-    (useHigh ? instancedMeshHigh : instancedMeshLow).setMatrixAt(i, dummy.matrix);
-    (useHigh ? instancedMeshLow : instancedMeshHigh).setMatrixAt(i, identityMatrix);
+    // マトリクスを設定
+    if (useHigh) {
+      activeMeshHigh.setMatrixAt(i, dummy.matrix);
+      activeMeshLow.setMatrixAt(i, identityMatrix);
+    } else {
+      activeMeshHigh.setMatrixAt(i, identityMatrix);
+      activeMeshLow.setMatrixAt(i, dummy.matrix);
+    }
 
-    // Predator の speciesId が 1 と仮定して強調表示
-    if (i === count - 1 && settings[1]?.isPredator) { // Predator のインデックスを仮定
-      predatorMarker.position.copy(dummy.position); // マーカーの位置を更新
+    // Predatorの特別表示
+    if (i === count - 1 && settings[1]?.isPredator) {
+      predatorMarker.position.copy(dummy.position);
     }
   }
+  // 頂点カラーの更新（毎フレーム）
+  if (showUnitColors.value) {
+    const mappingPtrValue = boidUnitMappingPtr();
+    const heapI32 = wasmModule.HEAP32.buffer;
+    const unitMappings = new Int32Array(heapI32, mappingPtrValue, count * 2);
 
-  instancedMeshHigh.instanceMatrix.needsUpdate = true;
-  instancedMeshLow.instanceMatrix.needsUpdate = true;
+    for (let i = 0; i < count; i++) {
+      let unitId = -1;
+      for (let j = 0; j < unitMappings.length; j += 2) {
+        if (unitMappings[j] === i) {
+          unitId = unitMappings[j + 1];
+          break;
+        }
+      }
+
+      const color = unitId >= 0 ?
+        new THREE.Color().setHSL((unitId % 100) / 100, 0.8, 0.6) :
+        new THREE.Color(1, 0, 0);
+
+      instancedMeshHigh.setColorAt(i, color);
+      instancedMeshLow.setColorAt(i, color);
+    }
+    instancedMeshHigh.instanceColor.needsUpdate = true;
+    instancedMeshLow.instanceColor.needsUpdate = true;
+  } else if (lastShowUnitColors) {
+    // Unit色分けOFF: ON→OFFになった時のみ頂点カラーを白にリセット
+    const whiteColor = new THREE.Color(1, 1, 1);
+    for (let i = 0; i < count; i++) {
+      instancedMeshHigh.setColorAt(i, whiteColor);
+      instancedMeshLow.setColorAt(i, whiteColor);
+    }
+    instancedMeshHigh.instanceColor.needsUpdate = true;
+    instancedMeshLow.instanceColor.needsUpdate = true;
+    console.log('✓ Reset vertex colors to white (OFF mode)');
+  }
+
+  // 前回の状態を保存
+  lastShowUnitColors = showUnitColors.value;// マトリクスの更新
+  activeMeshHigh.instanceMatrix.needsUpdate = true;
+  activeMeshLow.instanceMatrix.needsUpdate = true;
 
   controls.update();
 
   (isMobileDevice() ? renderer : composer).render(scene, camera);
   stats?.end();
 
-  animationTimer = setTimeout(animate, FRAME_INTERVAL);
+  scheduleNextFrame();
+}
+
+// ツリー描画用の命名関数（匿名関数を避けてパフォーマンス改善）
+function drawTreeNode(node, parentPosition = null) {
+  const position = new THREE.Vector3(
+    node.center[0],
+    node.center[1],
+    node.center[2]
+  );
+
+  if (parentPosition) {
+    const geometry = new THREE.BufferGeometry().setFromPoints([
+      parentPosition,
+      position,
+    ]);
+    const material = new THREE.LineBasicMaterial({ color: 0xffffff });
+    const line = new THREE.Line(geometry, material);
+    scene.add(line);
+  }
+
+  if (node.children) {
+    for (let i = 0; i < node.children.length; i++) {
+      drawTreeNode(node.children[i], position);
+    }
+  }
 }
 
 function drawTreeStructure(treeData) {
-  const drawNode = (node, parentPosition = null) => {
-    const position = new THREE.Vector3(
-      node.center[0],
-      node.center[1],
-      node.center[2]
-    );
-
-    if (parentPosition) {
-      const geometry = new THREE.BufferGeometry().setFromPoints([
-        parentPosition,
-        position,
-      ]);
-      const material = new THREE.LineBasicMaterial({ color: 0xffffff });
-      const line = new THREE.Line(geometry, material);
-      scene.add(line);
-    }
-
-    if (node.children) {
-      node.children.forEach((child) => drawNode(child, position));
-    }
-  };
-
-  treeData.forEach((rootNode) => drawNode(rootNode));
+  for (let i = 0; i < treeData.length; i++) {
+    drawTreeNode(treeData[i]);
+  }
 }
-function startSimulation() {
-  // WebAssembly モジュール用に SpeciesParams を初期化
+// 設定からWASMパラメータを作成する命名関数（匿名関数を避けてパフォーマンス改善）
+function createSpeciesParamsVector(settingsArray) {
   const vector = new wasmModule.VectorSpeciesParams();
-  settings.forEach((s) => {
+  for (let i = 0; i < settingsArray.length; i++) {
+    const s = settingsArray[i];
     vector.push_back({
       species: s.species || "default",
       count: s.count || 0,
@@ -551,26 +627,40 @@ function startSimulation() {
       separation: s.separation || 0.0,
       alignment: s.alignment || 0.0,
       maxSpeed: s.maxSpeed || 1.0,
-      minSpeed: s.minSpeed || 0.0, // デフォルト値を補完
+      minSpeed: s.minSpeed || 0.0,
       maxTurnAngle: s.maxTurnAngle || 0.0,
       separationRange: s.separationRange || 0.0,
       alignmentRange: s.alignmentRange || 0.0,
       cohesionRange: s.cohesionRange || 0.0,
       maxNeighbors: s.maxNeighbors || 0,
-      lambda: s.lambda || 0.0,
       horizontalTorque: s.horizontalTorque || 0.0,
-      velocityEpsilon: s.velocityEpsilon || 0.0,
       torqueStrength: s.torqueStrength || 0.0,
       isPredator: s.isPredator || false,
     });
-  });
+  }
+  return vector;
+}
+
+// 設定数を計算する命名関数
+function calculateTotalBoidCount(settingsArray) {
+  let sum = 0;
+  for (let i = 0; i < settingsArray.length; i++) {
+    sum += settingsArray[i].count;
+  }
+  return sum;
+}
+
+function startSimulation() {
+  // WebAssembly モジュール用に SpeciesParams を初期化
+  const vector = createSpeciesParamsVector(settings);
   // callInitBoids に渡す（この vector は C++ 側で vector<SpeciesParams> になる）
   wasmModule.callInitBoids(vector, 1, 6, 0.25);
   build(16, 0);
-  initInstancedBoids(settings.reduce((sum, s) => sum + s.count, 0));
+  initInstancedBoids(calculateTotalBoidCount(settings));
   animate();
 }
 
+// 初期化時のコールバック（頻度が低いため匿名関数でも問題なし）
 onMounted(() => {
   initThreeJS();
   loadBoidModel(() => {
@@ -588,71 +678,79 @@ onMounted(() => {
 
     startSimulation();
   });
-
-
   window.addEventListener('keydown', handleKeydown);
-
 });
 
 function isMobileDevice() {
   return /Mobi|Android/i.test(navigator.userAgent);
 }
+// 設定監視用のハンドラ関数（匿名関数を避けてパフォーマンス改善）
+function handleSettingsChange(val) {
+  if (wasmModule && wasmModule.setGlobalSpeciesParamsFromJS) {
+    const vector = createSpeciesParamsVector(settings);
+    wasmModule.setGlobalSpeciesParamsFromJS(vector, 1);
+    try {
+      localStorage.setItem('boids_settings', JSON.stringify(toRaw(settings)));
+    } catch (error) {
+      console.error('Failed to save settings to localStorage:', error);
+    }
+  }
+}
+
 // settingsの変更をwasmModuleに反映
 watch(
   settings,
-  (val) => {
-    if (wasmModule && wasmModule.setGlobalSpeciesParamsFromJS) {
-      const vector = new wasmModule.VectorSpeciesParams();
-
-      settings.forEach((s) => {
-        vector.push_back({
-          species: s.species || "default",
-          count: s.count || 0,
-          cohesion: s.cohesion || 0.0,
-          separation: s.separation || 0.0,
-          alignment: s.alignment || 0.0,
-          maxSpeed: s.maxSpeed || 1.0,
-          minSpeed: s.minSpeed || 0.0, // デフォルト値を補完
-          maxTurnAngle: s.maxTurnAngle || 0.0,
-          separationRange: s.separationRange || 0.0,
-          alignmentRange: s.alignmentRange || 0.0,
-          cohesionRange: s.cohesionRange || 0.0,
-          maxNeighbors: s.maxNeighbors || 0,
-          lambda: s.lambda || 0.0,
-          horizontalTorque: s.horizontalTorque || 0.0,
-          velocityEpsilon: s.velocityEpsilon || 0.0,
-          torqueStrength: s.torqueStrength || 0.0,
-          isPredator: s.isPredator || false,
-        });
-      });
-      wasmModule.setGlobalSpeciesParamsFromJS(vector, 1);
-      try {
-        localStorage.setItem('boids_settings', JSON.stringify(toRaw(newSettings)));
-      } catch (error) {
-        console.error('Failed to save settings to localStorage:', error);
-      }
-    }
-  },
+  handleSettingsChange,
   { deep: true } // 深い変更も監視
 );
+
+// flockSize変更のハンドラ関数（匿名関数を避けてパフォーマンス改善）
+function handleFlockSizeChange(newSize) {
+  if (setFlockSize) {
+    // flockSize変更時
+    setFlockSize(newSize, 40, 0.25);
+    // Three.js 側の初期化
+    initInstancedBoids(newSize);
+  }
+}
 
 // flockSizeの変更を監視
 watch(
   () => settings.flockSize,
-  (newSize) => {
-    if (setFlockSize) {
-      // flockSize変更時
-      setFlockSize(newSize, 40, 0.25);
-      // Three.js 側の初期化
-      initInstancedBoids(newSize);
-    }
-  }
+  handleFlockSizeChange
 );
 
+// 設定リセット用の命名関数（forEach を for ループに置き換え）
 function resetSettings() {
   settings.length = 0;
-  DEFAULT_SETTINGS.forEach(s => settings.push({ ...s }));
+  for (let i = 0; i < DEFAULT_SETTINGS.length; i++) {
+    settings.push({ ...DEFAULT_SETTINGS[i] });
+  }
 }
+
+// Unit可視化変更のハンドラ関数（匿名関数を避けてパフォーマンス改善）
+function handleUnitsVisibilityChange(newValue) {
+  console.log('showUnits changed to:', newValue);
+  if (!newValue) {
+    // Unit可視化をオフにした場合、既存の可視化要素をクリア
+    clearUnitVisuals();
+  }
+}
+
+// Unit表示モード変更のハンドラ関数（匿名関数を避けてパフォーマンス改善）
+function handleUnitDisplayModeChange([newSpheres, newLines]) {
+  console.log('Unit display mode changed - Spheres:', newSpheres, 'Lines:', newLines);
+  // 表示モードが変更されたら既存の表示をクリアして再描画
+  if (showUnits.value) {
+    clearUnitVisuals();
+  }
+}
+
+// Unit可視化の変更を監視
+watch(showUnits, handleUnitsVisibilityChange);
+
+// Unit表示モードの変更を監視
+watch([showUnitSpheres, showUnitLines], handleUnitDisplayModeChange);
 </script>
 
 <style>

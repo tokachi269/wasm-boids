@@ -38,8 +38,8 @@ set(EMCC_LINK_FLAGS
     "-sEXPORT_NAME=createBoidsModule"
     "-sENVIRONMENT=web,worker"
     "-sALLOW_MEMORY_GROWTH=1"
-    "-sEXPORTED_FUNCTIONS=['_main','_oriPtr','_setSpeciesParams','_setFlockSize','_update','_build','_posPtr','_velPtr','_boidCount','_malloc','_free']"
-    "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAPF32']"
+    "-sEXPORTED_FUNCTIONS=['_main','_boidUnitMappingPtr','_oriPtr','_setSpeciesParams','_setFlockSize','_update','_build','_posPtr','_velPtr','_boidCount','_malloc','_free']"
+    "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAPF32','HEAP32']"
     "--bind"
     "-pthread" # スレッドを有効化
     "-sUSE_PTHREADS=1" # POSIXスレッドを有効化
@@ -49,7 +49,7 @@ set(EMCC_LINK_FLAGS
     "-matomics" # Atomicsを有効化
     "-mbulk-memory" # Bulk Memoryを有効化
     "-sINCOMING_MODULE_JS_API=['locateFile']"
-    "-sINITIAL_MEMORY=16777216" # 初期メモリサイズ（16MB）
+    "-sINITIAL_MEMORY=134217728" # 初期メモリサイズ（16MB）
     "-sMAXIMUM_MEMORY=2147483648"   # 最大メモリサイズ（2GB）
     "-sALLOW_MEMORY_GROWTH=1"   # メモリの動的拡張を許可
     "-sSTACK_SIZE=2097152" # スタックサイズを1MBに設定
@@ -68,8 +68,8 @@ set(EMCC_LINK_FLAGS_RELEASE
     "-sEXPORT_NAME=createBoidsModule"
     "-sENVIRONMENT=web,worker"
     "-sALLOW_MEMORY_GROWTH=1"
-    "-sEXPORTED_FUNCTIONS=['_main','_oriPtr','_setSpeciesParams','_setFlockSize','_update','_build','_posPtr','_velPtr','_boidCount','_malloc','_free']"
-    "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAPF32']"
+    "-sEXPORTED_FUNCTIONS=['_main','_boidUnitMappingPtr','_oriPtr','_setSpeciesParams','_setFlockSize','_update','_build','_posPtr','_velPtr','_boidCount','_malloc','_free']"
+    "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAPF32','HEAP32']"
     "--bind"
     "-pthread"
     "-sUSE_PTHREADS=1"

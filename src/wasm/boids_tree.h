@@ -34,9 +34,12 @@ public:
     uintptr_t getOrientationsPtr();
     int getBoidCount() const;
     void collectLeaves(const BoidUnit *node, std::vector<BoidUnit *> &leaves) const;
-
+    std::unordered_map<int, int> collectBoidUnitMapping();
     SpeciesParams getGlobalSpeciesParams(std::string species);
     void setGlobalSpeciesParams(const SpeciesParams &params);
+    void rebuildTreeWithUnits(BoidUnit *node,
+                              const std::vector<BoidUnit *> &units,
+                              int maxPerUnit, int level);
 };
 
 extern std::vector<SpeciesParams> globalSpeciesParams;
