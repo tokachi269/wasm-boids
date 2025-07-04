@@ -8,30 +8,35 @@
           <Settings :settings="s" />
         </div>
         <button @click="resetSettings" style="margin-bottom:1em;">リセット</button>
-        <div>
-          <label>
-            <input type="checkbox" v-model="showUnits" />
-            Unit可視化
-          </label>
-          <label style="margin-left:1em;">
-            <input type="checkbox" v-model="showUnitSpheres" />
-            スフィアのみ表示
-          </label> <label style="margin-left:1em;">
-            <input type="checkbox" v-model="showUnitLines" />
-            線のみ表示
-          </label>
-          <label style="margin-left:1em;">
-            <input type="checkbox" v-model="showUnitColors" />
-            Unit色分け
-          </label>
-          <label style="margin-left:1em;">
-            表示レイヤ下限: <input type="range" min="1" max="20" v-model="unitLayer" />
-            {{ unitLayer }}
-          </label>
-        </div>
+        <details style="margin-bottom:1em;">
+          <summary>デバッグ</summary>
+          <div>壊れてるよ</div>
+          <div style="margin-top:0.5em;">
+            <label>
+              <input type="checkbox" v-model="showUnits" />
+              Unit可視化
+            </label>
+            <label style="margin-left:1em;">
+              <input type="checkbox" v-model="showUnitSpheres" />
+              スフィアのみ表示
+            </label>
+            <label style="margin-left:1em;">
+              <input type="checkbox" v-model="showUnitLines" />
+              線のみ表示
+            </label>
+            <label style="margin-left:1em;">
+              <input type="checkbox" v-model="showUnitColors" />
+              Unit色分け
+            </label>
+            <label style="margin-left:1em;">
+              表示レイヤ下限: <input type="range" min="1" max="20" v-model="unitLayer" />
+              {{ unitLayer }}
+            </label>
+          </div>
+        </details>
       </details>
       <div class="info">
-        <p>Boids Count: {{ settings.flockSize }}</p>
+        <p>Boids Count: {{ totalBoids }}</p>
       </div>
     </div>
     <div ref="threeContainer" class="three-container" />
@@ -39,7 +44,7 @@
 </template>
 
 <script setup>
-import { inject, onMounted, reactive, ref, watch, toRaw } from 'vue';
+import { inject, onMounted, reactive, ref, watch, toRaw, computed } from 'vue';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import Settings from './components/Settings.vue';
@@ -75,42 +80,38 @@ function fetchTreeStructure() {
   return treeData;
 }
 
-function getDefaultSettings() {
-  const boidCount = isMobileDevice() ? 2000 : 5000;
-  
-  return [{
-    species: 'Boids',         // 種族名
-    count: boidCount,         // 群れの数（スマホなら2000、PCなら5000）
-    cohesion: 30,             // 凝集
-    cohesionRange: 30,        // 凝集範囲
-    separation: 7,            // 分離
-    separationRange: 1,       // 分離範囲
-    alignment: 8,             // 整列
-    alignmentRange: 6,        // 整列範囲
-    maxSpeed: 0.22,           // 最大速度
-    maxTurnAngle: 0.2,        // 最大旋回角
-    maxNeighbors: 4,          // 最大近傍数
-    horizontalTorque: 0.019,  // 水平化トルク
-    torqueStrength: 3.398     // 回転トルク強度
-  }, {
-    species: 'Predator',
-    count: 1,
-    cohesion: 5.58,                     // 捕食者には使わない
-    separation: 0.0,
-    alignment: 0.0,
-    maxSpeed: 0.74,                     // 速く逃げられるよう速度は大きめ
-    minSpeed: 0.4,
-    maxTurnAngle: 0.221,
-    separationRange: 14.0,
-    alignmentRange: 11.0,
-    cohesionRange: 77.0,
-    maxNeighbors: 0,
-    tau: 1.0, // 捕食者は常に追いかける
-    horizontalTorque: 0.022,
-    torqueStrength: 0.0,
-    isPredator: true                // ← 捕食者フラグ
-  }];
-}
+const DEFAULT_SETTINGS = [{
+  species: 'Boids',         // 種族名
+  count: 5000,             // 群れの数
+  cohesion: 30,             // 凝集
+  cohesionRange: 30,        // 凝集範囲
+  separation: 7,            // 分離
+  separationRange: 1,       // 分離範囲
+  alignment: 8,             // 整列
+  alignmentRange: 6,        // 整列範囲
+  maxSpeed: 0.22,           // 最大速度
+  maxTurnAngle: 0.2,        // 最大旋回角
+  maxNeighbors: 4,          // 最大近傍数
+  horizontalTorque: 0.019,  // 水平化トルク
+  torqueStrength: 3.398     // 回転トルク強度
+}, {
+  species: 'Predator',
+  count: 1,
+  cohesion: 5.58,                     // 捕食者には使わない
+  separation: 0.0,
+  alignment: 0.0,
+  maxSpeed: 0.74,                     // 速く逃げられるよう速度は大きめ
+  minSpeed: 0.4,
+  maxTurnAngle: 0.221,
+  separationRange: 14.0,
+  alignmentRange: 11.0,
+  cohesionRange: 77.0,
+  maxNeighbors: 0,
+  tau: 1.0, // 捕食者は常に追いかける
+  horizontalTorque: 0.022,
+  torqueStrength: 0.0,
+  isPredator: true                // ← 捕食者フラグ
+}];
 
 function loadSettings() {
   try {
@@ -124,10 +125,15 @@ function loadSettings() {
   } catch (error) {
     console.error('Failed to load settings from localStorage:', error);
   }
-  return getDefaultSettings(); // デフォルト値を返す
+  return DEFAULT_SETTINGS; // デフォルト値を返す
 }
 
 const settings = reactive(loadSettings());
+
+// 全Boidsの合計を計算するcomputed
+const totalBoids = computed(() => {
+  return settings.reduce((total, setting) => total + (setting.count || 0), 0);
+});
 
 const threeContainer = ref(null);
 let scene, camera, renderer, controls, composer;
@@ -774,10 +780,9 @@ watch(
 
 // 設定リセット用の命名関数（forEach を for ループに置き換え）
 function resetSettings() {
-  const defaultSettings = getDefaultSettings();
   settings.length = 0;
-  for (let i = 0; i < defaultSettings.length; i++) {
-    settings.push({ ...defaultSettings[i] });
+  for (let i = 0; i < DEFAULT_SETTINGS.length; i++) {
+    settings.push({ ...DEFAULT_SETTINGS[i] });
   }
 }
 

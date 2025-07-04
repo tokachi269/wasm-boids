@@ -1,30 +1,36 @@
 // filepath: d:\GitHub\wasm-boids\src\components\Settings.vue
 <template>
   <div class="settings">
-    <div class="setting-row">
-      <label>種族名<br>(Species):</label>
-      <span>{{ settings.species }}</span>
-    </div>    <div class="setting-row">
-      <label>群れの数(要更新)<br>(Count):</label>
-      <input type="range" v-model.number="settings.count" min="1" max="20000" step="1" />
-      <span 
-        v-if="!editingCount" 
-        class="editable-value" 
-        @click="startEditCount"
-        title="クリックして編集"
-      >{{ settings.count }}</span>
-      <input 
-        v-if="editingCount"
-        type="number" 
-        v-model.number="settings.count" 
-        min="1" 
-        max="20000"
-        class="value-input"
-        @blur="stopEditCount"
-        @keyup.enter="stopEditCount"
-        ref="countInput"
-      />
-    </div>    <div class="setting-row">
+    <details class="species-section" :open="false">
+      <summary class="species-header">
+        {{ settings.species }} ({{ settings.count }}匹)
+      </summary>
+      <div class="species-content">
+        <div class="setting-row">
+          <label>種族名<br>(Species):</label>
+          <span>{{ settings.species }}</span>
+        </div>
+        <div class="setting-row">
+          <label>群れの数(要更新)<br>(Count):</label>
+          <input type="range" v-model.number="settings.count" min="1" max="20000" step="1" />
+          <span 
+            v-if="!editingCount" 
+            class="editable-value" 
+            @click="startEditCount"
+            title="クリックして編集"
+          >{{ settings.count }}</span>
+          <input 
+            v-if="editingCount"
+            type="number" 
+            v-model.number="settings.count" 
+            min="1" 
+            max="20000"
+            class="value-input"
+            @blur="stopEditCount"
+            @keyup.enter="stopEditCount"
+            ref="countInput"
+          />
+        </div><div class="setting-row">
       <label>凝集<br>(Cohesion):</label>
       <input type="range" v-model.number="settings.cohesion" min="0" max="40" step="0.01" />
       <span 
@@ -263,12 +269,13 @@
         @keyup.enter="stopEditTorqueStrength"
         ref="torqueStrengthInput"
       />
-    </div>
-    <div class="setting-row">
+    </div>    <div class="setting-row">
       <label>捕食者フラグ<br>(Is Predator):</label>
       <input type="checkbox" v-model="settings.isPredator" />
       <span>{{ settings.isPredator }}</span>
     </div>
+      </div>
+    </details>
   </div>
 </template>
 
@@ -476,6 +483,9 @@ function stopEditTorqueStrength() {
   min-width: 260px;
   max-width: 520px;
   box-sizing: border-box;
+  pointer-events: auto;
+  position: relative;
+  z-index: 1;
 }
 .setting-row {
   display: flex;
@@ -532,5 +542,45 @@ function stopEditTorqueStrength() {
   outline: none;
   border-color: #007bff;
   box-shadow: 0 0 3px rgba(0, 123, 255, 0.3);
+}
+
+.species-section {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 5px;
+  margin-bottom: 10px;
+  background-color: rgba(255, 255, 255, 0.05);
+  pointer-events: auto;
+  position: relative;
+  overflow: visible;
+  max-width: 100%;
+  width: fit-content;
+  min-width: 260px;
+}
+
+.species-header {
+  padding: 10px;
+  font-weight: bold;
+  cursor: pointer;
+  background-color: rgba(255, 255, 255, 0.1);
+  border-radius: 5px 5px 0 0;
+  user-select: none;
+  pointer-events: auto;
+  max-width: 100%;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.species-header:hover {
+  background-color: rgba(255, 255, 255, 0.15);
+}
+
+.species-content {
+  padding: 10px;
+  pointer-events: auto;
+  position: relative;
+  max-width: 100%;
+  width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
 }
 </style>
