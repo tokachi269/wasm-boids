@@ -75,38 +75,42 @@ function fetchTreeStructure() {
   return treeData;
 }
 
-const DEFAULT_SETTINGS = [{
-  species: 'Boids',         // 種族名
-  count: 5000,             // 群れの数
-  cohesion: 30,             // 凝集
-  cohesionRange: 30,        // 凝集範囲
-  separation: 7,            // 分離
-  separationRange: 1,       // 分離範囲
-  alignment: 8,             // 整列
-  alignmentRange: 6,        // 整列範囲
-  maxSpeed: 0.22,           // 最大速度
-  maxTurnAngle: 0.2,        // 最大旋回角
-  maxNeighbors: 4,          // 最大近傍数
-  horizontalTorque: 0.019,  // 水平化トルク
-  torqueStrength: 3.398     // 回転トルク強度
-}, {
-  species: 'Predator',
-  count: 1,
-  cohesion: 5.58,                     // 捕食者には使わない
-  separation: 0.0,
-  alignment: 0.0,
-  maxSpeed: 0.74,                     // 速く逃げられるよう速度は大きめ
-  minSpeed: 0.4,
-  maxTurnAngle: 0.221,
-  separationRange: 14.0,
-  alignmentRange: 11.0,
-  cohesionRange: 77.0,
-  maxNeighbors: 0,
-  tau: 1.0, // 捕食者は常に追いかける
-  horizontalTorque: 0.022,
-  torqueStrength: 0.0,
-  isPredator: true                // ← 捕食者フラグ
-}];
+function getDefaultSettings() {
+  const boidCount = isMobileDevice() ? 2000 : 5000;
+  
+  return [{
+    species: 'Boids',         // 種族名
+    count: boidCount,         // 群れの数（スマホなら2000、PCなら5000）
+    cohesion: 30,             // 凝集
+    cohesionRange: 30,        // 凝集範囲
+    separation: 7,            // 分離
+    separationRange: 1,       // 分離範囲
+    alignment: 8,             // 整列
+    alignmentRange: 6,        // 整列範囲
+    maxSpeed: 0.22,           // 最大速度
+    maxTurnAngle: 0.2,        // 最大旋回角
+    maxNeighbors: 4,          // 最大近傍数
+    horizontalTorque: 0.019,  // 水平化トルク
+    torqueStrength: 3.398     // 回転トルク強度
+  }, {
+    species: 'Predator',
+    count: 1,
+    cohesion: 5.58,                     // 捕食者には使わない
+    separation: 0.0,
+    alignment: 0.0,
+    maxSpeed: 0.74,                     // 速く逃げられるよう速度は大きめ
+    minSpeed: 0.4,
+    maxTurnAngle: 0.221,
+    separationRange: 14.0,
+    alignmentRange: 11.0,
+    cohesionRange: 77.0,
+    maxNeighbors: 0,
+    tau: 1.0, // 捕食者は常に追いかける
+    horizontalTorque: 0.022,
+    torqueStrength: 0.0,
+    isPredator: true                // ← 捕食者フラグ
+  }];
+}
 
 function loadSettings() {
   try {
@@ -120,7 +124,7 @@ function loadSettings() {
   } catch (error) {
     console.error('Failed to load settings from localStorage:', error);
   }
-  return DEFAULT_SETTINGS; // デフォルト値を返す
+  return getDefaultSettings(); // デフォルト値を返す
 }
 
 const settings = reactive(loadSettings());
@@ -770,9 +774,10 @@ watch(
 
 // 設定リセット用の命名関数（forEach を for ループに置き換え）
 function resetSettings() {
+  const defaultSettings = getDefaultSettings();
   settings.length = 0;
-  for (let i = 0; i < DEFAULT_SETTINGS.length; i++) {
-    settings.push({ ...DEFAULT_SETTINGS[i] });
+  for (let i = 0; i < defaultSettings.length; i++) {
+    settings.push({ ...defaultSettings[i] });
   }
 }
 

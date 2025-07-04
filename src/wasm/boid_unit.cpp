@@ -130,9 +130,9 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
     std::stack<BoidUnit *> stack;
     stack.push(root);
 
-    constexpr float predatorRange = 2.0f;
+    constexpr float predatorRange = 1.7f;
     constexpr float predatorRangeSq = predatorRange * predatorRange;
-    constexpr float predatorEffectRange = 3.0f;
+    constexpr float predatorEffectRange = 2.0f;
 
     while (!stack.empty()) {
       BoidUnit *current = stack.top();
@@ -401,20 +401,25 @@ void BoidUnit::updateRecursive(float dt) {
           //                               " acc=" +
           //                               glm::to_string(acceleration) + "
           //                               pos=" + glm::to_string(position));
-        }        // stress に基づく段階的速度調整
+        }        // stress に基づく滑らかな速度調整
         float currentStress = current->buf->stresses[gIdx];
         float stressFactor = 1.0f;
         
-        // 段階的な速度制御
-        if (currentStress > 0.6f) {
+        // 滑らかな遷移による速度制御（閾値なしの連続関数）
+        if (currentStress > 0.8f) {
           // 高ストレス時: 逃走優先で高速移動
-          stressFactor = 1.0f + currentStress * 1.5f; // 最大2.5倍速
+          float t = (currentStress - 0.8f) / 0.2f; // 0.8-1.0を0-1に正規化
+          stressFactor = 1.0f + 1.6f + t * 0.9f; // 2.6倍から3.5倍へ滑らかに遷移
         } else if (currentStress > 0.2f) {
-          // 中ストレス時: 再結集のための高速移動
-          stressFactor = 1.0f + currentStress * 2.0f; // 最大2.2倍速（再結集強化）
+          // 中ストレス時: 再結集のための高速移動（滑らかな曲線）
+          float t = (currentStress - 0.2f) / 0.6f; // 0.2-0.8を0-1に正規化
+          // スムーズステップ関数で滑らかな遷移
+          float smoothT = t * t * (3.0f - 2.0f * t);
+          stressFactor = 1.0f + 0.4f + smoothT * 1.2f; // 1.4倍から2.6倍へ滑らかに遷移
         } else {
-          // 低ストレス時: 通常速度
-          stressFactor = 1.0f + currentStress * 0.5f; // 軽度の速度向上
+          // 低ストレス時: 通常速度からの滑らかな移行
+          float t = currentStress / 0.2f; // 0-0.2を0-1に正規化
+          stressFactor = 1.0f + t * 0.4f; // 1.0倍から1.4倍へ滑らかに遷移
         }
         
         float maxSpeed = globalSpeciesParams[sid].maxSpeed * stressFactor;
