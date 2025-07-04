@@ -34,12 +34,14 @@
             </label>
           </div>
         </details>
-      </details>
-      <div class="info">
+      </details>      <div class="info">
         <p>Boids Count: {{ totalBoids }}</p>
       </div>
     </div>
-    <div ref="threeContainer" class="three-container" />
+    <div ref="threeContainer" class="three-container" 
+         @touchstart="handleTouchStart" 
+         @touchmove="handleTouchMove" 
+         @touchend="handleTouchEnd" />
   </div>
 </template>
 
@@ -82,7 +84,7 @@ function fetchTreeStructure() {
 
 function getDefaultSettings() {
   const boidCount = isMobileDevice() ? 2000 : 5000;
-  
+
   return [{
     species: 'Boids',         // 種族名
     count: boidCount,         // 群れの数（スマホなら2000、PCなら5000）
@@ -746,6 +748,56 @@ onMounted(() => {
 function isMobileDevice() {
   return /Mobi|Android/i.test(navigator.userAgent);
 }
+
+// スマホタップでの停止/再開機能（ドラッグとタップを区別）
+let touchStartTime = 0;
+let touchStartPos = { x: 0, y: 0 };
+let hasMoved = false;
+
+function handleTouchStart(event) {
+  if (isMobileDevice()) {
+    touchStartTime = Date.now();
+    const touch = event.touches[0];
+    touchStartPos = { x: touch.clientX, y: touch.clientY };
+    hasMoved = false;
+  }
+}
+
+function handleTouchMove(event) {
+  if (isMobileDevice() && touchStartTime > 0) {
+    const touch = event.touches[0];
+    const moveDistance = Math.sqrt(
+      Math.pow(touch.clientX - touchStartPos.x, 2) + 
+      Math.pow(touch.clientY - touchStartPos.y, 2)
+    );
+    
+    // 5px以上動いたらドラッグと判定
+    if (moveDistance > 5) {
+      hasMoved = true;
+    }
+  }
+}
+
+function handleTouchEnd(event) {
+  if (isMobileDevice() && touchStartTime > 0) {
+    const touchDuration = Date.now() - touchStartTime;
+    
+    // 短時間（500ms以下）で、動いていない場合のみタップと判定
+    if (touchDuration < 500 && !hasMoved) {
+      const isThreeContainer = event.target === threeContainer.value;
+      const isCanvas = event.target.tagName === 'CANVAS';
+      const isInThreeContainer = threeContainer.value && threeContainer.value.contains(event.target);
+      
+      if (isThreeContainer || isCanvas || isInThreeContainer) {
+        paused.value = !paused.value;
+      }
+    }
+    
+    // リセット
+    touchStartTime = 0;
+    hasMoved = false;
+  }
+}
 // 設定監視用のハンドラ関数（匿名関数を避けてパフォーマンス改善）
 function handleSettingsChange(val) {
   if (wasmModule && wasmModule.setGlobalSpeciesParamsFromJS) {
@@ -844,6 +896,9 @@ watch([showUnitSpheres, showUnitLines], handleUnitDisplayModeChange);
   border: none;
   overflow: hidden;
   background: #0a1e3a;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .ui-overlay {
