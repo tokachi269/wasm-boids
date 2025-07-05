@@ -128,9 +128,9 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
     std::stack<BoidUnit *, std::vector<BoidUnit *>> stack;
     stack.push(root);
 
-    constexpr float predatorRange = 1.7f;
+    constexpr float predatorRange = 1.4f;
     constexpr float predatorRangeSq = predatorRange * predatorRange;
-    constexpr float predatorEffectRange = 1.7f;
+    constexpr float predatorEffectRange = 1.4f;
 
     while (!stack.empty()) {
       BoidUnit *current = stack.top();
@@ -274,13 +274,25 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
  */
 void BoidUnit::updateRecursive(float dt) {
   frameCount++;
+
+  // 無限再帰防止: 簡単なカウンター方式
+  static int callCount = 0;
+  callCount++;
+
+  if (callCount > 1000) {
+    callCount = 0; // リセット
+    return;        // 過度な再帰を防止
+  }
+
   std::stack<BoidUnit *, std::vector<BoidUnit *>> stack;
   stack.push(this);
   static std::vector<std::future<void>> asyncTasks;
   asyncTasks.reserve(64);       // 任意。再確保を抑える
   auto &pool = getThreadPool(); // シングルトン取得
   // 第一段階: acceleration をすべて計算
-  while (!stack.empty()) {
+  int firstStageOperations = 0;
+  while (!stack.empty() && firstStageOperations < 10000) {
+    firstStageOperations++;
     BoidUnit *current = stack.top();
     stack.pop();
     // パフォーマンス最適化: children ベクトルのサイズを事前キャッシュ
@@ -317,10 +329,12 @@ void BoidUnit::updateRecursive(float dt) {
   for (auto &f : asyncTasks)
     f.get();
   asyncTasks.clear();
-
   // 第二段階: 位置と速度を更新
   stack.push(this);
-  while (!stack.empty()) {
+  int stackOperations = 0; // スタック操作回数をカウント
+
+  while (!stack.empty() && stackOperations < 10000) {
+    stackOperations++;
     BoidUnit *current = stack.top();
     stack.pop();
 
@@ -513,6 +527,9 @@ void BoidUnit::updateRecursive(float dt) {
       }
     }
   }
+
+  // 関数終了時にカウンターをリセット
+  callCount--;
 }
 inline float BoidUnit::easeOut(float t) {
   // イージング関数 (ease-out)

@@ -216,11 +216,11 @@ function handleKeydown(e) {
 
 function initThreeJS() {
   const width = window.innerWidth;
-  const height = window.innerHeight;
-
-  scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x193255);
-  scene.fog = new THREE.Fog(0x193255, 0, 28);
+  const height = window.innerHeight;  scene = new THREE.Scene();
+  // 海中背景色（定数使用）
+  scene.background = new THREE.Color(toHex(OCEAN_COLORS.SKY_BLUE));
+  // フォグ（背景と同じ色で境界をなじませる）
+  scene.fog = new THREE.Fog(toHex(OCEAN_COLORS.SKY_BLUE), 3, 28);
 
   camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
   camera.position.set(4, 7, 7);
@@ -243,25 +243,53 @@ function initThreeJS() {
 
   controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true; // なめらかな操作
-  controls.dampingFactor = 0.1;
-
-  // 地面メッシュ追加
+  controls.dampingFactor = 0.1;  // 地面メッシュ追加 - 少し明るい海底色
   const groundGeo = new THREE.PlaneGeometry(1000, 1000);
-  const groundMat = new THREE.MeshStandardMaterial({ color: 0x183050, roughness: 0.8, depthTest: true });
+  const groundMat = new THREE.MeshStandardMaterial({ 
+    color: toHex(OCEAN_COLORS.SEAFLOOR), // 海底色（定数使用）
+    roughness: 0.8, 
+    depthTest: true 
+  });
   const ground = new THREE.Mesh(groundGeo, groundMat);
   ground.rotation.x = -Math.PI / 2;
   ground.position.y = -10;
-  ground.receiveShadow = true; // 影を受ける
-  scene.add(ground);
-
-  // ライト
-  const ambientLight = new THREE.AmbientLight(0xa2b7d4, 1);
+  ground.receiveShadow = true; // 影を受ける  scene.add(ground);
+  
+  // 地面と背景の境界をなじませるソフトオーバーレイ
+  const horizonGeo = new THREE.PlaneGeometry(2000, 40);
+  const horizonMat = new THREE.MeshBasicMaterial({
+    color: toHex(OCEAN_COLORS.SKY_BLUE), // 背景と同じ色（定数使用）
+    transparent: true,
+    opacity: 0.3,
+    depthTest: false
+  });
+  const horizon = new THREE.Mesh(horizonGeo, horizonMat);
+  horizon.rotation.x = -Math.PI / 2;
+  horizon.position.y = -8; // 地面より少し上
+  scene.add(horizon);
+  
+  // 海中の環境光（定数使用）
+  const ambientLight = new THREE.AmbientLight(toHex(OCEAN_COLORS.AMBIENT_LIGHT), 0.2);
   scene.add(ambientLight);
 
-  // 太陽光（やや暖色のDirectionalLight）
-  const dirLight = new THREE.DirectionalLight(0x88a5cf, 15); // 暖色＆強め
-  dirLight.position.set(300, 500, 200); // 高い位置から照らす
+  // メインの太陽光（定数使用）
+  const dirLight = new THREE.DirectionalLight(toHex(OCEAN_COLORS.SUN_LIGHT), 10.0);
+  dirLight.position.set(0, 100, 30);
   dirLight.castShadow = true;
+  
+  // 補助光1（定数使用）
+  const sideLight1 = new THREE.DirectionalLight(toHex(OCEAN_COLORS.SIDE_LIGHT1), 2.5);
+  sideLight1.position.set(80, 60, 40);
+  scene.add(sideLight1);
+    // 補助光2（定数使用）
+  const sideLight2 = new THREE.DirectionalLight(toHex(OCEAN_COLORS.SIDE_LIGHT2), 2.0);
+  sideLight2.position.set(-60, 40, 20);
+  scene.add(sideLight2);
+  
+  // 下からの反射光（定数使用）
+  const bottomLight = new THREE.DirectionalLight(toHex(OCEAN_COLORS.BOTTOM_LIGHT), 3);
+  bottomLight.position.set(0, -30, 0);
+  scene.add(bottomLight);
 
   // 影カメラの範囲を広げる
   dirLight.shadow.camera.left = -100;
@@ -275,7 +303,6 @@ function initThreeJS() {
   dirLight.shadow.mapSize.height = 2048;
   dirLight.shadow.bias = -0.001;
   dirLight.shadow.normalBias = 0.01;
-
   scene.add(dirLight);
   // EffectComposer の初期化（スマホ以外の場合のみ）
   if (!isMobileDevice()) {
@@ -960,6 +987,31 @@ watch(showUnits, handleUnitsVisibilityChange);
 
 // Unit表示モードの変更を監視
 watch([showUnitSpheres, showUnitLines], handleUnitDisplayModeChange);
+
+// 海中色彩テーマ定数（調整しやすくするため統一管理）
+// VS Codeのカラーピッカーで色を確認・調整できます
+const OCEAN_COLORS = {
+  // 背景とフォグ系
+  SKY_BLUE: '#019dff',      // 明るい海中ブルー（上層）
+  DEEP_BLUE: '#215a7a',     // 深い海中ブルー（中層）
+  SEAFLOOR: '#183050',      // 海底色（下層）
+  
+  // ライティング系
+  AMBIENT_LIGHT: '#6ccefc', // 環境光
+  SUN_LIGHT: '#4a8bc2',     // 太陽光
+  SIDE_LIGHT1: '#6ba3d0',   // 補助光1
+  SIDE_LIGHT2: '#2d5f7a',   // 補助光2
+  BOTTOM_LIGHT: '#0f2635',  // 底部反射光
+  
+  // 魚とエフェクト系
+  FISH_BASE: '#c8d4e6',     // 魚の基本色
+  LIGHT_RAY: '#4a8bc2',     // 光線エフェクト
+  PARTICLE: '#7fb8c4',      // パーティクル
+  SEAWEED: '#4a8c6a'        // 海藻系パーティクル
+};
+
+// 色を16進数に変換する関数
+const toHex = (colorStr) => parseInt(colorStr.replace('#', '0x'), 16);
 </script>
 
 <style>
