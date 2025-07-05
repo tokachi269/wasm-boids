@@ -228,12 +228,12 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
         float speedMultiplier = 1.0f;
 
         // 逃走後の再結集フェーズ（中程度ストレス時）
-        if (currentStress > 0.2f && currentStress < 0.8f) {
+        if (currentStress > 0.2f && currentStress < 0.9f) {
           cohesionMultiplier = 5.0f; // 凝集力を3倍に強化
           speedMultiplier = 1.5f;    // 移動速度を1.5倍に向上
         }
         // 高ストレス時は逃走優先（凝集力抑制）
-        else if (currentStress >= 0.8f) {
+        else if (currentStress >= 0.9f) {
           cohesionMultiplier = 0.5f; // 凝集力を大幅に抑制
         }
 
