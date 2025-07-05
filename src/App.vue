@@ -88,20 +88,20 @@ function getDefaultSettings() {
   return [{
     species: 'Boids',         // 種族名
     count: boidCount,         // 群れの数（スマホなら2000、PCなら5000）
-    cohesion: 30,             // 凝集
+    cohesion: 25,             // 凝集
     cohesionRange: 30,        // 凝集範囲
-    separation: 7,            // 分離
+    separation: 8,            // 分離
     separationRange: 1,       // 分離範囲
-    alignment: 8,             // 整列
+    alignment: 12,            // 整列
     alignmentRange: 6,        // 整列範囲
-    maxSpeed: 0.22,           // 最大速度
-    maxTurnAngle: 0.2,        // 最大旋回角
-    maxNeighbors: 4,          // 最大近傍数
+    maxSpeed: 0.28,           // 最大速度
+    maxTurnAngle: 0.25,       // 最大旋回角
+    maxNeighbors: 3,          // 最大近傍数
     horizontalTorque: 0.019,  // 水平化トルク
     torqueStrength: 3.398     // 回転トルク強度
   }, {
     species: 'Predator',
-    count: 1,
+    count: 2,
     cohesion: 5.58,                     // 捕食者には使わない
     separation: 0.0,
     alignment: 0.0,
@@ -160,6 +160,36 @@ let stats = null;
 
 let animationTimer = null;
 const FRAME_INTERVAL = 1000 / 60;//1000 / 60; // 60FPS
+
+// パフォーマンス最適化用変数
+let lastColorUpdateFrame = 0;
+let lastPredatorUpdateFrame = 0;
+let speciesIndexLookup = []; // 各BoidのspeciesIndexをキャッシュ
+let frameCounter = 0;
+const COLOR_UPDATE_INTERVAL = 10; // 10フレームに1回色更新
+const PREDATOR_UPDATE_INTERVAL = 5; // 5フレームに1回捕食者更新
+
+// レンダリング最適化用変数
+let lastLodUpdateFrame = 0;
+const LOD_UPDATE_INTERVAL = 3; // 3フレームに1回LOD判定
+let boidLodStates = []; // 各BoidのLOD状態をキャッシュ
+
+// メモリプール最適化
+let matrixPool = [];
+let colorPool = [];
+let vec3Pool = [];
+
+// オブジェクトプールからオブジェクトを取得
+function getFromPool(pool, createFn) {
+  return pool.length > 0 ? pool.pop() : createFn();
+}
+
+// オブジェクトプールにオブジェクトを返却
+function returnToPool(pool, obj) {
+  if (pool.length < 100) { // プールサイズを制限
+    pool.push(obj);
+  }
+}
 
 // マテリアル変数をグローバルスコープで定義
 let boidMaterial = null;
@@ -552,8 +582,22 @@ function scheduleNextFrame() {
   animationTimer = setTimeout(animate, FRAME_INTERVAL);
 }
 
+// 種族インデックスの事前計算（設定変更時のみ実行）
+function buildSpeciesIndexLookup() {
+  speciesIndexLookup = [];
+  let currentIndex = 0;
+  
+  for (let s = 0; s < settings.length; s++) {
+    for (let i = 0; i < settings[s].count; i++) {
+      speciesIndexLookup[currentIndex] = s;
+      currentIndex++;
+    }
+  }
+}
+
 function animate() {
   stats?.begin();
+  frameCounter++;
 
   const currentTime = performance.now();
   const deltaTime = (currentTime - lastTime) / 1000;
@@ -563,43 +607,70 @@ function animate() {
   const heapF32 = wasmModule.HEAPF32.buffer;
   const positions = new Float32Array(heapF32, posPtr(), count * 3);
   const orientations = new Float32Array(heapF32, oriPtr(), count * 4);
-
   const dummy = new THREE.Object3D();
   const identityMatrix = new THREE.Matrix4();
-  const camPos = camera.position;  // Predator用マーカーの初期化（複数対応）
-  const predatorCount = settings.filter(s => s.isPredator).reduce((total, s) => total + s.count, 0);
-  console.log('Predator count:', predatorCount, 'Existing markers:', predatorMarkers.length);
+  const camPos = camera.position;
   
-  // 必要な捕食者マーカー数を確保
-  while (predatorMarkers.length < predatorCount && predatorModel) {
-    const newPredatorMarker = predatorModel.clone();
-    newPredatorMarker.traverse((child) => {
-      if (child.isMesh) {
-        child.material = predatorMaterial;
-      }
-    });
-    scene.add(newPredatorMarker);
-    predatorMarkers.push(newPredatorMarker);
-    console.log('Added predator marker, total:', predatorMarkers.length);
+  // 使用するメッシュを決定（早期宣言）
+  let activeMeshHigh = instancedMeshHigh;
+  let activeMeshLow = instancedMeshLow;
+  
+  // 捕食者マーカーの最適化：5フレームに1回のみ更新
+  if (frameCounter - lastPredatorUpdateFrame >= PREDATOR_UPDATE_INTERVAL) {
+    const predatorCount = settings.filter(s => s.isPredator).reduce((total, s) => total + s.count, 0);
+    
+    // 必要な捕食者マーカー数を確保
+    while (predatorMarkers.length < predatorCount && predatorModel) {
+      const newPredatorMarker = predatorModel.clone();
+      newPredatorMarker.traverse((child) => {
+        if (child.isMesh) {
+          child.material = predatorMaterial;
+        }
+      });
+      scene.add(newPredatorMarker);
+      predatorMarkers.push(newPredatorMarker);
+    }
+    
+    // 余分なマーカーを削除
+    while (predatorMarkers.length > predatorCount) {
+      const marker = predatorMarkers.pop();
+      scene.remove(marker);
+    }
+    
+    lastPredatorUpdateFrame = frameCounter;
+  }  // 各Boidの位置と色を更新（最適化版）
+  let predatorIndex = 0; // 捕食者マーカーのインデックス
+  
+  // 種族インデックスルックアップが未構築なら構築
+  if (speciesIndexLookup.length !== count) {
+    buildSpeciesIndexLookup();
   }
   
-  // 余分なマーカーを削除
-  while (predatorMarkers.length > predatorCount) {
-    const marker = predatorMarkers.pop();
-    scene.remove(marker);
-  }// 使用するメッシュを決定
-  let activeMeshHigh = instancedMeshHigh;
-  let activeMeshLow = instancedMeshLow;  // 各Boidの位置と色を更新
-  let predatorIndex = 0; // 捕食者マーカーのインデックス
-  let currentSpeciesStart = 0; // 現在の種族の開始インデックス
+  // LOD状態の初期化
+  if (boidLodStates.length !== count) {
+    boidLodStates = new Array(count).fill(false);
+  }
+  
+  // LOD判定の最適化：3フレームに1回のみ更新
+  const shouldUpdateLod = (frameCounter - lastLodUpdateFrame >= LOD_UPDATE_INTERVAL);
+  if (shouldUpdateLod) {
+    lastLodUpdateFrame = frameCounter;
+  }
   
   for (let i = 0; i < count; ++i) {
     dummy.position.fromArray(positions, i * 3);
     dummy.quaternion.fromArray(orientations, i * 4);
     dummy.updateMatrix();
 
-    const distSq = camPos.distanceToSquared(dummy.position);
-    const useHigh = distSq < 4;
+    // LOD判定の最適化
+    let useHigh;
+    if (shouldUpdateLod) {
+      const distSq = camPos.distanceToSquared(dummy.position);
+      useHigh = distSq < 4;
+      boidLodStates[i] = useHigh;
+    } else {
+      useHigh = boidLodStates[i];
+    }
 
     // マトリクスを設定
     if (useHigh) {
@@ -610,20 +681,8 @@ function animate() {
       activeMeshLow.setMatrixAt(i, dummy.matrix);
     }
 
-    // 捕食者の特別表示（複数対応）
-    // どの種族に属するかを判定
-    let speciesIndex = -1;
-    let offsetInSpecies = i;
-    let totalBoids = 0;
-    
-    for (let s = 0; s < settings.length; s++) {
-      if (offsetInSpecies < settings[s].count) {
-        speciesIndex = s;
-        break;
-      }
-      offsetInSpecies -= settings[s].count;
-      totalBoids += settings[s].count;
-    }
+    // 捕食者の特別表示（最適化：事前計算されたルックアップを使用）
+    const speciesIndex = speciesIndexLookup[i];
     
     // 捕食者の場合、対応するマーカーを更新
     if (speciesIndex >= 0 && settings[speciesIndex].isPredator && predatorIndex < predatorMarkers.length) {
@@ -632,9 +691,8 @@ function animate() {
       marker.quaternion.copy(dummy.quaternion);
       predatorIndex++;
     }
-  }
-  // 頂点カラーの更新（毎フレーム）
-  if (showUnitColors.value) {
+  }// 頂点カラーの更新（最適化：10フレームに1回のみ）
+  if (showUnitColors.value && (frameCounter - lastColorUpdateFrame >= COLOR_UPDATE_INTERVAL)) {
     const mappingPtrValue = boidUnitMappingPtr();
     const heapI32 = wasmModule.HEAP32.buffer;
     const unitMappings = new Int32Array(heapI32, mappingPtrValue, count * 2);
@@ -657,7 +715,8 @@ function animate() {
     }
     instancedMeshHigh.instanceColor.needsUpdate = true;
     instancedMeshLow.instanceColor.needsUpdate = true;
-  } else if (lastShowUnitColors) {
+    lastColorUpdateFrame = frameCounter;
+  } else if (lastShowUnitColors && !showUnitColors.value) {
     // Unit色分けOFF: ON→OFFになった時のみ頂点カラーを白にリセット
     const whiteColor = new THREE.Color(1, 1, 1);
     for (let i = 0; i < count; i++) {
@@ -667,10 +726,10 @@ function animate() {
     instancedMeshHigh.instanceColor.needsUpdate = true;
     instancedMeshLow.instanceColor.needsUpdate = true;
     console.log('✓ Reset vertex colors to white (OFF mode)');
-  }
+  }  // 前回の状態を保存
+  lastShowUnitColors = showUnitColors.value;
 
-  // 前回の状態を保存
-  lastShowUnitColors = showUnitColors.value;// マトリクスの更新
+  // マトリクスの更新
   activeMeshHigh.instanceMatrix.needsUpdate = true;
   activeMeshLow.instanceMatrix.needsUpdate = true;
 
@@ -874,6 +933,8 @@ function resetSettings() {
   for (let i = 0; i < defaultSettings.length; i++) {
     settings.push({ ...defaultSettings[i] });
   }
+  // 設定変更時に種族インデックスルックアップを再構築
+  speciesIndexLookup.length = 0;
 }
 
 // Unit可視化変更のハンドラ関数（匿名関数を避けてパフォーマンス改善）

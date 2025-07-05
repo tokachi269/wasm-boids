@@ -9,9 +9,7 @@
 #include <glm/gtx/norm.hpp>
 #include <glm/gtx/rotate_vector.hpp>
 #include <glm/gtx/string_cast.hpp>
-#include <random>
 #include <stack>
-#include <string>
 #include <vector>
 
 bool BoidUnit::isBoidUnit() const { return children.empty(); }
@@ -127,12 +125,12 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
     // トップ階層から探索を開始
     BoidUnit *root = this->topParent ? this->topParent : this;
 
-    std::stack<BoidUnit *> stack;
+    std::stack<BoidUnit *, std::vector<BoidUnit *>> stack;
     stack.push(root);
 
     constexpr float predatorRange = 1.7f;
     constexpr float predatorRangeSq = predatorRange * predatorRange;
-    constexpr float predatorEffectRange = 2.0f;
+    constexpr float predatorEffectRange = 1.7f;
 
     while (!stack.empty()) {
       BoidUnit *current = stack.top();
@@ -230,13 +228,13 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
         float speedMultiplier = 1.0f;
 
         // 逃走後の再結集フェーズ（中程度ストレス時）
-        if (currentStress > 0.2f && currentStress < 0.6f) {
-          cohesionMultiplier = 3.0f; // 凝集力を3倍に強化
+        if (currentStress > 0.2f && currentStress < 0.8f) {
+          cohesionMultiplier = 5.0f; // 凝集力を3倍に強化
           speedMultiplier = 1.5f;    // 移動速度を1.5倍に向上
         }
         // 高ストレス時は逃走優先（凝集力抑制）
-        else if (currentStress >= 0.6f) {
-          cohesionMultiplier = 0.2f; // 凝集力を大幅に抑制
+        else if (currentStress >= 0.8f) {
+          cohesionMultiplier = 0.5f; // 凝集力を大幅に抑制
         }
 
         buf->accelerations[idxA] +=
@@ -333,7 +331,6 @@ void BoidUnit::updateRecursive(float dt) {
         glm::vec3 velocity = current->buf->velocities[gIdx];
         glm::vec3 acceleration = current->buf->accelerations[gIdx];
         glm::vec3 position = current->buf->positions[gIdx];
-        emscripten::val console = emscripten::val::global("console");
 
         // -----------------------------------------------
         // 捕食者専用の追跡加速度を加算
@@ -414,17 +411,17 @@ void BoidUnit::updateRecursive(float dt) {
         float stressFactor = 1.0f;
 
         // 滑らかな遷移による速度制御（閾値なしの連続関数）
-        if (currentStress > 0.9f) {
+        if (currentStress > 0.95f) {
           // 高ストレス時: 逃走優先で高速移動
           float t = (currentStress - 0.8f) / 0.2f; // 0.8-1.0を0-1に正規化
           stressFactor = 1.0f + 1.6f + t * 0.9f; // 2.6倍から3.5倍へ滑らかに遷移
-        } else if (currentStress > 0.2f) {
+        } else if (currentStress > 0.7f) {
           // 中ストレス時: 再結集のための高速移動（滑らかな曲線）
           float t = (currentStress - 0.2f) / 0.6f; // 0.2-0.8を0-1に正規化
           // スムーズステップ関数で滑らかな遷移
           float smoothT = t * t * (3.0f - 2.0f * t);
           stressFactor =
-              1.0f + 0.4f + smoothT * 1.2f; // 1.4倍から2.6倍へ滑らかに遷移
+              1.0f + 0.4f + smoothT * 1.8f; // 1.4倍から2.6倍へ滑らかに遷移
         } else {
           // 低ストレス時: 通常速度からの滑らかな移行
           float t = currentStress / 0.2f; // 0-0.2を0-1に正規化
@@ -546,19 +543,24 @@ void BoidUnit::computeBoidInteraction(float dt) {
   glm::vec3 separation;
   glm::vec3 alignment;
   glm::vec3 cohesion;
-
   int gIdx = 0;
   glm::vec3 pos;
   glm::vec3 vel;
   int sid = -1;
-  static std::mt19937 rng{std::random_device{}()};
+  // 軽量なランダム数生成（WASMでmt19937が使えないため）
+  static uint32_t rng_state = 1;
+  auto simple_rand = [&]() -> uint32_t {
+    rng_state = rng_state * 1103515245 + 12345;
+    return (rng_state >> 16) & 0x7fff;
+  };
+  auto rand_range = [&](int max_val) -> int { return simple_rand() % max_val; };
+
   // -----------------------------------------------
   // 事前計算しておく定数／準備
   // -----------------------------------------------
   // 非ゼロ判定用イプシロン
-  constexpr float EPS = 1e-8f;
-
-  // 候補距離を入れてソート/部分ソートするための領域
+  constexpr float EPS =
+      1e-8f; // 候補距離を入れてソート/部分ソートするための領域
   std::vector<std::pair<float, int>> candidates;
   if (candidates.capacity() < indices.size()) {
     candidates.reserve(indices.size());
@@ -567,8 +569,8 @@ void BoidUnit::computeBoidInteraction(float dt) {
   // -----------------------------------------------
   // 各 Boid（leafノード内）ごとの反復
   // -----------------------------------------------
-  for (size_t index = 0; index < indices.size();
-       ++index) { // -------------------------------------------------------
+  for (size_t index = 0; index < indices.size(); ++index) {
+    // -------------------------------------------------------
     // 1. 初期化フェーズ
     //    - 加速度計算用に separation/alignment/cohesion をリセット
     //    - 対象 Boid のグローバルインデックスと位置・速度を取得
@@ -630,14 +632,13 @@ void BoidUnit::computeBoidInteraction(float dt) {
 
           // 候補ユニット内の Boid をランダムに選択
           if (!candidateUnits.empty()) {
-            std::uniform_int_distribution<int> unitDist(
-                0, static_cast<int>(candidateUnits.size() - 1));
-            BoidUnit *selectedUnit = candidateUnits[unitDist(rng)];
+            int unitIndex = rand_range(static_cast<int>(candidateUnits.size()));
+            BoidUnit *selectedUnit = candidateUnits[unitIndex];
 
             if (!selectedUnit->indices.empty()) {
-              std::uniform_int_distribution<int> boidDist(
-                  0, static_cast<int>(selectedUnit->indices.size() - 1));
-              tgtIdx = selectedUnit->indices[boidDist(rng)];
+              int boidIndex =
+                  rand_range(static_cast<int>(selectedUnit->indices.size()));
+              tgtIdx = selectedUnit->indices[boidIndex];
               tgtTime = globalSpeciesParams[sid].tau;
             } else {
               tgtIdx = -1;
@@ -709,17 +710,14 @@ void BoidUnit::computeBoidInteraction(float dt) {
         glm::vec3 diff = buf->positions[gNeighbor] - pos;
         float distSq = glm::dot(diff, diff);
         if (distSq >= viewRangeSq)
-          continue;
-
-        // 速度ゼロでなければ視界内かどうかを確認
+          continue; // 速度ゼロでなければ視界内かどうかを確認（最適化版）
         if (hasVel) {
-          float invDist = 1.0f / glm::sqrt(distSq);
-          glm::vec3 diffNorm = diff * invDist;
-          float dotVal = glm::dot(forward, diffNorm);
-          if (dotVal < cosHalfFov)
+          // 平方根計算を回避：内積の比較でFOVチェック
+          float diffDot = glm::dot(forward, diff);
+          float requiredDot = cosHalfFov * glm::sqrt(distSq);
+          if (diffDot < requiredDot)
             continue;
         }
-
         candidates.emplace_back(distSq, (int)i);
       }
     } // -------------------------------------------------------
