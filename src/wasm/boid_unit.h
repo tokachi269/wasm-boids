@@ -39,6 +39,14 @@ public:
         cohesionMemories.resize(MAX_BOIDS, 0.0f);
     }
 
+    // デストラクタ：木構造を再帰的に削除（deepDestroy）
+    ~BoidUnit() {
+        for (BoidUnit* child : children) {
+            delete child;  // 各子ノードを再帰的に削除
+        }
+        children.clear();
+    }
+
     int getMaxID() const;
     bool isBoidUnit() const;
     void computeBoundingSphere();

@@ -12,6 +12,9 @@
 #include <stack>
 #include <vector>
 
+// 静的変数の定義
+int BoidUnit::nextId = 0;
+
 bool BoidUnit::isBoidUnit() const { return children.empty(); }
 
 /**

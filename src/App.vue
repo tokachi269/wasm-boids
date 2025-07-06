@@ -82,11 +82,12 @@ function fetchTreeStructure() {
 }
 
 function getDefaultSettings() {
-  const boidCount = isMobileDevice() ? 3000 : 10000;
+  // WASMメモリ不足対策：Boids数をさらに削減
+  const boidCount = isMobileDevice() ? 1000 : 2500;
 
   return [{
     species: 'Boids',         // 種族名
-    count: boidCount,         // 群れの数（スマホなら3000、PCなら10000）
+    count: boidCount,         // 群れの数（スマホなら1000、PCなら2500）
     cohesion: 25,             // 凝集
     cohesionRange: 30,        // 凝集範囲
     separation: 8,            // 分離
@@ -100,7 +101,7 @@ function getDefaultSettings() {
     torqueStrength: 3.398     // 回転トルク強度
   }, {
     species: 'Predator',
-    count: 2,
+    count: 1,                           // 捕食者も1体に削減
     cohesion: 5.58,                     // 捕食者には使わない
     separation: 0.0,
     alignment: 0.0,
@@ -623,7 +624,27 @@ function animate() {
   const currentTime = performance.now();
   const deltaTime = (currentTime - lastTime) / 1000;
   lastTime = currentTime;
-  if (!paused.value) update(deltaTime);
+  
+  // WASMメモリエラーのキャッチと自動リカバリ
+  if (!paused.value) {
+    try {
+      update(deltaTime);
+    } catch (error) {
+      console.error('WASM update error:', error);
+      
+      // メモリエラーの場合、自動的にBoids数を削減してリカバリ
+      if (error.message && (error.message.includes('Cannot enlarge memory') || 
+                           error.message.includes('out of memory') ||
+                           error.message.includes('memory') ||
+                           error.message.includes('Maximum call stack'))) {
+        handleMemoryError();
+        return;
+      }
+      
+      throw error; // その他のエラーは再スロー
+    }
+  }
+  
   const count = boidCount();
   const heapF32 = wasmModule.HEAPF32.buffer;
   const positions = new Float32Array(heapF32, posPtr(), count * 3);
@@ -1061,6 +1082,65 @@ function createFadeOutGroundMaterial() {
   });
 
   return material;
+}
+
+// メモリエラー時の自動リカバリ
+function handleMemoryError() {
+  console.warn('WASM memory error detected - reducing Boids count automatically');
+  
+  // 現在のBoidsカウントを50%削減
+  settings.forEach(setting => {
+    if (setting.species === 'Boids') {
+      setting.count = Math.max(Math.floor(setting.count * 0.5), 100);
+    } else if (setting.species === 'Predator') {
+      setting.count = Math.max(Math.floor(setting.count * 0.5), 1);
+    }
+  });
+  
+  // エラーメッセージをユーザーに表示
+  alert(`メモリ不足を検出しました。Boids数を${settings[0].count}に自動削減しました。`);
+  
+  // シミュレーションを一時停止してリセット
+  paused.value = true;
+  
+  // 新しい設定で再開
+  setTimeout(() => {
+    resetSimulation();
+    paused.value = false;
+  }, 100);
+}
+
+// シミュレーションリセット関数
+function resetSimulation() {
+  console.log('Resetting simulation with reduced count:', settings[0].count);
+  
+  // 種族設定を再構築
+  const totalBoids = settings.reduce((total, spec) => total + spec.count, 0);
+  
+  try {
+    build(totalBoids, settings.length);
+    
+    settings.forEach((spec, index) => {
+      setFlockSize(index, spec.count, spec.isPredator ? 1 : 0);
+    });
+    
+    // インスタンスメッシュの最大数も調整
+    if (instancedMeshHigh) {
+      instancedMeshHigh.count = totalBoids;
+    }
+    if (instancedMeshLow) {
+      instancedMeshLow.count = totalBoids;
+    }
+    
+    console.log('✓ Simulation reset successfully with', totalBoids, 'boids');
+  } catch (error) {
+    console.error('Failed to reset simulation:', error);
+    // さらに削減が必要な場合
+    if (settings[0].count > 200) {
+      settings[0].count = Math.max(Math.floor(settings[0].count * 0.3), 100);
+      setTimeout(() => resetSimulation(), 200);
+    }
+  }
 }
 </script>
 
