@@ -34,14 +34,13 @@
             </label>
           </div>
         </details>
-      </details>      <div class="info">
+      </details>
+      <div class="info">
         <p>Boids Count: {{ totalBoids }}</p>
       </div>
     </div>
-    <div ref="threeContainer" class="three-container" 
-         @touchstart="handleTouchStart" 
-         @touchmove="handleTouchMove" 
-         @touchend="handleTouchEnd" />
+    <div ref="threeContainer" class="three-container" @touchstart="handleTouchStart" @touchmove="handleTouchMove"
+      @touchend="handleTouchEnd" />
   </div>
 </template>
 
@@ -83,11 +82,11 @@ function fetchTreeStructure() {
 }
 
 function getDefaultSettings() {
-  const boidCount = isMobileDevice() ? 2000 : 5000;
+  const boidCount = isMobileDevice() ? 3000 : 10000;
 
   return [{
     species: 'Boids',         // 種族名
-    count: boidCount,         // 群れの数（スマホなら2000、PCなら5000）
+    count: boidCount,         // 群れの数（スマホなら3000、PCなら10000）
     cohesion: 25,             // 凝集
     cohesionRange: 30,        // 凝集範囲
     separation: 8,            // 分離
@@ -161,17 +160,17 @@ let stats = null;
 let animationTimer = null;
 const FRAME_INTERVAL = 1000 / 60;//1000 / 60; // 60FPS
 
-// パフォーマンス最適化用変数
+// パフォーマンス最適化用変数（スマホ用調整）
 let lastColorUpdateFrame = 0;
 let lastPredatorUpdateFrame = 0;
 let speciesIndexLookup = []; // 各BoidのspeciesIndexをキャッシュ
 let frameCounter = 0;
-const COLOR_UPDATE_INTERVAL = 10; // 10フレームに1回色更新
-const PREDATOR_UPDATE_INTERVAL = 5; // 5フレームに1回捕食者更新
+const COLOR_UPDATE_INTERVAL = isMobileDevice() ? 20 : 10; // スマホは20フレーム、PCは10フレーム
+const PREDATOR_UPDATE_INTERVAL = isMobileDevice() ? 10 : 5; // スマホは10フレーム、PCは5フレーム
 
-// レンダリング最適化用変数
+// レンダリング最適化用変数（スマホ用調整）
 let lastLodUpdateFrame = 0;
-const LOD_UPDATE_INTERVAL = 3; // 3フレームに1回LOD判定
+const LOD_UPDATE_INTERVAL = isMobileDevice() ? 5 : 3; // スマホは5フレーム、PCは3フレーム
 let boidLodStates = []; // 各BoidのLOD状態をキャッシュ
 
 // メモリプール最適化
@@ -216,25 +215,28 @@ function handleKeydown(e) {
 
 function initThreeJS() {
   const width = window.innerWidth;
-  const height = window.innerHeight;  scene = new THREE.Scene();
-  // 海中背景色（定数使用）
-  scene.background = new THREE.Color(toHex(OCEAN_COLORS.SKY_BLUE));
+  const height = window.innerHeight; scene = new THREE.Scene();
   // フォグ（背景と同じ色で境界をなじませる）
-  scene.fog = new THREE.Fog(toHex(OCEAN_COLORS.SKY_BLUE), 3, 28);
+  scene.fog = new THREE.Fog(toHex(OCEAN_COLORS.FOG), 3, 14);
 
   camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
-  camera.position.set(4, 7, 7);
+  camera.position.set(2.19, -6.30, 5.76);
   camera.lookAt(0, 0, 0);
+  camera.position.set(2.19, -5.80, 5.76);
 
   renderer = new THREE.WebGLRenderer({
-    antialias: true,
+    antialias: !isMobileDevice(), // スマホではアンチエイリアスを無効化
     depth: true, // 深度バッファを有効化
-
+    powerPreference: isMobileDevice() ? "low-power" : "high-performance"
   });
-  renderer.setPixelRatio(window.devicePixelRatio); // 高DPI対応
+  // スマホ用ピクセル比調整（パフォーマンス向上）
+  renderer.setPixelRatio(isMobileDevice() ? Math.min(window.devicePixelRatio, 2) : window.devicePixelRatio);
   renderer.setSize(width, height);
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap; // 影を柔らかく
+  renderer.shadowMap.enabled = !isMobileDevice(); // スマホでは影を無効化
+  if (!isMobileDevice()) {
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap; // 影を柔らかく（PCのみ）
+  }
+  renderer.outputColorSpace = THREE.SRGBColorSpace; // 色空間を統一
 
   threeContainer.value.appendChild(renderer.domElement);
 
@@ -242,67 +244,48 @@ function initThreeJS() {
   camera.updateProjectionMatrix();
 
   controls = new OrbitControls(camera, renderer.domElement);
-  controls.enableDamping = true; // なめらかな操作
-  controls.dampingFactor = 0.1;  // 地面メッシュ追加 - 少し明るい海底色
-  const groundGeo = new THREE.PlaneGeometry(1000, 1000);
-  const groundMat = new THREE.MeshStandardMaterial({ 
-    color: toHex(OCEAN_COLORS.SEAFLOOR), // 海底色（定数使用）
-    roughness: 0.8, 
-    depthTest: true 
-  });
-  const ground = new THREE.Mesh(groundGeo, groundMat);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.1;
+  const groundGeo = new THREE.PlaneGeometry(100, 100);
+  groundMaterial = createFadeOutGroundMaterial(); // グローバル変数に保存
+  const ground = new THREE.Mesh(groundGeo, groundMaterial);
   ground.rotation.x = -Math.PI / 2;
-  ground.position.y = -10;
-  ground.receiveShadow = true; // 影を受ける  scene.add(ground);
-  
-  // 地面と背景の境界をなじませるソフトオーバーレイ
-  const horizonGeo = new THREE.PlaneGeometry(2000, 40);
-  const horizonMat = new THREE.MeshBasicMaterial({
-    color: toHex(OCEAN_COLORS.SKY_BLUE), // 背景と同じ色（定数使用）
-    transparent: true,
-    opacity: 0.3,
-    depthTest: false
-  });
-  const horizon = new THREE.Mesh(horizonGeo, horizonMat);
-  horizon.rotation.x = -Math.PI / 2;
-  horizon.position.y = -8; // 地面より少し上
-  scene.add(horizon);
-  
+  ground.position.y = -7;
+  ground.receiveShadow = true; // 影を受ける
+  scene.add(ground);
+
+  // 大きなsphereで海中環境を作成
+  createOceanSphere();
+
   // 海中の環境光（定数使用）
-  const ambientLight = new THREE.AmbientLight(toHex(OCEAN_COLORS.AMBIENT_LIGHT), 0.2);
+  const ambientLight = new THREE.AmbientLight(toHex(OCEAN_COLORS.AMBIENT_LIGHT), 0.5);
   scene.add(ambientLight);
 
-  // メインの太陽光（定数使用）
-  const dirLight = new THREE.DirectionalLight(toHex(OCEAN_COLORS.SUN_LIGHT), 10.0);
-  dirLight.position.set(0, 100, 30);
-  dirLight.castShadow = true;
-  
-  // 補助光1（定数使用）
-  const sideLight1 = new THREE.DirectionalLight(toHex(OCEAN_COLORS.SIDE_LIGHT1), 2.5);
-  sideLight1.position.set(80, 60, 40);
-  scene.add(sideLight1);
-    // 補助光2（定数使用）
-  const sideLight2 = new THREE.DirectionalLight(toHex(OCEAN_COLORS.SIDE_LIGHT2), 2.0);
-  sideLight2.position.set(-60, 40, 20);
-  scene.add(sideLight2);
-  
+  // メインの太陽光（定数使用、スマホでは影を無効化）
+  const dirLight = new THREE.DirectionalLight(toHex(OCEAN_COLORS.SUN_LIGHT), 22.0);
+  dirLight.position.set(0, 60, 30);
+  dirLight.castShadow = !isMobileDevice(); // スマホでは影を無効化
+
   // 下からの反射光（定数使用）
-  const bottomLight = new THREE.DirectionalLight(toHex(OCEAN_COLORS.BOTTOM_LIGHT), 3);
+  const bottomLight = new THREE.DirectionalLight(toHex(OCEAN_COLORS.BOTTOM_LIGHT), 0);
   bottomLight.position.set(0, -30, 0);
   scene.add(bottomLight);
 
-  // 影カメラの範囲を広げる
-  dirLight.shadow.camera.left = -100;
-  dirLight.shadow.camera.right = 100;
-  dirLight.shadow.camera.top = 100;
-  dirLight.shadow.camera.bottom = -100;
-  dirLight.shadow.camera.near = 1;
-  dirLight.shadow.camera.far = 1000;
+  // 影カメラの範囲を広げる（PCのみ）
+  if (!isMobileDevice()) {
+    dirLight.shadow.camera.left = -100;
+    dirLight.shadow.camera.right = 100;
+    dirLight.shadow.camera.top = 100;
+    dirLight.shadow.camera.bottom = -100;
+    dirLight.shadow.camera.near = 1;
+    dirLight.shadow.camera.far = 1000;
 
-  dirLight.shadow.mapSize.width = 2048;
-  dirLight.shadow.mapSize.height = 2048;
-  dirLight.shadow.bias = -0.001;
-  dirLight.shadow.normalBias = 0.01;
+    // スマホでは影の解像度を下げる
+    dirLight.shadow.mapSize.width = isMobileDevice() ? 512 : 2048;
+    dirLight.shadow.mapSize.height = isMobileDevice() ? 512 : 2048;
+    dirLight.shadow.bias = -0.001;
+    dirLight.shadow.normalBias = 0.01;
+  }
   scene.add(dirLight);
   // EffectComposer の初期化（スマホ以外の場合のみ）
   if (!isMobileDevice()) {
@@ -338,6 +321,7 @@ function onWindowResize() {
 // 一時的に従来方式に戻す - instancedMeshを単一で使用
 let instancedMeshHigh = null; // 高ポリゴン用
 let instancedMeshLow = null;  // 低ポリゴン用
+let groundMaterial = null;    // 地面マテリアルの参照
 
 // LOD用ジオメトリ・マテリアルを使い回す
 const boidGeometryHigh = new THREE.SphereGeometry(1, 8, 8);
@@ -379,16 +363,16 @@ function initInstancedBoids(count) {
     highMaterial,
     count
   );
-  instancedMeshHigh.castShadow = true;
-  instancedMeshHigh.receiveShadow = true;
+  instancedMeshHigh.castShadow = !isMobileDevice(); // スマホでは影を無効化
+  instancedMeshHigh.receiveShadow = !isMobileDevice();
 
   instancedMeshLow = new THREE.InstancedMesh(
     boidModelLod.children[0].geometry,
     lowMaterial,
     count
   );
-  instancedMeshLow.castShadow = true;
-  instancedMeshLow.receiveShadow = true;
+  instancedMeshLow.castShadow = !isMobileDevice(); // スマホでは影を無効化
+  instancedMeshLow.receiveShadow = !isMobileDevice();
 
   // インスタンスカラーを白で初期化
   const whiteColor = new THREE.Color(1, 1, 1);
@@ -427,6 +411,13 @@ function loadBoidModel(callback) {
     (error) => console.error('An error occurred while loading the texture:', error)
   );
 
+  const normalMapLod = textureLoader.load(
+    './models/fish_lod_n.png',
+    () => console.log('LOD Normal map loaded successfully.'),
+    undefined,
+    (error) => console.error('An error occurred while loading the LOD normal map:', error)
+  );
+
   const predatorTexture = textureLoader.load(
     './models/fishPredetor.png',
     () => console.log('Predator texture loaded successfully.'),
@@ -438,6 +429,8 @@ function loadBoidModel(callback) {
   texture.colorSpace = THREE.SRGBColorSpace;
   textureLod.flipY = false;
   textureLod.colorSpace = THREE.SRGBColorSpace;
+  normalMapLod.flipY = false;
+  normalMapLod.colorSpace = THREE.LinearSRGBColorSpace; // ノーマルマップはLinear色空間
   predatorTexture.flipY = false;
   predatorTexture.colorSpace = THREE.SRGBColorSpace;
 
@@ -459,6 +452,7 @@ function loadBoidModel(callback) {
     transparent: false,
     alphaTest: 0.5,
     map: textureLod,
+    normalMap: normalMapLod,
     vertexColors: false,
     vertexColor: 0xffffff
   });
@@ -613,7 +607,7 @@ function scheduleNextFrame() {
 function buildSpeciesIndexLookup() {
   speciesIndexLookup = [];
   let currentIndex = 0;
-  
+
   for (let s = 0; s < settings.length; s++) {
     for (let i = 0; i < settings[s].count; i++) {
       speciesIndexLookup[currentIndex] = s;
@@ -637,15 +631,15 @@ function animate() {
   const dummy = new THREE.Object3D();
   const identityMatrix = new THREE.Matrix4();
   const camPos = camera.position;
-  
+
   // 使用するメッシュを決定（早期宣言）
   let activeMeshHigh = instancedMeshHigh;
   let activeMeshLow = instancedMeshLow;
-  
+
   // 捕食者マーカーの最適化：5フレームに1回のみ更新
   if (frameCounter - lastPredatorUpdateFrame >= PREDATOR_UPDATE_INTERVAL) {
     const predatorCount = settings.filter(s => s.isPredator).reduce((total, s) => total + s.count, 0);
-    
+
     // 必要な捕食者マーカー数を確保
     while (predatorMarkers.length < predatorCount && predatorModel) {
       const newPredatorMarker = predatorModel.clone();
@@ -657,33 +651,33 @@ function animate() {
       scene.add(newPredatorMarker);
       predatorMarkers.push(newPredatorMarker);
     }
-    
+
     // 余分なマーカーを削除
     while (predatorMarkers.length > predatorCount) {
       const marker = predatorMarkers.pop();
       scene.remove(marker);
     }
-    
+
     lastPredatorUpdateFrame = frameCounter;
   }  // 各Boidの位置と色を更新（最適化版）
   let predatorIndex = 0; // 捕食者マーカーのインデックス
-  
+
   // 種族インデックスルックアップが未構築なら構築
   if (speciesIndexLookup.length !== count) {
     buildSpeciesIndexLookup();
   }
-  
+
   // LOD状態の初期化
   if (boidLodStates.length !== count) {
     boidLodStates = new Array(count).fill(false);
   }
-  
+
   // LOD判定の最適化：3フレームに1回のみ更新
   const shouldUpdateLod = (frameCounter - lastLodUpdateFrame >= LOD_UPDATE_INTERVAL);
   if (shouldUpdateLod) {
     lastLodUpdateFrame = frameCounter;
   }
-  
+
   for (let i = 0; i < count; ++i) {
     dummy.position.fromArray(positions, i * 3);
     dummy.quaternion.fromArray(orientations, i * 4);
@@ -710,7 +704,7 @@ function animate() {
 
     // 捕食者の特別表示（最適化：事前計算されたルックアップを使用）
     const speciesIndex = speciesIndexLookup[i];
-    
+
     // 捕食者の場合、対応するマーカーを更新
     if (speciesIndex >= 0 && settings[speciesIndex].isPredator && predatorIndex < predatorMarkers.length) {
       const marker = predatorMarkers[predatorIndex];
@@ -886,10 +880,10 @@ function handleTouchMove(event) {
   if (isMobileDevice() && touchStartTime > 0) {
     const touch = event.touches[0];
     const moveDistance = Math.sqrt(
-      Math.pow(touch.clientX - touchStartPos.x, 2) + 
+      Math.pow(touch.clientX - touchStartPos.x, 2) +
       Math.pow(touch.clientY - touchStartPos.y, 2)
     );
-    
+
     // 5px以上動いたらドラッグと判定
     if (moveDistance > 5) {
       hasMoved = true;
@@ -900,18 +894,18 @@ function handleTouchMove(event) {
 function handleTouchEnd(event) {
   if (isMobileDevice() && touchStartTime > 0) {
     const touchDuration = Date.now() - touchStartTime;
-    
+
     // 短時間（500ms以下）で、動いていない場合のみタップと判定
     if (touchDuration < 500 && !hasMoved) {
       const isThreeContainer = event.target === threeContainer.value;
       const isCanvas = event.target.tagName === 'CANVAS';
       const isInThreeContainer = threeContainer.value && threeContainer.value.contains(event.target);
-      
+
       if (isThreeContainer || isCanvas || isInThreeContainer) {
         paused.value = !paused.value;
       }
     }
-    
+
     // リセット
     touchStartTime = 0;
     hasMoved = false;
@@ -993,25 +987,81 @@ watch([showUnitSpheres, showUnitLines], handleUnitDisplayModeChange);
 const OCEAN_COLORS = {
   // 背景とフォグ系
   SKY_BLUE: '#019dff',      // 明るい海中ブルー（上層）
-  DEEP_BLUE: '#215a7a',     // 深い海中ブルー（中層）
-  SEAFLOOR: '#183050',      // 海底色（下層）
-  
+  DEEP_BLUE: '#183050',     // 深い海中ブルー（中層）- より暗く調整
+  SEAFLOOR: '#777465',      // 海底色（下層）
+  FOG: '#153a6c',           // フォグ色（中層）- より暗く調整
+
+
   // ライティング系
-  AMBIENT_LIGHT: '#6ccefc', // 環境光
-  SUN_LIGHT: '#4a8bc2',     // 太陽光
+  AMBIENT_LIGHT: '#6cb7fc', // 環境光
+  SUN_LIGHT: '#5389b7',     // 太陽光
   SIDE_LIGHT1: '#6ba3d0',   // 補助光1
   SIDE_LIGHT2: '#2d5f7a',   // 補助光2
   BOTTOM_LIGHT: '#0f2635',  // 底部反射光
-  
-  // 魚とエフェクト系
-  FISH_BASE: '#c8d4e6',     // 魚の基本色
-  LIGHT_RAY: '#4a8bc2',     // 光線エフェクト
-  PARTICLE: '#7fb8c4',      // パーティクル
-  SEAWEED: '#4a8c6a'        // 海藻系パーティクル
 };
 
 // 色を16進数に変換する関数
 const toHex = (colorStr) => parseInt(colorStr.replace('#', '0x'), 16);
+// 単一sphereにグラデーションを適用した海中環境を作成
+function createOceanSphere() {
+  // グラデーションテクスチャを作成
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+  canvas.width = 512;
+  canvas.height = 512;
+
+  // 縦方向のグラデーション（上から下へ）
+  const gradient = context.createLinearGradient(0, 0, 0, canvas.height);
+  gradient.addColorStop(0, OCEAN_COLORS.SKY_BLUE);    // 上部：明るい海中ブルー
+  gradient.addColorStop(0.1, OCEAN_COLORS.SKY_BLUE);   // 上部：明るい海中ブルー
+  gradient.addColorStop(0.6, OCEAN_COLORS.DEEP_BLUE); // 中央：深い海中ブルー
+  gradient.addColorStop(1, OCEAN_COLORS.DEEP_BLUE);                // 底部：最も暗い
+
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  // テクスチャとして作成
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.generateMipmaps = false; // 色の精度を保つため
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+
+  const sphereGeo = new THREE.SphereGeometry(300, 32, 32);
+  // フォグの影響を受けるマテリアル（補助的な役割）
+  const sphereMat = new THREE.MeshBasicMaterial({
+    map: texture,
+    side: THREE.BackSide, // 内側から見えるように
+    fog: false // フォグの影響を受ける
+  });
+
+  const oceanSphere = new THREE.Mesh(sphereGeo, sphereMat);
+  oceanSphere.position.set(0, 0, 0);
+  scene.add(oceanSphere);
+
+  return oceanSphere;
+}
+
+// 端がフェードアウトする地面マテリアルを作成
+function createFadeOutGroundMaterial() {
+  // 外部のアルファテクスチャを使用
+  const textureLoader = new THREE.TextureLoader();
+  const alphaMap = textureLoader.load('./models/groundAlfa.png');
+
+  // テクスチャ設定
+  alphaMap.minFilter = THREE.LinearFilter;
+  alphaMap.magFilter = THREE.LinearFilter;
+  alphaMap.wrapS = THREE.ClampToEdgeWrapping;
+  alphaMap.wrapT = THREE.ClampToEdgeWrapping;
+
+  const material = new THREE.MeshStandardMaterial({
+    color: toHex(OCEAN_COLORS.SEAFLOOR),
+    transparent: true,
+    alphaMap: alphaMap,
+    depthWrite: false // デプスバッファへの書き込み可否
+  });
+
+  return material;
+}
 </script>
 
 <style>
