@@ -82,12 +82,11 @@ function fetchTreeStructure() {
 }
 
 function getDefaultSettings() {
-  // WASMメモリ不足対策：Boids数をさらに削減
-  const boidCount = isMobileDevice() ? 1000 : 2500;
+  const boidCount = isMobileDevice() ? 3000 : 10000;
 
   return [{
     species: 'Boids',         // 種族名
-    count: boidCount,         // 群れの数（スマホなら1000、PCなら2500）
+    count: boidCount,         // 群れの数（スマホなら3000、PCなら10000）
     cohesion: 25,             // 凝集
     cohesionRange: 30,        // 凝集範囲
     separation: 8,            // 分離
@@ -101,7 +100,7 @@ function getDefaultSettings() {
     torqueStrength: 3.398     // 回転トルク強度
   }, {
     species: 'Predator',
-    count: 1,                           // 捕食者も1体に削減
+    count: 2,
     cohesion: 5.58,                     // 捕食者には使わない
     separation: 0.0,
     alignment: 0.0,
@@ -259,11 +258,11 @@ function initThreeJS() {
   createOceanSphere();
 
   // 海中の環境光（定数使用）
-  const ambientLight = new THREE.AmbientLight(toHex(OCEAN_COLORS.AMBIENT_LIGHT), 0.5);
+  const ambientLight = new THREE.AmbientLight(toHex(OCEAN_COLORS.AMBIENT_LIGHT), 1.3);
   scene.add(ambientLight);
 
   // メインの太陽光（定数使用、スマホでは影を無効化）
-  const dirLight = new THREE.DirectionalLight(toHex(OCEAN_COLORS.SUN_LIGHT), 22.0);
+  const dirLight = new THREE.DirectionalLight(toHex(OCEAN_COLORS.SUN_LIGHT), 23.0);
   dirLight.position.set(0, 60, 30);
   dirLight.castShadow = !isMobileDevice(); // スマホでは影を無効化
 
@@ -624,27 +623,7 @@ function animate() {
   const currentTime = performance.now();
   const deltaTime = (currentTime - lastTime) / 1000;
   lastTime = currentTime;
-  
-  // WASMメモリエラーのキャッチと自動リカバリ
-  if (!paused.value) {
-    try {
-      update(deltaTime);
-    } catch (error) {
-      console.error('WASM update error:', error);
-      
-      // メモリエラーの場合、自動的にBoids数を削減してリカバリ
-      if (error.message && (error.message.includes('Cannot enlarge memory') || 
-                           error.message.includes('out of memory') ||
-                           error.message.includes('memory') ||
-                           error.message.includes('Maximum call stack'))) {
-        handleMemoryError();
-        return;
-      }
-      
-      throw error; // その他のエラーは再スロー
-    }
-  }
-  
+  if (!paused.value) update(deltaTime);
   const count = boidCount();
   const heapF32 = wasmModule.HEAPF32.buffer;
   const positions = new Float32Array(heapF32, posPtr(), count * 3);
@@ -1007,14 +986,15 @@ watch([showUnitSpheres, showUnitLines], handleUnitDisplayModeChange);
 // VS Codeのカラーピッカーで色を確認・調整できます
 const OCEAN_COLORS = {
   // 背景とフォグ系
-  SKY_BLUE: '#019dff',      // 明るい海中ブルー（上層）
-  DEEP_BLUE: '#183050',     // 深い海中ブルー（中層）- より暗く調整
+  SKY_HIGHLIGHT: '#4fbaff',      // 明るい海中ブルー（上層）
+  SKY_BLUE: '#15a1ff',      // 明るい海中ブルー（上層）
+  DEEP_BLUE: '#002968',     // 深い海中ブルー（中層）- より暗く調整
   SEAFLOOR: '#777465',      // 海底色（下層）
   FOG: '#153a6c',           // フォグ色（中層）- より暗く調整
 
 
   // ライティング系
-  AMBIENT_LIGHT: '#6cb7fc', // 環境光
+  AMBIENT_LIGHT: '#2c9aff', // 環境光
   SUN_LIGHT: '#5389b7',     // 太陽光
   SIDE_LIGHT1: '#6ba3d0',   // 補助光1
   SIDE_LIGHT2: '#2d5f7a',   // 補助光2
@@ -1033,8 +1013,8 @@ function createOceanSphere() {
 
   // 縦方向のグラデーション（上から下へ）
   const gradient = context.createLinearGradient(0, 0, 0, canvas.height);
-  gradient.addColorStop(0, OCEAN_COLORS.SKY_BLUE);    // 上部：明るい海中ブルー
-  gradient.addColorStop(0.1, OCEAN_COLORS.SKY_BLUE);   // 上部：明るい海中ブルー
+  gradient.addColorStop(0, OCEAN_COLORS.SKY_HIGHLIGHT);    // 上部：明るい海中ブルー
+  gradient.addColorStop(0.2, OCEAN_COLORS.SKY_BLUE);   // 上部：明るい海中ブルー
   gradient.addColorStop(0.6, OCEAN_COLORS.DEEP_BLUE); // 中央：深い海中ブルー
   gradient.addColorStop(1, OCEAN_COLORS.DEEP_BLUE);                // 底部：最も暗い
 
@@ -1082,65 +1062,6 @@ function createFadeOutGroundMaterial() {
   });
 
   return material;
-}
-
-// メモリエラー時の自動リカバリ
-function handleMemoryError() {
-  console.warn('WASM memory error detected - reducing Boids count automatically');
-  
-  // 現在のBoidsカウントを50%削減
-  settings.forEach(setting => {
-    if (setting.species === 'Boids') {
-      setting.count = Math.max(Math.floor(setting.count * 0.5), 100);
-    } else if (setting.species === 'Predator') {
-      setting.count = Math.max(Math.floor(setting.count * 0.5), 1);
-    }
-  });
-  
-  // エラーメッセージをユーザーに表示
-  alert(`メモリ不足を検出しました。Boids数を${settings[0].count}に自動削減しました。`);
-  
-  // シミュレーションを一時停止してリセット
-  paused.value = true;
-  
-  // 新しい設定で再開
-  setTimeout(() => {
-    resetSimulation();
-    paused.value = false;
-  }, 100);
-}
-
-// シミュレーションリセット関数
-function resetSimulation() {
-  console.log('Resetting simulation with reduced count:', settings[0].count);
-  
-  // 種族設定を再構築
-  const totalBoids = settings.reduce((total, spec) => total + spec.count, 0);
-  
-  try {
-    build(totalBoids, settings.length);
-    
-    settings.forEach((spec, index) => {
-      setFlockSize(index, spec.count, spec.isPredator ? 1 : 0);
-    });
-    
-    // インスタンスメッシュの最大数も調整
-    if (instancedMeshHigh) {
-      instancedMeshHigh.count = totalBoids;
-    }
-    if (instancedMeshLow) {
-      instancedMeshLow.count = totalBoids;
-    }
-    
-    console.log('✓ Simulation reset successfully with', totalBoids, 'boids');
-  } catch (error) {
-    console.error('Failed to reset simulation:', error);
-    // さらに削減が必要な場合
-    if (settings[0].count > 200) {
-      settings[0].count = Math.max(Math.floor(settings[0].count * 0.3), 100);
-      setTimeout(() => resetSimulation(), 200);
-    }
-  }
 }
 </script>
 
