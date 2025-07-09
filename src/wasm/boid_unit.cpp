@@ -12,9 +12,6 @@
 #include <stack>
 #include <vector>
 
-// 静的変数の定義
-int BoidUnit::nextId = 0;
-
 bool BoidUnit::isBoidUnit() const { return children.empty(); }
 
 /**
@@ -282,7 +279,7 @@ void BoidUnit::updateRecursive(float dt) {
   static int callCount = 0;
   callCount++;
 
-  if (callCount > 1000) {
+  if (callCount > 10000) {
     callCount = 0; // リセット
     return;        // 過度な再帰を防止
   }

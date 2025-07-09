@@ -351,11 +351,11 @@ void BoidTree::update(float dt) {
   }
 
   // 一定フレームごとに木構造を再構築
-  if (frameCount % 2 == 0) { // 再構築頻度を調整
+  if (frameCount % 3 == 0) { // 再構築頻度を調整
     build(maxBoidsPerUnit, 0);
     // printTree(root, 0); // ツリー構造をログに出力
 
-    return;
+   // return;
   }
 
   // 分割と結合の処理
