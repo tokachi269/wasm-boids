@@ -158,7 +158,7 @@ let maxDepth = 1;
 let stats = null;
 
 let animationTimer = null;
-const FRAME_INTERVAL = 1000 / 60;//1000 / 60; // 60FPS
+let FRAME_INTERVAL = 1000 / 60;//1000 / 60; // 60FPS
 
 // パフォーマンス最適化用変数（スマホ用調整）
 let lastColorUpdateFrame = 0;
@@ -239,6 +239,9 @@ function initThreeJS() {
   renderer.outputColorSpace = THREE.SRGBColorSpace; // 色空間を統一
 
   threeContainer.value.appendChild(renderer.domElement);
+
+  // WebGLコンテキストロス対策
+  setupWebGLContextLossHandling();
 
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
@@ -854,12 +857,34 @@ onMounted(() => {
     stats.dom.style.zIndex = 1000;
 
     startSimulation();
+    
+    // メモリ監視を開始
+    startMemoryMonitoring();
   });
   window.addEventListener('keydown', handleKeydown);
 });
 
 function isMobileDevice() {
   return /Mobi|Android/i.test(navigator.userAgent);
+}
+
+// スマホ向けのより詳細なデバイス性能チェック
+function getDevicePerformanceLevel() {
+  const userAgent = navigator.userAgent;
+  const hardwareConcurrency = navigator.hardwareConcurrency || 4;
+  const deviceMemory = navigator.deviceMemory || 4; // GB
+  
+  // 低性能デバイスの検出
+  const isLowEnd = deviceMemory <= 2 || hardwareConcurrency <= 2;
+  const isTablet = /iPad|Android.*(?!.*Mobile)/i.test(userAgent);
+  
+  return {
+    isLowEnd,
+    isTablet,
+    cores: hardwareConcurrency,
+    memory: deviceMemory,
+    suggestedBoidCount: isLowEnd ? 1500 : (isTablet ? 5000 : 3000)
+  };
 }
 
 // スマホタップでの停止/再開機能（ドラッグとタップを区別）
@@ -1062,6 +1087,59 @@ function createFadeOutGroundMaterial() {
   });
 
   return material;
+}
+
+// WebGLコンテキストロス対策（軽量版）
+function setupWebGLContextLossHandling() {
+  if (!renderer) return;
+
+  const canvas = renderer.domElement;
+  
+  // コンテキストロス時の処理
+  canvas.addEventListener('webglcontextlost', (event) => {
+    console.warn('WebGLコンテキストが失われました - ページをリロードします');
+    event.preventDefault();
+    
+    // シンプルに2秒後にリロード
+    setTimeout(() => {
+      location.reload();
+    }, 2000);
+  }, false);
+}
+
+
+
+// 軽量メモリ監視（モバイル向け）
+function monitorWebGLMemory() {
+  if (!renderer || !renderer.info || !isMobileDevice()) return;
+  
+  const info = renderer.info;
+  const memoryInfo = info.memory || {};
+  const renderInfo = info.render || {};
+  
+  const geometries = memoryInfo.geometries || 0;
+  const textures = memoryInfo.textures || 0;
+  
+  // メモリ使用量が非常に高い場合のみ警告
+  if (geometries > 100 || textures > 50) {
+    console.warn('WebGLメモリ使用量が高いため、ページをリロードします');
+    location.reload();
+  }
+}
+
+// メモリ監視を軽量化
+let memoryMonitorInterval;
+function startMemoryMonitoring() {
+  if (isMobileDevice()) {
+    memoryMonitorInterval = setInterval(monitorWebGLMemory, 10000); // 10秒ごと
+  }
+}
+
+function stopMemoryMonitoring() {
+  if (memoryMonitorInterval) {
+    clearInterval(memoryMonitorInterval);
+    memoryMonitorInterval = null;
+  }
 }
 </script>
 

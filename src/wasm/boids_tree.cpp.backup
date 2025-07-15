@@ -4,7 +4,47 @@
 #include "species_params.h"
 #include <algorithm>
 #include <emscripten/val.h>
-#include <glm/glm.hpp>
+#include <execution>
+#include <future>
+#include <iostream>
+#include <numeric>
+#include <stack>
+#include <thread>
+#include <unordered_map>
+#include <vector>
+#include <random>
+
+std::vector<SpeciesParams> globalSpeciesParams;
+  root = getUnitFromPool();
+  root->buf = &buf; // 中央バッファを共有
+
+  maxBoidsPerUnit = maxPerUnit;
+  root->level = level;
+
+  // すべての Boid インデックスを作成
+  std::vector<int> indices(buf.positions.size());
+  std::iota(indices.begin(), indices.end(), 0);
+
+  buildRecursive(root, indices, maxPerUnit, level);
+  printTree(root, 0);
+}t, int level) {
+  // 既存の root を削除して再生成
+  if (root) {
+    returnNodeToPool(root);
+  }
+  root = getUnitFromPool();
+  root->buf = &buf; // 中央バッファを共有
+
+  maxBoidsPerUnit = maxPerUnit;
+  root->level = level;
+
+  // すべての Boid インデックスを作成
+  std::vector<int> indices(buf.positions.size());
+  std::iota(indices.begin(), indices.end(), 0);
+
+  buildRecursive(root, indices, maxPerUnit, level);
+  printTree(root, 0);
+}lm.hpp>
 #include <glm/gtx/norm.hpp>
 #include <glm/gtx/rotate_vector.hpp>
 #include <glm/gtx/string_cast.hpp>
@@ -220,6 +260,8 @@ void BoidTree::rebuildTreeWithUnits(BoidUnit *node,
           node->topParent ? node->topParent : node; // トップノードを継承
 
       // 必要な変数をリセットしつつ indices を保持
+      unit->cohesionMemories.assign(BoidUnit::MAX_BOIDS, 0.0f);
+      unit->activeNeighbors.reset();
       unit->frameCount = 0;
 
       node->children.push_back(unit);
@@ -312,10 +354,7 @@ void BoidTree::buildRecursive(BoidUnit *node, const std::vector<int> &indices,
         speciesGroups[buf.speciesIds[i]].push_back(i);
       }
 
-      for (const auto &pair : speciesGroups) {
-        int speciesId = pair.first;
-        const std::vector<int> &groupIndices = pair.second;
-        
+      for (const auto &[speciesId, groupIndices] : speciesGroups) {
         auto *child = getUnitFromPool();
         child->buf = node->buf;
         child->parent = node;
@@ -324,7 +363,7 @@ void BoidTree::buildRecursive(BoidUnit *node, const std::vector<int> &indices,
         child->speciesId = speciesId;
 
         for (int gIdx : groupIndices) {
-          buf.speciesIds[gIdx] = speciesId;
+          buf.speciesIds[gIdx] = child->speciesId;
         }
 
         child->computeBoundingSphere();
@@ -550,6 +589,31 @@ void BoidTree::initializeBoids(
   initializeBoidMemories(globalSpeciesParams);
 }
 
+// BoidメモリーとActiveNeighborsを初期化
+void BoidTree::initializeBoidMemories(const std::vector<SpeciesParams> &speciesParamsList) {
+  int totalCount = static_cast<int>(buf.positions.size());
+  
+  // バッファのサイズを調整
+  buf.boidCohesionMemories.resize(totalCount);
+  buf.boidActiveNeighbors.resize(totalCount);
+  
+  // 各Boidごとに対応するSpeciesParamsのmaxNeighbors分のメモリを確保
+  int offset = 0;
+  for (size_t speciesId = 0; speciesId < speciesParamsList.size(); ++speciesId) {
+    const auto &species = speciesParamsList[speciesId];
+    int maxNeighbors = species.maxNeighbors;
+    
+    for (int i = 0; i < species.count; ++i) {
+      int boidIndex = offset + i;
+      // cohesionMemoriesをmaxNeighbors分確保（dt累積（-1.0fで未使用））
+      buf.boidCohesionMemories[boidIndex].assign(maxNeighbors, 0.0f);
+      // activeNeighborsをリセット（使用中slotのインデックス）
+      buf.boidActiveNeighbors[boidIndex].reset();
+    }
+    offset += species.count;
+  }
+}
+
 // BoidTree::setFlockSize
 void BoidTree::setFlockSize(int newSize, float posRange, float velRange) {
   int current = static_cast<int>(buf.positions.size());
@@ -615,11 +679,6 @@ void BoidTree::setFlockSize(int newSize, float posRange, float velRange) {
 
   // 再構築
   build(maxBoidsPerUnit, 0);
-  
-  // 新しいサイズに合わせて SOA バッファメモリを再初期化
-  if (!globalSpeciesParams.empty()) {
-    initializeBoidMemories(globalSpeciesParams);
-  }
 }
 
 void BoidTree::collectLeaves(const BoidUnit *node,
@@ -674,51 +733,4 @@ uintptr_t BoidTree::getOrientationsPtr() {
 }
 int BoidTree::getBoidCount() const {
   return static_cast<int>(buf.positions.size());
-}
-
-// BoidメモリーとActiveNeighborsを初期化
-void BoidTree::initializeBoidMemories(const std::vector<SpeciesParams> &speciesParamsList) {
-  int totalCount = static_cast<int>(buf.positions.size());
-  
-  // 空の speciesParamsList に対する安全装置
-  if (speciesParamsList.empty()) {
-    emscripten::val console = emscripten::val::global("console");
-    console.call<void>("log", std::string("Warning: speciesParamsList is empty, using default values"));
-    
-    // バッファのサイズを調整
-    buf.boidCohesionMemories.resize(totalCount);
-    buf.boidActiveNeighbors.resize(totalCount);
-    
-    // デフォルト値で初期化
-    for (int boidIndex = 0; boidIndex < totalCount; ++boidIndex) {
-      buf.boidCohesionMemories[boidIndex].assign(4, 0.0f);  // デフォルト maxNeighbors = 4
-      buf.boidActiveNeighbors[boidIndex].reset();
-    }
-    return;
-  }
-  
-  // バッファのサイズを調整
-  buf.boidCohesionMemories.resize(totalCount);
-  buf.boidActiveNeighbors.resize(totalCount);
-  
-  // 各Boidごとに実際のspeciesIdに基づいてmaxNeighbors分のメモリを確保
-  for (int boidIndex = 0; boidIndex < totalCount; ++boidIndex) {
-    int speciesId = buf.speciesIds[boidIndex];
-    
-    // speciesIdが有効な範囲内か確認
-    if (speciesId < 0 || speciesId >= static_cast<int>(speciesParamsList.size())) {
-      // 無効なspeciesIdの場合はデフォルト値を使用
-      buf.boidCohesionMemories[boidIndex].assign(4, 0.0f);
-      buf.boidActiveNeighbors[boidIndex].reset();
-      continue;
-    }
-    
-    const auto &species = speciesParamsList[speciesId];
-    int maxNeighbors = std::max(1, species.maxNeighbors);  // 最小 1個 保証
-    
-    // cohesionMemoriesをmaxNeighbors分確保（dt累積（-1.0fで未使用））
-    buf.boidCohesionMemories[boidIndex].assign(maxNeighbors, 0.0f);
-    // activeNeighborsをリセット（使用中slotのインデックス）
-    buf.boidActiveNeighbors[boidIndex].reset();
-  }
 }

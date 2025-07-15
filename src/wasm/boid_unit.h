@@ -26,9 +26,6 @@ public:
     SoABuffers *buf = nullptr;
     std::vector<int> indices;
 
-    std::vector<float> cohesionMemories{};  // dt累積（-1.0fで未使用）
-    std::bitset<MAX_BOIDS> activeNeighbors{};         // 使用中slotのインデックス
-
     std::vector<BoidUnit *> children;
     glm::vec3 center{}, averageVelocity{};
     float radius = 0.0f;
@@ -36,14 +33,12 @@ public:
     int frameCount = 0;
 
     BoidUnit() : id(nextId++) {
-        cohesionMemories.resize(MAX_BOIDS, 0.0f);
+        // cohesionMemoriesは中央バッファで管理
     }
 
-    // デストラクタ：木構造を再帰的に削除（deepDestroy）
+    // デストラクタ：プールシステムを使用するため、childrenの削除は行わない
     ~BoidUnit() {
-        for (BoidUnit* child : children) {
-            delete child;  // 各子ノードを再帰的に削除
-        }
+        // プールシステムを使用するため、childrenの削除は BoidTree が管理
         children.clear();
     }
 
