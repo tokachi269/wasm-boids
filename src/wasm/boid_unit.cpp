@@ -690,20 +690,22 @@ void BoidUnit::computeBoidInteraction(float dt) {
     //    - activeCount には有効な隣接 Boid 数を数える
     // -------------------------------------------------------
     int activeCount = 0;
-    
+
     // SOA バッファの境界確認
-    if (gIdx >= static_cast<int>(buf->boidCohesionMemories.size()) || 
+    if (gIdx >= static_cast<int>(buf->boidCohesionMemories.size()) ||
         gIdx >= static_cast<int>(buf->boidActiveNeighbors.size())) {
       // 境界を超えた場合はスキップ
       continue;
     }
-    
-    auto &cohesionMemories = buf->boidCohesionMemories[gIdx];  // dt累積（-1.0fで未使用）
-    auto &activeNeighbors = buf->boidActiveNeighbors[gIdx];    // 使用中slotのインデックス
-    
+
+    auto &cohesionMemories =
+        buf->boidCohesionMemories[gIdx]; // dt累積（-1.0fで未使用）
+    auto &activeNeighbors =
+        buf->boidActiveNeighbors[gIdx]; // 使用中slotのインデックス
+
     // cohesionMemories サイズが indices.size() と一致しない場合があるため確認
     size_t maxMemoryIndex = std::min(indices.size(), cohesionMemories.size());
-    
+
     for (size_t i = 0; i < maxMemoryIndex; ++i) {
       if (cohesionMemories[i] > 0.0f) {
         cohesionMemories[i] += dt;
@@ -825,13 +827,13 @@ void BoidUnit::computeBoidInteraction(float dt) {
       for (size_t i = 0; i < indices.size(); ++i) {
         if (i == index)
           continue;
-        
+
         int gNeighbor = indices[i];
         // インデックス境界確認
         if (gNeighbor >= static_cast<int>(buf->positions.size())) {
           continue;
         }
-        
+
         glm::vec3 diff = buf->positions[gNeighbor] - pos;
         float distSq = glm::dot(diff, diff);
 
@@ -859,8 +861,9 @@ void BoidUnit::computeBoidInteraction(float dt) {
       glm::vec3 sumCoh = glm::vec3(0.0f);
       float invN =
           1.0f /
-          float(neighborCount);      // activeNeighbors内の立っているビットを探索
-      for (size_t i = 0; i < indices.size() && i < cohesionMemories.size(); ++i) {
+          float(neighborCount); // activeNeighbors内の立っているビットを探索
+      for (size_t i = 0; i < indices.size() && i < cohesionMemories.size();
+           ++i) {
         if (!activeNeighbors.test(i))
           continue;
 

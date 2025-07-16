@@ -13,6 +13,7 @@
 #include <numeric>
 #include <random>
 #include <vector>
+#include <cfloat> // FLT_MAX用
 
 // グローバル共通
 std::vector<SpeciesParams> globalSpeciesParams; // 配列に変更
@@ -306,15 +307,26 @@ void BoidTree::buildRecursive(BoidUnit *node, const std::vector<int> &indices,
       // 種が 1 種類の場合
       node->speciesId = firstSpeciesId;
     } else {
-      // 種が混在している場合、種ごとに再分割
-      std::unordered_map<int, std::vector<int>> speciesGroups;
+      // 種が混在している場合、種ごとに再分割（線形バケット化）
+      // 最大種数を想定して固定サイズ配列を使用（O(N)処理）
+      const int MAX_SPECIES = 16;
+      std::vector<int> speciesBuckets[MAX_SPECIES];
+      std::vector<int> usedSpecies;
+      
+      // 線形スキャンで種別バケット化
       for (int i : indices) {
-        speciesGroups[buf.speciesIds[i]].push_back(i);
+        int speciesId = buf.speciesIds[i];
+        if (speciesId >= 0 && speciesId < MAX_SPECIES) {
+          if (speciesBuckets[speciesId].empty()) {
+            usedSpecies.push_back(speciesId);
+          }
+          speciesBuckets[speciesId].push_back(i);
+        }
       }
 
-      for (const auto &pair : speciesGroups) {
-        int speciesId = pair.first;
-        const std::vector<int> &groupIndices = pair.second;
+      // 使用された種別のみ処理
+      for (int speciesId : usedSpecies) {
+        const std::vector<int> &groupIndices = speciesBuckets[speciesId];
         
         auto *child = getUnitFromPool();
         child->buf = node->buf;
@@ -357,15 +369,48 @@ void BoidTree::buildRecursive(BoidUnit *node, const std::vector<int> &indices,
   if (var[2] > var[axis])
     axis = 2;
 
-  std::vector<int> sorted = indices;
-  std::sort(sorted.begin(), sorted.end(), [this, axis](int a, int b) {
-    const glm::vec3 &pa = buf.positions[a];
-    const glm::vec3 &pb = buf.positions[b];
-    return (axis == 0) ? pa.x < pb.x : (axis == 1) ? pa.y < pb.y : pa.z < pb.z;
-  });
-  std::size_t mid = sorted.size() / 2;
-  std::vector<int> left(sorted.begin(), sorted.begin() + mid);
-  std::vector<int> right(sorted.begin() + mid, sorted.end());
+  // 線形パーティション処理（ソート回避）
+  std::vector<int> left, right;
+  
+  // 軸に沿った最小値と最大値を求める
+  float minVal = FLT_MAX, maxVal = -FLT_MAX;
+  for (int i : indices) {
+    const glm::vec3 &p = buf.positions[i];
+    float val = (axis == 0) ? p.x : (axis == 1) ? p.y : p.z;
+    minVal = std::min(minVal, val);
+    maxVal = std::max(maxVal, val);
+  }
+  
+  // 中点で分割
+  float midVal = (minVal + maxVal) * 0.5f;
+  
+  // 線形パーティション
+  for (int i : indices) {
+    const glm::vec3 &p = buf.positions[i];
+    float val = (axis == 0) ? p.x : (axis == 1) ? p.y : p.z;
+    if (val < midVal) {
+      left.push_back(i);
+    } else {
+      right.push_back(i);
+    }
+  }
+  
+  // 極端な偏りの場合のフォールバック（50/50に近い分割を強制）
+  if (left.empty() || right.empty() || 
+      (left.size() > indices.size() * 0.8f) || 
+      (right.size() > indices.size() * 0.8f)) {
+    // nth_elementで中央値分割
+    std::vector<int> sorted = indices;
+    std::nth_element(sorted.begin(), sorted.begin() + sorted.size()/2, sorted.end(),
+                     [this, axis](int a, int b) {
+                       const glm::vec3 &pa = buf.positions[a];
+                       const glm::vec3 &pb = buf.positions[b];
+                       return (axis == 0) ? pa.x < pb.x : (axis == 1) ? pa.y < pb.y : pa.z < pb.z;
+                     });
+    std::size_t mid = sorted.size() / 2;
+    left.assign(sorted.begin(), sorted.begin() + mid);
+    right.assign(sorted.begin() + mid, sorted.end());
+  }
 
   auto *leftChild = getUnitFromPool();
   auto *rightChild = getUnitFromPool();
