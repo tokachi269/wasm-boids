@@ -665,7 +665,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
         }
       }
       if (tgtIdx >= 0) {
-        tgtTime -= dt * 0.1f;
+        tgtTime -= dt;
         glm::vec3 diff = buf->positions[tgtIdx] - pos;
         float d2 = glm::dot(diff, diff);
         if (d2 > EPS) {

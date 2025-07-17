@@ -13,10 +13,10 @@
 #include <numeric>
 #include <random>
 #include <vector>
-#include <cfloat> // FLT_MAX用
+#include <cfloat> 
 
 // グローバル共通
-std::vector<SpeciesParams> globalSpeciesParams; // 配列に変更
+std::vector<SpeciesParams> globalSpeciesParams;
 // 静的メンバー変数の初期化
 int BoidUnit::nextId = 0;
 
