@@ -6,7 +6,9 @@ module.exports = defineConfig({
     filenameHashing: true,
     transpileDependencies: true,
     devServer: {
-        https: true,
+        server: {
+            type: 'https',
+        },
         // COOP/COEPでSharedArrayBuffer等を有効化
         headers: {
             'Cross-Origin-Opener-Policy': 'same-origin',

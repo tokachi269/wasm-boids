@@ -180,6 +180,36 @@ npm run serve
 
 ---
 
+## デプロイ
+
+このプロジェクトはGitHub Pagesにデプロイされています。
+
+**Live Demo**: [https://tokachi269.github.io/wasm-boids/](https://tokachi269.github.io/wasm-boids/)
+
+### デプロイ手順
+
+1. **本番ビルド + デプロイ**
+   ```bash
+   npm run deploy
+   ```
+   これにより以下が実行されます：
+   - WASMファイルの本番ビルド（Release mode）
+   - Vue.jsアプリの本番ビルド
+   - GitHub Pagesへの自動デプロイ
+
+2. **手動でのビルドのみ**
+   ```bash
+   npm run build
+   ```
+
+### デプロイ設定
+
+- **ベースURL**: `/wasm-boids/` (本番環境)
+- **出力ディレクトリ**: `dist/`
+- **デプロイツール**: `gh-pages`
+
+---
+
 ## ライセンス
 
 MIT License
