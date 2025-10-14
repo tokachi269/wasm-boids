@@ -94,3 +94,6 @@ Thumbs.db
 build/
 .clangd
 compile_commands.json
+/build-native-vs
+/build-native-ninja
+/build-native

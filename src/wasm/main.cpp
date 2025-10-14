@@ -1,11 +1,13 @@
 #include "entry.h"
+
+#ifdef __EMSCRIPTEN__
 #include <emscripten.h>
+#endif
 
 int main() {
-    Entry entry;
-        // ランタイムを維持
-    emscripten_exit_with_live_runtime();
-
-    entry.run();
-    return 0;
+#ifdef __EMSCRIPTEN__
+  emscripten_exit_with_live_runtime();
+#endif
+  Entry::run();
+  return 0;
 }

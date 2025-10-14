@@ -1,42 +1,54 @@
 <template>
   <div id="app">
     <div class="ui-overlay">
-      <h1>Boids Simulation</h1>
-      <details>
-        <summary>Settings</summary>
-        <div v-for="(s, i) in settings" :key="i">
-          <Settings :settings="s" />
-        </div>
-        <button @click="resetSettings" style="margin-bottom:1em;">リセット</button>
-        <details style="margin-bottom:1em;">
-          <summary>デバッグ</summary>
-          <div>壊れてるよ</div>
-          <div style="margin-top:0.5em;">
-            <label>
-              <input type="checkbox" v-model="showUnits" />
-              Unit可視化
-            </label>
-            <label style="margin-left:1em;">
-              <input type="checkbox" v-model="showUnitSpheres" />
-              スフィアのみ表示
-            </label>
-            <label style="margin-left:1em;">
-              <input type="checkbox" v-model="showUnitLines" />
-              線のみ表示
-            </label>
-            <label style="margin-left:1em;">
-              <input type="checkbox" v-model="showUnitColors" />
-              Unit色分け
-            </label>
-            <label style="margin-left:1em;">
-              表示レイヤ下限: <input type="range" min="1" max="20" v-model="unitLayer" />
-              {{ unitLayer }}
-            </label>
+      <div class="ui-panel">
+        <h1>Boids Simulation</h1>
+        <details>
+          <summary>Settings</summary>
+          <div v-for="(s, i) in settings" :key="i">
+            <Settings :settings="s" />
           </div>
+          <button @click="resetSettings" style="margin-bottom:1em;">リセット</button>
+          <div class="follow-controls">
+            <button @click="handleFollowButtonClick" :disabled="totalBoids === 0">
+              {{ followButtonLabel }}
+            </button>
+            <label class="follow-orientation">
+              <input type="checkbox" v-model="alignCameraWithBoid" />
+              追従時に魚の向きにカメラを合わせる
+            </label>
+            <p v-if="followStatusText" class="follow-status">{{ followStatusText }}</p>
+          </div>
+          <details style="margin-bottom:1em;">
+            <summary>デバッグ</summary>
+            <div>壊れてるよ</div>
+            <div style="margin-top:0.5em;">
+              <label>
+                <input type="checkbox" v-model="showUnits" />
+                Unit可視化
+              </label>
+              <label style="margin-left:1em;">
+                <input type="checkbox" v-model="showUnitSpheres" />
+                スフィアのみ表示
+              </label>
+              <label style="margin-left:1em;">
+                <input type="checkbox" v-model="showUnitLines" />
+                線のみ表示
+              </label>
+              <label style="margin-left:1em;">
+                <input type="checkbox" v-model="showUnitColors" />
+                Unit色分け
+              </label>
+              <label style="margin-left:1em;">
+                表示レイヤ下限: <input type="range" min="1" max="20" v-model="unitLayer" />
+                {{ unitLayer }}
+              </label>
+            </div>
+          </details>
         </details>
-      </details>
-      <div class="info">
-        <p>Boids Count: {{ totalBoids }}</p>
+        <div class="info">
+          <p>Boids Count: {{ totalBoids }}</p>
+        </div>
       </div>
     </div>
     <div ref="threeContainer" class="three-container" @touchstart="handleTouchStart" @touchmove="handleTouchMove"
@@ -45,7 +57,7 @@
 </template>
 
 <script setup>
-import { inject, onMounted, reactive, ref, watch, toRaw, computed } from 'vue';
+import { inject, onMounted, onBeforeUnmount, reactive, ref, watch, toRaw, computed } from 'vue';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import Settings from './components/Settings.vue';
@@ -87,35 +99,58 @@ function getDefaultSettings() {
   return [{
     species: 'Boids',         // 種族名
     count: boidCount,         // 群れの数（スマホなら3000、PCなら10000）
-    cohesion: 25,             // 凝集
+    cohesion: 30,             // 凝集
     cohesionRange: 30,        // 凝集範囲
     separation: 8,            // 分離
-    separationRange: 1,       // 分離範囲
-    alignment: 12,            // 整列
+    separationRange: 0.6,     // 分離範囲
+    alignment: 17,            // 整列
     alignmentRange: 6,        // 整列範囲
-    maxSpeed: 0.28,           // 最大速度
+    maxSpeed: 0.26,           // 最大速度
     maxTurnAngle: 0.25,       // 最大旋回角
-    maxNeighbors: 3,          // 最大近傍数
+    maxNeighbors: 6,          // 最大近傍数
     horizontalTorque: 0.019,  // 水平化トルク
-    torqueStrength: 3.398     // 回転トルク強度
+    torqueStrength: 10,       // 回転トルク強度
+    lambda: 0.62,             // 速度調整係数
+    tau: 1.5                  // 記憶時間スケール
   }, {
     species: 'Predator',
-    count: 2,
+    count: 1,
     cohesion: 5.58,                     // 捕食者には使わない
     separation: 0.0,
     alignment: 0.0,
-    maxSpeed: 0.74,                     // 速く逃げられるよう速度は大きめ
+    maxSpeed: 1.37,                     // 速く逃げられるよう速度は大きめ
     minSpeed: 0.4,
-    maxTurnAngle: 0.221,
+    maxTurnAngle: 0.2,
     separationRange: 14.0,
     alignmentRange: 11.0,
     cohesionRange: 77.0,
     maxNeighbors: 0,
-    tau: 1.0, // 捕食者は常に追いかける
+  lambda: 0.05,
+  tau: 1.0, // 捕食者は常に追いかける
     horizontalTorque: 0.022,
     torqueStrength: 0.0,
     isPredator: true                // ← 捕食者フラグ
   }];
+}
+
+function ensureSettingsFields(settingsArray) {
+  const defaults = getDefaultSettings();
+  const defaultMap = new Map(defaults.map((def, index) => [def.species || index, def]));
+
+  for (let i = 0; i < settingsArray.length; i++) {
+    const current = settingsArray[i];
+    const fallback = defaultMap.get(current.species) || defaults[0] || {};
+
+    if (current.lambda === undefined) {
+      current.lambda = fallback.lambda ?? 0.05;
+    }
+
+    if (current.tau === undefined) {
+      current.tau = fallback.tau ?? 0.2;
+    }
+  }
+
+  return settingsArray;
 }
 
 function loadSettings() {
@@ -124,13 +159,13 @@ function loadSettings() {
     if (saved) {
       const parsed = JSON.parse(saved);
       if (Array.isArray(parsed)) {
-        return parsed; // 配列として保存されている場合のみ返す
+        return ensureSettingsFields(parsed); // 配列として保存されている場合のみ返す
       }
     }
   } catch (error) {
     console.error('Failed to load settings from localStorage:', error);
   }
-  return getDefaultSettings(); // デフォルト値を返す
+  return ensureSettingsFields(getDefaultSettings()); // デフォルト値を返す
 }
 
 const settings = reactive(loadSettings());
@@ -138,6 +173,18 @@ const settings = reactive(loadSettings());
 // 全Boidsの合計を計算するcomputed
 const totalBoids = computed(() => {
   return settings.reduce((total, setting) => total + (setting.count || 0), 0);
+});
+
+const followButtonLabel = computed(() => {
+  if (isFollowing.value) return '追従を停止';
+  if (isFollowSelectionMode.value) return '追従選択をキャンセル';
+  return '追従する魚を選ぶ';
+});
+
+const followStatusText = computed(() => {
+  if (isFollowSelectionMode.value) return '追従したい魚をクリックしてください';
+  if (isFollowing.value) return `Boid #${followedBoidId.value + 1} を追従中`;
+  return '';
 });
 
 const threeContainer = ref(null);
@@ -151,6 +198,42 @@ const showUnitLines = ref(false);
 const showUnitColors = ref(false);
 const unitLayer = ref(1);
 
+const isFollowSelectionMode = ref(false);
+const isFollowing = ref(false);
+const followedBoidId = ref(-1);
+const alignCameraWithBoid = ref(false);
+
+watch(alignCameraWithBoid, () => {
+  if (!isFollowing.value) return;
+  const idx = followedBoidId.value;
+  if (idx < 0) return;
+  refreshFollowOffsets(idx);
+});
+
+const raycaster = new THREE.Raycaster();
+const pointerNdc = new THREE.Vector2();
+const followOffset = new THREE.Vector3();
+const followOffsetLocal = new THREE.Vector3();
+const followTargetPosition = new THREE.Vector3();
+const desiredCameraPosition = new THREE.Vector3();
+const tmpBoidPosition = new THREE.Vector3();
+const tmpRayToPoint = new THREE.Vector3();
+const tmpClosestPoint = new THREE.Vector3();
+const tmpQuaternion = new THREE.Quaternion();
+const tmpInverseQuaternion = new THREE.Quaternion();
+const tmpDesiredOffset = new THREE.Vector3();
+const tmpCurrentOffset = new THREE.Vector3();
+const tmpYawQuaternion = new THREE.Quaternion();
+const tmpForwardVector = new THREE.Vector3();
+const Y_AXIS = new THREE.Vector3(0, 1, 0);
+
+let lastRendererCanvas = null;
+const previousControlsState = {
+  enablePan: true,
+  enableZoom: true,
+};
+let isUserAdjustingCamera = false;
+
 let unitSpheres = [];
 let unitLines = [];
 
@@ -158,7 +241,7 @@ let maxDepth = 1;
 let stats = null;
 
 let animationTimer = null;
-const FRAME_INTERVAL = 1000 / 60;//1000 / 60; // 60FPS
+let FRAME_INTERVAL = 1000 / 60;//1000 / 60; // 60FPS
 
 // パフォーマンス最適化用変数（スマホ用調整）
 let lastColorUpdateFrame = 0;
@@ -213,6 +296,215 @@ function handleKeydown(e) {
   }
 }
 
+function stopCameraFollow() {
+  if (!isFollowing.value) return;
+  isFollowing.value = false;
+  followedBoidId.value = -1;
+  controls.enablePan = previousControlsState.enablePan;
+  controls.enableZoom = previousControlsState.enableZoom;
+  isUserAdjustingCamera = false;
+}
+
+function readBoidPosition(index, outVector) {
+  const count = boidCount();
+  if (index < 0 || index >= count) return false;
+  const heapF32 = wasmModule.HEAPF32.buffer;
+  const positionsArray = new Float32Array(heapF32, posPtr(), count * 3);
+  const base = index * 3;
+  outVector.set(positionsArray[base], positionsArray[base + 1], positionsArray[base + 2]);
+  return true;
+}
+
+function readBoidOrientation(index, outQuaternion) {
+  const count = boidCount();
+  if (index < 0 || index >= count) return false;
+  const heapF32 = wasmModule.HEAPF32.buffer;
+  const orientationsArray = new Float32Array(heapF32, oriPtr(), count * 4);
+  const base = index * 4;
+  outQuaternion.set(
+    orientationsArray[base],
+    orientationsArray[base + 1],
+    orientationsArray[base + 2],
+    orientationsArray[base + 3]
+  );
+  return true;
+}
+
+function extractYawQuaternion(sourceQuaternion, outQuaternion) {
+  tmpForwardVector.set(0, 0, 1).applyQuaternion(sourceQuaternion);
+  tmpForwardVector.y = 0;
+  if (tmpForwardVector.lengthSq() < 1e-6) {
+    outQuaternion.identity();
+    return outQuaternion;
+  }
+  tmpForwardVector.normalize();
+  const yaw = Math.atan2(tmpForwardVector.x, tmpForwardVector.z);
+  outQuaternion.setFromAxisAngle(Y_AXIS, yaw);
+  return outQuaternion;
+}
+
+function refreshFollowOffsets(index) {
+  if (!camera) return false;
+  if (!readBoidPosition(index, followTargetPosition)) return false;
+  followOffset.copy(camera.position).sub(followTargetPosition);
+  if (readBoidOrientation(index, tmpQuaternion)) {
+    extractYawQuaternion(tmpQuaternion, tmpYawQuaternion);
+    tmpInverseQuaternion.copy(tmpYawQuaternion).invert();
+    followOffsetLocal.copy(followOffset).applyQuaternion(tmpInverseQuaternion);
+  } else {
+    followOffsetLocal.copy(followOffset);
+  }
+  return true;
+}
+
+function handleControlsInteractionStart() {
+  if (isFollowing.value) {
+    isUserAdjustingCamera = true;
+  }
+}
+
+function handleControlsInteractionEnd() {
+  isUserAdjustingCamera = false;
+  if (isFollowing.value && followedBoidId.value >= 0) {
+    refreshFollowOffsets(followedBoidId.value);
+  }
+}
+
+function startCameraFollow(index) {
+  if (!readBoidPosition(index, followTargetPosition)) {
+    return;
+  }
+  followedBoidId.value = index;
+  isFollowSelectionMode.value = false;
+  isFollowing.value = true;
+  previousControlsState.enablePan = controls.enablePan;
+  previousControlsState.enableZoom = controls.enableZoom;
+  controls.enablePan = false;
+  controls.target.copy(followTargetPosition);
+  isUserAdjustingCamera = false;
+  refreshFollowOffsets(index);
+}
+
+function handleFollowButtonClick() {
+  if (isFollowing.value) {
+    stopCameraFollow();
+    return;
+  }
+
+  if (isFollowSelectionMode.value) {
+    isFollowSelectionMode.value = false;
+  } else {
+    isFollowSelectionMode.value = true;
+  }
+}
+
+function findClosestBoidIndex(ray) {
+  const count = boidCount();
+  if (count <= 0) return -1;
+
+  const heapF32 = wasmModule.HEAPF32.buffer;
+  const positionsArray = new Float32Array(heapF32, posPtr(), count * 3);
+
+  let bestIndex = -1;
+  let bestDistance = 0.6; // 許容半径
+
+  for (let i = 0; i < count; i++) {
+    const base = i * 3;
+    tmpBoidPosition.set(positionsArray[base], positionsArray[base + 1], positionsArray[base + 2]);
+
+    tmpRayToPoint.subVectors(tmpBoidPosition, ray.origin);
+    const t = tmpRayToPoint.dot(ray.direction);
+    if (t < 0) continue; // カメラの後方
+
+    tmpClosestPoint.copy(ray.direction).multiplyScalar(t).add(ray.origin);
+    const distance = tmpBoidPosition.distanceTo(tmpClosestPoint);
+
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestIndex = i;
+    }
+  }
+
+  return bestIndex;
+}
+
+function handleCanvasClick(event) {
+  if (!isFollowSelectionMode.value || !renderer) return;
+
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointerNdc.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+  pointerNdc.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(pointerNdc, camera);
+
+  const boidIndex = findClosestBoidIndex(raycaster.ray);
+  if (boidIndex >= 0) {
+    startCameraFollow(boidIndex);
+  } else {
+    isFollowSelectionMode.value = false;
+  }
+}
+
+function computeYawQuaternionFromArray(orientationsArray, index, outQuaternion) {
+  if (!orientationsArray) return null;
+  tmpQuaternion.fromArray(orientationsArray, index * 4);
+  return extractYawQuaternion(tmpQuaternion, outQuaternion);
+}
+
+function updateCameraFollow(positionsArray, orientationsArray) {
+  if (!isFollowing.value) return;
+  const idx = followedBoidId.value;
+  const count = boidCount();
+  if (idx < 0 || idx >= count) {
+    stopCameraFollow();
+    return;
+  }
+
+  followTargetPosition.fromArray(positionsArray, idx * 3);
+  tmpCurrentOffset.copy(camera.position).sub(followTargetPosition);
+
+  if (alignCameraWithBoid.value && orientationsArray) {
+    const yawQuat = computeYawQuaternionFromArray(orientationsArray, idx, tmpYawQuaternion);
+    if (yawQuat) {
+      tmpDesiredOffset.copy(followOffsetLocal).applyQuaternion(yawQuat);
+
+      if (isUserAdjustingCamera) {
+        tmpInverseQuaternion.copy(yawQuat).invert();
+        followOffsetLocal.copy(tmpCurrentOffset).applyQuaternion(tmpInverseQuaternion);
+        tmpDesiredOffset.copy(followOffsetLocal).applyQuaternion(yawQuat);
+      }
+
+      desiredCameraPosition.copy(followTargetPosition).add(tmpDesiredOffset);
+      followOffset.copy(tmpDesiredOffset);
+    } else {
+      if (isUserAdjustingCamera) {
+        followOffset.copy(tmpCurrentOffset);
+      }
+      desiredCameraPosition.copy(followTargetPosition).add(followOffset);
+      followOffsetLocal.copy(followOffset);
+    }
+  } else {
+    if (isUserAdjustingCamera) {
+      followOffset.copy(tmpCurrentOffset);
+    }
+    desiredCameraPosition.copy(followTargetPosition).add(followOffset);
+
+    if (orientationsArray) {
+      const yawQuat = computeYawQuaternionFromArray(orientationsArray, idx, tmpYawQuaternion);
+      if (yawQuat) {
+        tmpInverseQuaternion.copy(yawQuat).invert();
+        followOffsetLocal.copy(followOffset).applyQuaternion(tmpInverseQuaternion);
+      } else {
+        followOffsetLocal.copy(followOffset);
+      }
+    } else {
+      followOffsetLocal.copy(followOffset);
+    }
+  }
+
+  camera.position.lerp(desiredCameraPosition, 0.2);
+  controls.target.lerp(followTargetPosition, 0.2);
+}
+
 function initThreeJS() {
   const width = window.innerWidth;
   const height = window.innerHeight; scene = new THREE.Scene();
@@ -240,12 +532,20 @@ function initThreeJS() {
 
   threeContainer.value.appendChild(renderer.domElement);
 
+  // WebGLコンテキストロス対策
+  setupWebGLContextLossHandling();
+
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
 
   controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.dampingFactor = 0.1;
+  controls.addEventListener('start', handleControlsInteractionStart);
+  controls.addEventListener('end', handleControlsInteractionEnd);
+
+  lastRendererCanvas = renderer.domElement;
+  lastRendererCanvas.addEventListener('click', handleCanvasClick);
   const groundGeo = new THREE.PlaneGeometry(100, 100);
   groundMaterial = createFadeOutGroundMaterial(); // グローバル変数に保存
   const ground = new THREE.Mesh(groundGeo, groundMaterial);
@@ -632,6 +932,8 @@ function animate() {
   const identityMatrix = new THREE.Matrix4();
   const camPos = camera.position;
 
+  updateCameraFollow(positions, orientations);
+
   // 使用するメッシュを決定（早期宣言）
   let activeMeshHigh = instancedMeshHigh;
   let activeMeshLow = instancedMeshLow;
@@ -812,6 +1114,8 @@ function createSpeciesParamsVector(settingsArray) {
       maxNeighbors: s.maxNeighbors || 0,
       horizontalTorque: s.horizontalTorque || 0.0,
       torqueStrength: s.torqueStrength || 0.0,
+      lambda: s.lambda ?? 0.05,
+      tau: s.tau ?? 0.2,
       isPredator: s.isPredator || false,
     });
   }
@@ -831,7 +1135,7 @@ function startSimulation() {
   // WebAssembly モジュール用に SpeciesParams を初期化
   const vector = createSpeciesParamsVector(settings);
   // callInitBoids に渡す（この vector は C++ 側で vector<SpeciesParams> になる）
-  wasmModule.callInitBoids(vector, 1, 6, 0.25);
+  wasmModule.callInitBoids(vector, 1, 3, 0.25);
   build(16, 0);
   initInstancedBoids(calculateTotalBoidCount(settings));
   animate();
@@ -854,12 +1158,55 @@ onMounted(() => {
     stats.dom.style.zIndex = 1000;
 
     startSimulation();
+    
+    // メモリ監視を開始
+    startMemoryMonitoring();
   });
   window.addEventListener('keydown', handleKeydown);
 });
 
+onBeforeUnmount(() => {
+  stopCameraFollow();
+  window.removeEventListener('keydown', handleKeydown);
+  window.removeEventListener('resize', onWindowResize);
+  if (lastRendererCanvas) {
+    lastRendererCanvas.removeEventListener('click', handleCanvasClick);
+    lastRendererCanvas = null;
+  }
+  controls?.removeEventListener('start', handleControlsInteractionStart);
+  controls?.removeEventListener('end', handleControlsInteractionEnd);
+  if (animationTimer) {
+    clearTimeout(animationTimer);
+    animationTimer = null;
+  }
+  if (stats?.dom?.parentNode) {
+    stats.dom.parentNode.removeChild(stats.dom);
+  }
+  stats = null;
+  stopMemoryMonitoring();
+});
+
 function isMobileDevice() {
   return /Mobi|Android/i.test(navigator.userAgent);
+}
+
+// スマホ向けのより詳細なデバイス性能チェック
+function getDevicePerformanceLevel() {
+  const userAgent = navigator.userAgent;
+  const hardwareConcurrency = navigator.hardwareConcurrency || 4;
+  const deviceMemory = navigator.deviceMemory || 4; // GB
+  
+  // 低性能デバイスの検出
+  const isLowEnd = deviceMemory <= 2 || hardwareConcurrency <= 2;
+  const isTablet = /iPad|Android.*(?!.*Mobile)/i.test(userAgent);
+  
+  return {
+    isLowEnd,
+    isTablet,
+    cores: hardwareConcurrency,
+    memory: deviceMemory,
+    suggestedBoidCount: isLowEnd ? 1500 : (isTablet ? 5000 : 3000)
+  };
 }
 
 // スマホタップでの停止/再開機能（ドラッグとタップを区別）
@@ -1063,6 +1410,59 @@ function createFadeOutGroundMaterial() {
 
   return material;
 }
+
+// WebGLコンテキストロス対策（軽量版）
+function setupWebGLContextLossHandling() {
+  if (!renderer) return;
+
+  const canvas = renderer.domElement;
+  
+  // コンテキストロス時の処理
+  canvas.addEventListener('webglcontextlost', (event) => {
+    console.warn('WebGLコンテキストが失われました - ページをリロードします');
+    event.preventDefault();
+    
+    // シンプルに2秒後にリロード
+    setTimeout(() => {
+      location.reload();
+    }, 2000);
+  }, false);
+}
+
+
+
+// 軽量メモリ監視（モバイル向け）
+function monitorWebGLMemory() {
+  if (!renderer || !renderer.info || !isMobileDevice()) return;
+  
+  const info = renderer.info;
+  const memoryInfo = info.memory || {};
+  const renderInfo = info.render || {};
+  
+  const geometries = memoryInfo.geometries || 0;
+  const textures = memoryInfo.textures || 0;
+  
+  // メモリ使用量が非常に高い場合のみ警告
+  if (geometries > 100 || textures > 50) {
+    console.warn('WebGLメモリ使用量が高いため、ページをリロードします');
+    location.reload();
+  }
+}
+
+// メモリ監視を軽量化
+let memoryMonitorInterval;
+function startMemoryMonitoring() {
+  if (isMobileDevice()) {
+    memoryMonitorInterval = setInterval(monitorWebGLMemory, 10000); // 10秒ごと
+  }
+}
+
+function stopMemoryMonitoring() {
+  if (memoryMonitorInterval) {
+    clearInterval(memoryMonitorInterval);
+    memoryMonitorInterval = null;
+  }
+}
 </script>
 
 <style>
@@ -1080,6 +1480,28 @@ function createFadeOutGroundMaterial() {
 
 .info {
   margin-top: 20px;
+}
+
+.follow-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.follow-controls button {
+  align-self: flex-start;
+}
+
+.follow-orientation {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+}
+
+.follow-status {
+  font-size: 0.9rem;
+  color: #ffd28f;
 }
 
 .three-container {
@@ -1108,6 +1530,22 @@ function createFadeOutGroundMaterial() {
   color: #fff;
   z-index: 2;
   pointer-events: none;
+}
+
+.ui-panel {
+  pointer-events: auto;
+  display: inline-flex;
+  flex-direction: column;
+  gap: 1rem;
+  max-width: min(90vw, 420px);
+  user-select: none;
+}
+
+.ui-panel input,
+.ui-panel button,
+.ui-panel select,
+.ui-panel textarea {
+  user-select: text;
 }
 
 .ui-overlay * {

@@ -1,5 +1,6 @@
 #pragma once
 #include <vector>
+#include <stack>
 #include "boid_unit.h"
 #include "boid.h"
 #include "species_params.h"
@@ -20,9 +21,20 @@ public:
     int maxBoidsPerUnit = 16;
     SoABuffers buf;              // 中央バッファに一本化
 
+    // BoidUnit プール
+    std::stack<BoidUnit*> unitPool;
+    
     BoidTree();
+    ~BoidTree();
+    
+    // プール管理
+    BoidUnit* getUnitFromPool();
+    void returnUnitToPool(BoidUnit* unit);
+    void clearPool();
+    
     void setFlockSize(int newSize, float posRange, float velRange);
     void initializeBoids(const std::vector<SpeciesParams> &speciesParamsList, float posRange, float velRange);
+    void initializeBoidMemories(const std::vector<SpeciesParams> &speciesParamsList);
     void build(int maxPerUnit = 16, int level = 0);
     void buildRecursive(BoidUnit *node, const std::vector<int> &indices, int maxPerUnit, int level);
     BoidUnit *findParent(BoidUnit *node, BoidUnit *target);
@@ -40,6 +52,9 @@ public:
     void rebuildTreeWithUnits(BoidUnit *node,
                               const std::vector<BoidUnit *> &units,
                               int maxPerUnit, int level);
+
+private:
+    void returnNodeToPool(BoidUnit* node);
 };
 
 extern std::vector<SpeciesParams> globalSpeciesParams;

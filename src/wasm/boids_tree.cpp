@@ -1,9 +1,10 @@
 #include <string>
 #define GLM_ENABLE_EXPERIMENTAL
 #include "boids_tree.h"
+#include "platform_utils.h"
 #include "species_params.h"
 #include <algorithm>
-#include <emscripten/val.h>
+#include <cfloat>
 #include <glm/glm.hpp>
 #include <glm/gtx/norm.hpp>
 #include <glm/gtx/rotate_vector.hpp>
@@ -14,8 +15,9 @@
 #include <random>
 #include <vector>
 
+
 // グローバル共通
-std::vector<SpeciesParams> globalSpeciesParams; // 配列に変更
+std::vector<SpeciesParams> globalSpeciesParams;
 // 静的メンバー変数の初期化
 int BoidUnit::nextId = 0;
 
@@ -28,8 +30,7 @@ SpeciesParams BoidTree::getGlobalSpeciesParams(const std::string species) {
 }
 
 void BoidTree::setGlobalSpeciesParams(const SpeciesParams &params) {
-  emscripten::val console = emscripten::val::global("console");
-  console.call<void>("log", std::string(params.species));
+  logger::log(std::string(params.species));
 
   auto it = std::find_if(globalSpeciesParams.begin(), globalSpeciesParams.end(),
                          [&params](const SpeciesParams &p) {
@@ -41,14 +42,16 @@ void BoidTree::setGlobalSpeciesParams(const SpeciesParams &params) {
     globalSpeciesParams.push_back(params); // 追加
   }
 
+  // パラメータ変更後、per-Boid メモリリストを再構築
+  initializeBoidMemories(globalSpeciesParams);
+
   // 全種をログに出す
-  console.call<void>("log", std::string("Updated species parameters:"));
+  logger::log("Updated species parameters:");
 
   for (const auto &sp : globalSpeciesParams) {
-    console.call<void>(
-        "log", std::string("species: ") + sp.species + ", isPredator: (" +
-                   (sp.isPredator ? "true" : "false") +
-                   "), maxSpeed: " + std::to_string(sp.maxSpeed));
+    logger::log(std::string("species: ") + sp.species + ", isPredator: (" +
+                (sp.isPredator ? "true" : "false") +
+                "), maxSpeed: " + std::to_string(sp.maxSpeed));
   }
 }
 
@@ -56,26 +59,95 @@ BoidTree::BoidTree()
     : root(nullptr), frameCount(0), splitIndex(0), mergeIndex(0),
       maxBoidsPerUnit(10) {}
 
+BoidTree::~BoidTree() {
+  if (root) {
+    returnNodeToPool(root);
+    root = nullptr;
+  }
+  clearPool();
+}
+
+// プール管理
+BoidUnit *BoidTree::getUnitFromPool() {
+  if (!unitPool.empty()) {
+    BoidUnit *unit = unitPool.top();
+    unitPool.pop();
+
+    // リセット
+    unit->parent = nullptr;
+    unit->topParent = nullptr;
+    unit->children.clear();
+    unit->indices.clear();
+    unit->center = glm::vec3(0.0f);
+    unit->averageVelocity = glm::vec3(0.0f);
+    unit->radius = 0.0f;
+    unit->level = 0;
+    unit->frameCount = 0;
+    unit->speciesId = -1;
+    unit->buf = &buf;
+
+    return unit;
+  }
+
+  // プールが空の場合は新規作成
+  BoidUnit *unit = new BoidUnit();
+  unit->buf = &buf;
+  return unit;
+}
+
+void BoidTree::returnUnitToPool(BoidUnit *unit) {
+  if (!unit)
+    return;
+
+  // 再帰的に子ノードも返却
+  for (BoidUnit *child : unit->children) {
+    returnUnitToPool(child);
+  }
+  unit->children.clear();
+
+  // プールに返却
+  unitPool.push(unit);
+}
+
+void BoidTree::returnNodeToPool(BoidUnit *node) {
+  if (!node)
+    return;
+
+  // 再帰的に子ノードも返却
+  for (BoidUnit *child : node->children) {
+    returnNodeToPool(child);
+  }
+  node->children.clear();
+
+  // プールに返却
+  unitPool.push(node);
+}
+
+void BoidTree::clearPool() {
+  while (!unitPool.empty()) {
+    delete unitPool.top();
+    unitPool.pop();
+  }
+}
+
 // ---- ツリー可視化 ----
 void printTree(const BoidUnit *node, int depth) {
   if (!node)
     return;
-  emscripten::val console = emscripten::val::global("console");
 
   std::string indent(depth * 2, ' ');
   // speciesIdを出す
   std::string speciesIdsStr;
   speciesIdsStr = node->speciesId;
 
-  console.call<void>(
-      "log", indent + "Level: " + std::to_string(node->level) +
-                 " | Boids: " + std::to_string(node->indices.size()) +
-                 " | Children: " + std::to_string(node->children.size()) +
-                 " | Center: (" + std::to_string(node->center.x) + ", " +
-                 std::to_string(node->center.y) + ", " +
-                 std::to_string(node->center.z) + ")" +
-                 " | Radius: " + std::to_string(node->radius) +
-                 " | speciesIds: [" + std::to_string(node->speciesId) + "]");
+  logger::log(indent + "Level: " + std::to_string(node->level) +
+              " | Boids: " + std::to_string(node->indices.size()) +
+              " | Children: " + std::to_string(node->children.size()) +
+              " | Center: (" + std::to_string(node->center.x) + ", " +
+              std::to_string(node->center.y) + ", " +
+              std::to_string(node->center.z) + ")" +
+              " | Radius: " + std::to_string(node->radius) +
+              " | speciesIds: [" + std::to_string(node->speciesId) + "]");
 
   for (const auto *child : node->children)
     printTree(child, depth + 1);
@@ -83,9 +155,9 @@ void printTree(const BoidUnit *node, int depth) {
 void BoidTree::build(int maxPerUnit, int level) {
   // 既存の root を削除して再生成
   if (root) {
-    delete root;
+    returnNodeToPool(root);
   }
-  root = new BoidUnit();
+  root = getUnitFromPool();
   root->buf = &buf; // 中央バッファを共有
 
   maxBoidsPerUnit = maxPerUnit;
@@ -148,8 +220,6 @@ void BoidTree::rebuildTreeWithUnits(BoidUnit *node,
           node->topParent ? node->topParent : node; // トップノードを継承
 
       // 必要な変数をリセットしつつ indices を保持
-      unit->cohesionMemories.assign(BoidUnit::MAX_BOIDS, 0.0f);
-      unit->activeNeighbors.reset();
       unit->frameCount = 0;
 
       node->children.push_back(unit);
@@ -193,8 +263,8 @@ void BoidTree::rebuildTreeWithUnits(BoidUnit *node,
   std::vector<BoidUnit *> left(sortedUnits.begin(), sortedUnits.begin() + mid);
   std::vector<BoidUnit *> right(sortedUnits.begin() + mid, sortedUnits.end());
 
-  auto *leftChild = new BoidUnit();
-  auto *rightChild = new BoidUnit();
+  auto *leftChild = getUnitFromPool();
+  auto *rightChild = getUnitFromPool();
   leftChild->buf = node->buf;
   rightChild->buf = node->buf;
   leftChild->parent = node;
@@ -236,14 +306,28 @@ void BoidTree::buildRecursive(BoidUnit *node, const std::vector<int> &indices,
       // 種が 1 種類の場合
       node->speciesId = firstSpeciesId;
     } else {
-      // 種が混在している場合、種ごとに再分割
-      std::unordered_map<int, std::vector<int>> speciesGroups;
+      // 種が混在している場合、種ごとに再分割（線形バケット化）
+      // 最大種数を想定して固定サイズ配列を使用（O(N)処理）
+      const int MAX_SPECIES = 16;
+      std::vector<int> speciesBuckets[MAX_SPECIES];
+      std::vector<int> usedSpecies;
+
+      // 線形スキャンで種別バケット化
       for (int i : indices) {
-        speciesGroups[buf.speciesIds[i]].push_back(i);
+        int speciesId = buf.speciesIds[i];
+        if (speciesId >= 0 && speciesId < MAX_SPECIES) {
+          if (speciesBuckets[speciesId].empty()) {
+            usedSpecies.push_back(speciesId);
+          }
+          speciesBuckets[speciesId].push_back(i);
+        }
       }
 
-      for (const auto &[speciesId, groupIndices] : speciesGroups) {
-        auto *child = new BoidUnit();
+      // 使用された種別のみ処理
+      for (int speciesId : usedSpecies) {
+        const std::vector<int> &groupIndices = speciesBuckets[speciesId];
+
+        auto *child = getUnitFromPool();
         child->buf = node->buf;
         child->parent = node;
         child->topParent = node->topParent ? node->topParent : node;
@@ -251,7 +335,7 @@ void BoidTree::buildRecursive(BoidUnit *node, const std::vector<int> &indices,
         child->speciesId = speciesId;
 
         for (int gIdx : groupIndices) {
-          buf.speciesIds[gIdx] = child->speciesId;
+          buf.speciesIds[gIdx] = speciesId;
         }
 
         child->computeBoundingSphere();
@@ -284,18 +368,52 @@ void BoidTree::buildRecursive(BoidUnit *node, const std::vector<int> &indices,
   if (var[2] > var[axis])
     axis = 2;
 
-  std::vector<int> sorted = indices;
-  std::sort(sorted.begin(), sorted.end(), [this, axis](int a, int b) {
-    const glm::vec3 &pa = buf.positions[a];
-    const glm::vec3 &pb = buf.positions[b];
-    return (axis == 0) ? pa.x < pb.x : (axis == 1) ? pa.y < pb.y : pa.z < pb.z;
-  });
-  std::size_t mid = sorted.size() / 2;
-  std::vector<int> left(sorted.begin(), sorted.begin() + mid);
-  std::vector<int> right(sorted.begin() + mid, sorted.end());
+  // 線形パーティション処理（ソート回避）
+  std::vector<int> left, right;
 
-  auto *leftChild = new BoidUnit();
-  auto *rightChild = new BoidUnit();
+  // 軸に沿った最小値と最大値を求める
+  float minVal = FLT_MAX, maxVal = -FLT_MAX;
+  for (int i : indices) {
+    const glm::vec3 &p = buf.positions[i];
+    float val = (axis == 0) ? p.x : (axis == 1) ? p.y : p.z;
+    minVal = std::min(minVal, val);
+    maxVal = std::max(maxVal, val);
+  }
+
+  // 中点で分割
+  float midVal = (minVal + maxVal) * 0.5f;
+
+  // 線形パーティション
+  for (int i : indices) {
+    const glm::vec3 &p = buf.positions[i];
+    float val = (axis == 0) ? p.x : (axis == 1) ? p.y : p.z;
+    if (val < midVal) {
+      left.push_back(i);
+    } else {
+      right.push_back(i);
+    }
+  }
+
+  // 極端な偏りの場合のフォールバック（50/50に近い分割を強制）
+  if (left.empty() || right.empty() || (left.size() > indices.size() * 0.8f) ||
+      (right.size() > indices.size() * 0.8f)) {
+    // nth_elementで中央値分割
+    std::vector<int> sorted = indices;
+    std::nth_element(sorted.begin(), sorted.begin() + sorted.size() / 2,
+                     sorted.end(), [this, axis](int a, int b) {
+                       const glm::vec3 &pa = buf.positions[a];
+                       const glm::vec3 &pb = buf.positions[b];
+                       return (axis == 0)   ? pa.x < pb.x
+                              : (axis == 1) ? pa.y < pb.y
+                                            : pa.z < pb.z;
+                     });
+    std::size_t mid = sorted.size() / 2;
+    left.assign(sorted.begin(), sorted.begin() + mid);
+    right.assign(sorted.begin() + mid, sorted.end());
+  }
+
+  auto *leftChild = getUnitFromPool();
+  auto *rightChild = getUnitFromPool();
   leftChild->buf = node->buf;
   rightChild->buf = node->buf;
   leftChild->parent = node;
@@ -343,19 +461,19 @@ void BoidTree::update(float dt) {
   frameCount++;
 
   // 一定フレームごとに葉ノードを再収集
-  if (frameCount % 5 == 0) {
+  if (frameCount % 15 == 0) { // 15フレーム（約0.25秒）ごとに収集
     leafCache.clear();
     //  collectLeaves(root, leafCache); // 葉ノードを収集
     splitIndex = 0;
     mergeIndex = 0;
   }
 
-  // 一定フレームごとに木構造を再構築
-  if (frameCount % 3 == 0) { // 再構築頻度を調整
+  // 一定フレームごとに木構造を再構築（大幅に頻度を減らす）
+  if (frameCount % 10 == 0) { // 10フレーム（約0.1秒）ごとに再構築
     build(maxBoidsPerUnit, 0);
     // printTree(root, 0); // ツリー構造をログに出力
 
-   // return;
+    // return;
   }
 
   // 分割と結合の処理
@@ -363,8 +481,7 @@ void BoidTree::update(float dt) {
     // 分割
     for (int i = 0; i < 12 && splitIndex < (int)leafCache.size();
          ++i, ++splitIndex) {
-      emscripten::val console = emscripten::val::global("console");
-      console.call<void>("log", std::string("分割"));
+      logger::log("分割");
 
       BoidUnit *u = leafCache[splitIndex];
       if (u && u->needsSplit(40.0f, 0.5f, maxBoidsPerUnit)) {
@@ -377,8 +494,7 @@ void BoidTree::update(float dt) {
     // 結合
     for (int i = 0; i < 12 && mergeIndex < (int)leafCache.size();
          ++i, ++mergeIndex) {
-      emscripten::val console = emscripten::val::global("console");
-      console.call<void>("log", std::string("結合"));
+      logger::log("結合");
 
       for (int j = mergeIndex + 1; j < (int)leafCache.size(); ++j) {
         BoidUnit *a = leafCache[mergeIndex];
@@ -411,12 +527,11 @@ std::mutex coutMutex;
 void BoidTree::initializeBoids(
     const std::vector<SpeciesParams> &speciesParamsList, float posRange,
     float velRange) {
-  emscripten::val console = emscripten::val::global("console");
-  console.call<void>("log", std::string("speciesParamsList size: ") +
-                                std::to_string(speciesParamsList.size()));
+  logger::log(std::string("speciesParamsList size: ") +
+              std::to_string(speciesParamsList.size()));
   for (const auto &species : speciesParamsList) {
-    console.call<void>("log", std::string("Species: ") + species.species +
-                                  ", Count: " + std::to_string(species.count));
+    logger::log(std::string("Species: ") + species.species +
+                ", Count: " + std::to_string(species.count));
   }
 
   // globalSpeciesParams を更新
@@ -465,13 +580,16 @@ void BoidTree::initializeBoids(
 
   // 木構造を再構築
   if (root)
-    delete root;
-  root = new BoidUnit();
+    returnNodeToPool(root);
+  root = getUnitFromPool();
   root->buf = &buf;
 
   std::vector<int> indices(totalCount);
   std::iota(indices.begin(), indices.end(), 0);
   buildRecursive(root, indices, maxBoidsPerUnit, 0);
+
+  // BoidメモリーとActiveNeighborsを初期化
+  initializeBoidMemories(globalSpeciesParams);
 }
 
 // BoidTree::setFlockSize
@@ -488,6 +606,8 @@ void BoidTree::setFlockSize(int newSize, float posRange, float velRange) {
     buf.speciesIds.resize(newSize);
     buf.predatorTargetIndices.resize(newSize, -1);
     buf.predatorTargetTimers.resize(newSize, 0.0f);
+    buf.boidCohesionMemories.resize(newSize);
+    buf.boidActiveNeighbors.resize(newSize);
 
     // cohesionMemories は erase で縮小
     for (int i = newSize; i < current; ++i) {
@@ -518,15 +638,33 @@ void BoidTree::setFlockSize(int newSize, float posRange, float velRange) {
       buf.predatorTargetIndices.push_back(-1);
       buf.predatorTargetTimers.push_back(0.0f);
     }
+
+    // 新しいBoidのメモリを初期化
+    buf.boidCohesionMemories.resize(newSize);
+    buf.boidActiveNeighbors.resize(newSize);
+
+    // 新しく追加されたBoidのメモリを初期化（デフォルトのmaxNeighbors=4を使用）
+    for (int i = current; i < newSize; ++i) {
+      buf.boidCohesionMemories[i].assign(
+          4,
+          0.0f); // cohesionMemoriesをmaxNeighbors分確保（dt累積（-1.0fで未使用））
+      buf.boidActiveNeighbors[i]
+          .reset(); // activeNeighborsをリセット（使用中slotのインデックス）
+    }
   }
 
   // ルートが中央バッファを指していることを保証
   if (!root)
-    root = new BoidUnit();
+    root = getUnitFromPool();
   root->buf = &buf;
 
   // 再構築
   build(maxBoidsPerUnit, 0);
+
+  // 新しいサイズに合わせて SOA バッファメモリを再初期化
+  if (!globalSpeciesParams.empty()) {
+    initializeBoidMemories(globalSpeciesParams);
+  }
 }
 
 void BoidTree::collectLeaves(const BoidUnit *node,
@@ -581,4 +719,53 @@ uintptr_t BoidTree::getOrientationsPtr() {
 }
 int BoidTree::getBoidCount() const {
   return static_cast<int>(buf.positions.size());
+}
+
+// BoidメモリーとActiveNeighborsを初期化
+void BoidTree::initializeBoidMemories(
+    const std::vector<SpeciesParams> &speciesParamsList) {
+  int totalCount = static_cast<int>(buf.positions.size());
+
+  // 空の speciesParamsList に対する安全装置
+  if (speciesParamsList.empty()) {
+    logger::log("Warning: speciesParamsList is empty, using default values");
+
+    // バッファのサイズを調整
+    buf.boidCohesionMemories.resize(totalCount);
+    buf.boidActiveNeighbors.resize(totalCount);
+
+    // デフォルト値で初期化
+    for (int boidIndex = 0; boidIndex < totalCount; ++boidIndex) {
+      buf.boidCohesionMemories[boidIndex].assign(
+          4, 0.0f); // デフォルト maxNeighbors = 4
+      buf.boidActiveNeighbors[boidIndex].reset();
+    }
+    return;
+  }
+
+  // バッファのサイズを調整
+  buf.boidCohesionMemories.resize(totalCount);
+  buf.boidActiveNeighbors.resize(totalCount);
+
+  // 各Boidごとに実際のspeciesIdに基づいてmaxNeighbors分のメモリを確保
+  for (int boidIndex = 0; boidIndex < totalCount; ++boidIndex) {
+    int speciesId = buf.speciesIds[boidIndex];
+
+    // speciesIdが有効な範囲内か確認
+    if (speciesId < 0 ||
+        speciesId >= static_cast<int>(speciesParamsList.size())) {
+      // 無効なspeciesIdの場合はデフォルト値を使用
+      buf.boidCohesionMemories[boidIndex].assign(4, 0.0f);
+      buf.boidActiveNeighbors[boidIndex].reset();
+      continue;
+    }
+
+    const auto &species = speciesParamsList[speciesId];
+    int maxNeighbors = std::max(1, species.maxNeighbors); // 最小 1個 保証
+
+    // cohesionMemoriesをmaxNeighbors分確保（dt累積（-1.0fで未使用））
+    buf.boidCohesionMemories[boidIndex].assign(maxNeighbors, 0.0f);
+    // activeNeighborsをリセット（使用中slotのインデックス）
+    buf.boidActiveNeighbors[boidIndex].reset();
+  }
 }

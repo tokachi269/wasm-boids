@@ -46,6 +46,8 @@ value_object<SpeciesParams>("SpeciesParams")
     .field("alignmentRange", &SpeciesParams::alignmentRange)
     .field("cohesionRange", &SpeciesParams::cohesionRange)
     .field("maxNeighbors", &SpeciesParams::maxNeighbors)
+    .field("lambda", &SpeciesParams::lambda)
+    .field("tau", &SpeciesParams::tau)
     .field("horizontalTorque", &SpeciesParams::horizontalTorque)
     .field("torqueStrength", &SpeciesParams::torqueStrength)
     .field("isPredator", &SpeciesParams::isPredator);

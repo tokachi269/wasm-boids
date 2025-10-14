@@ -1,4 +1,6 @@
 #include <vector>
+#include <bitset>
+#include <unordered_map>
 #include "boid.h"
 #include <glm/glm.hpp>
 #include <boost/align/aligned_allocator.hpp>
@@ -23,6 +25,10 @@ struct SoABuffers
 
     std::unordered_map<int, std::unordered_map<int, float>> cohesionMemories;
 
+    // 各BoidのcohesionMemoriesとactiveNeighbors（SOA形式）
+    std::vector<std::vector<float>> boidCohesionMemories;  // dt累積（-1.0fで未使用）
+    std::vector<std::bitset<16>> boidActiveNeighbors;      // 使用中slotのインデックス
+
     void reserveAll(std::size_t n)
     {
         positions.reserve(n);
@@ -37,6 +43,8 @@ struct SoABuffers
         predatorTargetIndices.reserve(n);
         predatorTargetTimers.reserve(n);
         predatorInfluences.reserve(n);
+        boidCohesionMemories.reserve(n);
+        boidActiveNeighbors.reserve(n);
     }
 
     // Boid 数に合わせてフラグをクリア/サイズ調整
@@ -54,5 +62,7 @@ struct SoABuffers
         predatorTargetIndices.resize(n, -1);
         predatorTargetTimers.resize(n, 0.0f);
         predatorInfluences.resize(n, glm::vec3(0.0f));
+        boidCohesionMemories.resize(n);
+        boidActiveNeighbors.resize(n);
     }
 };

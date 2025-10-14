@@ -15,6 +15,8 @@ endif()
 
 # emcc用のコンパイルオプションを設定
 set(EMCC_COMPILE_FLAGS
+    "-O0"          # 最大最適化
+    "-g"
     "-pthread" # スレッドを有効化
     "-msimd128" # SIMDを有効化（必要に応じて）
     "-matomics" # Atomicsを有効化
@@ -87,14 +89,13 @@ set(EMCC_LINK_FLAGS_RELEASE
 )
 
 
-# ソースファイルを指定
-set(SOURCES
-    src/wasm/main.cpp
+# 共通ソース
+set(COMMON_SOURCES
     src/wasm/boid_factory.cpp
     src/wasm/entry.cpp
     src/wasm/boid_unit.cpp
     src/wasm/boids_tree.cpp
-    src/wasm/wasm_bindings.cpp
+    src/wasm/main.cpp
 )
 
 # インクルードディレクトリを指定
@@ -102,24 +103,46 @@ include_directories(
     D:/GitHub/vcpkg/installed/x64-windows/include
 )
 
-# 実際のターゲットを設定
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/src/wasm/build")
-add_executable(wasm_boids ${SOURCES})
+if (CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    add_executable(wasm_boids
+        ${COMMON_SOURCES}
+        src/wasm/wasm_bindings.cpp
+    )
 
-# コンパイルオプションを設定
-target_compile_options(wasm_boids PRIVATE
-    $<$<CONFIG:Debug>:${EMCC_COMPILE_FLAGS}>
-    $<$<CONFIG:Release>:${EMCC_COMPILE_FLAGS_RELEASE}>
-)
+    set_target_properties(wasm_boids PROPERTIES
+        OUTPUT_NAME "wasm_boids"
+        SUFFIX ".js"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/src/wasm/build"
+    )
 
-# 出力形式の設定
-set_target_properties(wasm_boids PROPERTIES
-    OUTPUT_NAME "wasm_boids"
-    SUFFIX ".js"
-)
+    target_compile_options(wasm_boids PRIVATE
+        $<$<CONFIG:Debug>:${EMCC_COMPILE_FLAGS}>
+        $<$<CONFIG:Release>:${EMCC_COMPILE_FLAGS_RELEASE}>
+    )
 
-# リンクオプションを設定
-target_link_options(wasm_boids PRIVATE
-    $<$<CONFIG:Debug>:${EMCC_LINK_FLAGS}>
-    $<$<CONFIG:Release>:${EMCC_LINK_FLAGS_RELEASE}>
-)
+    target_link_options(wasm_boids PRIVATE
+        $<$<CONFIG:Debug>:${EMCC_LINK_FLAGS}>
+        $<$<CONFIG:Release>:${EMCC_LINK_FLAGS_RELEASE}>
+    )
+else()
+    add_executable(wasm_boids_native
+        ${COMMON_SOURCES}
+        src/wasm/native_simulation.cpp
+    )
+
+    target_compile_definitions(wasm_boids_native PRIVATE
+        $<$<CONFIG:Debug>:DEBUG>
+    )
+
+    target_compile_options(wasm_boids_native PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>:/W4 /permissive->
+        $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -Wpedantic>
+    )
+
+    set_target_properties(wasm_boids_native PROPERTIES
+        OUTPUT_NAME "wasm_boids_native"
+    )
+
+    find_package(Threads REQUIRED)
+    target_link_libraries(wasm_boids_native PRIVATE Threads::Threads)
+endif()

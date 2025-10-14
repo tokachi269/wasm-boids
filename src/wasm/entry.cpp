@@ -3,8 +3,18 @@
 #include "scale_utils.h"
 #include <iostream>
 
+#ifndef __EMSCRIPTEN__
+#include "native_simulation.h"
+#endif
+
 void Entry::run() {
+#ifdef __EMSCRIPTEN__
   std::cout << "WebAssembly entry point initialized!" << std::endl;
+#else
+  std::cout << "Starting native boids simulation..." << std::endl;
+  NativeSimulation simulation;
+  simulation.run();
+#endif
 }
 
 extern "C" {
@@ -28,9 +38,9 @@ void setSpeciesParams(const SpeciesParams &params,
 uintptr_t boidUnitMappingPtr() {
   static std::vector<std::pair<int, int>> boidUnitMappingVec;
   boidUnitMappingVec.clear();
-  const auto& mapping = BoidTree::instance().collectBoidUnitMapping();
+  const auto &mapping = BoidTree::instance().collectBoidUnitMapping();
   boidUnitMappingVec.reserve(mapping.size());
-  for (const auto& kv : mapping) {
+  for (const auto &kv : mapping) {
     boidUnitMappingVec.push_back(kv);
   }
   return reinterpret_cast<uintptr_t>(boidUnitMappingVec.data());
