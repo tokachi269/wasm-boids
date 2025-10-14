@@ -2,7 +2,6 @@
 #include "boids_tree.h"
 #include "pool_accessor.h"
 #include <algorithm>
-#include <emscripten/val.h>
 #include <future>
 #include <glm/glm.hpp>
 #include <glm/gtc/random.hpp>
@@ -115,29 +114,34 @@ const int targetIndex = 50; // ログを出力する特定の Boid のインデ�
  * - ユニット間のBoid相互作用による分離・凝集・整列
  */
 void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
-  if (frameCount % 6 != 0) {
-    // 再構築頻度でない場合は何もしない
-    return;
-  }
+  auto applyPredatorSweep = [&](BoidUnit *predatorUnit) -> bool {
+    if (!predatorUnit || !predatorUnit->isBoidUnit())
+      return false;
 
-  // 捕食者ユニットなら、トップ階層から木構造を使って再帰的に探索する
-  if (isBoidUnit() && globalSpeciesParams[speciesId].isPredator) {
-    // トップ階層から探索を開始
-    BoidUnit *root = this->topParent ? this->topParent : this;
+    int predatorSid = predatorUnit->speciesId;
+    if (!globalSpeciesParams[predatorSid].isPredator)
+      return false;
+
+    if (predatorUnit->indices.empty())
+      return false;
+
+    BoidUnit *root =
+        predatorUnit->topParent ? predatorUnit->topParent : predatorUnit;
 
     std::stack<BoidUnit *, std::vector<BoidUnit *>> stack;
     stack.push(root);
 
-    constexpr float predatorRange = 1.4f;
+    constexpr float predatorRange = 1.0f;
     constexpr float predatorRangeSq = predatorRange * predatorRange;
-    constexpr float predatorEffectRange = 1.4f;
+    constexpr float predatorEffectRange = 1.0f;
+
+    auto *soa = predatorUnit->buf;
 
     while (!stack.empty()) {
       BoidUnit *current = stack.top();
       stack.pop();
-
       // 捕食者は radius を無視して影響範囲で判定
-      glm::vec3 diff = current->center - center;
+      glm::vec3 diff = current->center - predatorUnit->center;
       float dist2 = glm::dot(diff, diff);
       float range = predatorEffectRange + current->radius;
 
@@ -146,40 +150,31 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
         continue;
 
       if (current->isBoidUnit()) {
-        for (int idxA : indices) {
+        for (int idxA : predatorUnit->indices) {
           for (int idxB : current->indices) {
-            int sidB = current->buf->speciesIds[idxB];
+            int sidB = soa->speciesIds[idxB];
             if (globalSpeciesParams[sidB].isPredator)
               continue;
 
-            glm::vec3 toTarget =
-                current->buf->positions[idxB] - buf->positions[idxA];
+            glm::vec3 toTarget = soa->positions[idxB] - soa->positions[idxA];
             float d2 = glm::dot(toTarget, toTarget);
-            if (d2 < predatorRangeSq) {
-              glm::vec3 escapeDir = glm::normalize(
-                  buf->positions[idxB] - current->buf->positions[idxA]);
-              // stress が 0.8 未満の場合のみ更新
-              if (buf->stresses[idxB] < 0.8f) { // 距離に応じたイージングを適用
-                float normalizedDistance =
-                    std::sqrt(d2) / predatorRange; // 距離を正規化
-                float escapeStrength =
-                    glm::clamp(1.0f - normalizedDistance, 0.0f, 1.0f);
-                escapeStrength =
-                    escapeStrength * escapeStrength *
-                    (3.0f - 2.0f * escapeStrength); // イージング関数
+            if (d2 >= predatorRangeSq)
+              continue;
 
-                // 逃走力を大幅に強化（放射線状逃走のため）
-                buf->predatorInfluences[idxB] +=
-                    escapeDir * escapeStrength * 5.0f; // 5倍強化
+            glm::vec3 escapeDir =
+                glm::normalize(soa->positions[idxB] - soa->positions[idxA]);
+            float normalizedDistance =
+                std::sqrt(std::max(d2, 1e-6f)) / predatorRange;
+            float escapeStrength =
+                glm::clamp(1.0f - normalizedDistance, 0.0f, 1.0f);
+            escapeStrength = escapeStrength * escapeStrength *
+                             (3.0f - 2.0f * escapeStrength);
+            // 逃走力を大幅に強化（放射線状逃走のため）
+            soa->predatorInfluences[idxB] += escapeDir * escapeStrength * 5.0f;
 
-                // ストレスレベルを距離に応じて設定
-                float stressLevel =
-                    0.5f + escapeStrength * 0.5f; // 0.5-1.0の範囲
-                if (buf->stresses[idxB] < stressLevel) {
-                  buf->stresses[idxB] = stressLevel; // より高いストレスのみ更新
-                }
-              }
-            }
+            float stressLevel =
+                glm::clamp(0.4f + escapeStrength * 0.6f, 0.0f, 1.0f);
+            soa->stresses[idxB] = std::max(soa->stresses[idxB], stressLevel);
           }
         }
       } else {
@@ -191,7 +186,17 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
         }
       }
     }
-  }
+
+    return true;
+  };
+
+  bool predatorHandled = applyPredatorSweep(this);
+  predatorHandled = applyPredatorSweep(other) || predatorHandled;
+
+  // if (!predatorHandled && frameCount % 6 != 0) {
+  //   // 再構築頻度でない場合は通常の相互作用をスキップ
+  //   return;
+  // }
 
   // 通常の影響処理（非捕食者または通常時）
   if (!indices.empty() && !other->indices.empty()) {
@@ -250,6 +255,17 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
         buf->stresses[idxA] =
             glm::max(buf->stresses[idxA], speedMultiplier - 1.0f);
       }
+    }
+  }
+
+  // 葉ノードと祖先ノードのバウンディング情報を更新して、
+  // 木の再構築間隔を伸ばしても空間情報が古くならないようにする
+  if (isBoidUnit()) {
+    computeBoundingSphere();
+    BoidUnit *ancestor = parent;
+    while (ancestor) {
+      ancestor->computeBoundingSphere();
+      ancestor = ancestor->parent;
     }
   }
 }
@@ -506,7 +522,7 @@ void BoidUnit::updateRecursive(float dt) {
         current->buf->positions[gIdx] += current->buf->velocities[gIdx] * dt;
         current->buf->accelerations[gIdx] = glm::vec3(0.0f);
         // predatorInfluences を減衰させて逃走時間を調整
-        current->buf->predatorInfluences[gIdx] *= 0.5f; // 50%減衰で早期終了
+        current->buf->predatorInfluences[gIdx] *= 0.5f; // 50%保持で逃走を継続
         current->buf->orientations[gIdx] = BoidUnit::dirToQuatRollZero(
             newDir); // stress を時間経過で減少（逃走時間を短縮）
         if (current->buf->stresses[gIdx] > 0.0f) {
@@ -601,7 +617,6 @@ void BoidUnit::computeBoidInteraction(float dt) {
     vel = buf->velocities[gIdx];
     const float viewRangeSq = globalSpeciesParams[sid].cohesionRange *
                               globalSpeciesParams[sid].cohesionRange;
-    emscripten::val console = emscripten::val::global("console");
     // console.call<void>("log", globalSpeciesParams[sid].species +
     //                              " cohesionRange: " +
     //                              std::to_string(globalSpeciesParams[sid].cohesionRange)

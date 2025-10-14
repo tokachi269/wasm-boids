@@ -250,7 +250,7 @@
     </div>
     <div class="setting-row">
       <label>回転トルク強度<br>(Torque Strength):</label>
-      <input type="range" v-model.number="settings.torqueStrength" min="0.0" max="5" step="0.001" />
+      <input type="range" v-model.number="settings.torqueStrength" min="0.0" max="20" step="0.001" />
       <span 
         v-if="!editingTorqueStrength" 
         class="editable-value" 
@@ -269,7 +269,52 @@
         @keyup.enter="stopEditTorqueStrength"
         ref="torqueStrengthInput"
       />
-    </div>    <div class="setting-row">
+    </div>
+    <div class="setting-row">
+      <label>減衰係数<br>(Damping Coefficient):</label>
+      <input type="range" v-model.number="settings.lambda" min="0" max="1" step="0.001" />
+      <span 
+        v-if="!editingLambda" 
+        class="editable-value" 
+        @click="startEditLambda"
+        title="クリックして編集"
+      >{{ settings.lambda }}</span>
+      <input 
+        v-if="editingLambda"
+        type="number" 
+        v-model.number="settings.lambda" 
+        min="0" 
+        max="1"
+        step="0.001"
+        class="value-input"
+        @blur="stopEditLambda"
+        @keyup.enter="stopEditLambda"
+        ref="lambdaInput"
+      />
+    </div>
+    <div class="setting-row">
+      <label>記憶時間<br>(Memory Time):</label>
+      <input type="range" v-model.number="settings.tau" min="0" max="5" step="0.01" />
+      <span 
+        v-if="!editingTau" 
+        class="editable-value" 
+        @click="startEditTau"
+        title="クリックして編集"
+      >{{ settings.tau }}</span>
+      <input 
+        v-if="editingTau"
+        type="number" 
+        v-model.number="settings.tau" 
+        min="0" 
+        max="5"
+        step="0.01"
+        class="value-input"
+        @blur="stopEditTau"
+        @keyup.enter="stopEditTau"
+        ref="tauInput"
+      />
+    </div>
+    <div class="setting-row">
       <label>捕食者フラグ<br>(Is Predator):</label>
       <input type="checkbox" v-model="settings.isPredator" />
       <span>{{ settings.isPredator }}</span>
@@ -302,6 +347,8 @@ const editingMaxTurnAngle = ref(false);
 const editingMaxNeighbors = ref(false);
 const editingHorizontalTorque = ref(false);
 const editingTorqueStrength = ref(false);
+const editingLambda = ref(false);
+const editingTau = ref(false);
 
 // 入力フィールドのref
 const countInput = ref(null);
@@ -316,6 +363,8 @@ const maxTurnAngleInput = ref(null);
 const maxNeighborsInput = ref(null);
 const horizontalTorqueInput = ref(null);
 const torqueStrengthInput = ref(null);
+const lambdaInput = ref(null);
+const tauInput = ref(null);
 
 // 編集開始関数
 async function startEditCount() {
@@ -426,6 +475,24 @@ async function startEditTorqueStrength() {
   }
 }
 
+async function startEditLambda() {
+  editingLambda.value = true;
+  await nextTick();
+  if (lambdaInput.value) {
+    lambdaInput.value.focus();
+    lambdaInput.value.select();
+  }
+}
+
+async function startEditTau() {
+  editingTau.value = true;
+  await nextTick();
+  if (tauInput.value) {
+    tauInput.value.focus();
+    tauInput.value.select();
+  }
+}
+
 // 編集終了関数
 function stopEditCount() {
   editingCount.value = false;
@@ -473,6 +540,14 @@ function stopEditHorizontalTorque() {
 
 function stopEditTorqueStrength() {
   editingTorqueStrength.value = false;
+}
+
+function stopEditLambda() {
+  editingLambda.value = false;
+}
+
+function stopEditTau() {
+  editingTau.value = false;
 }
 </script>
 

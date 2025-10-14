@@ -20,6 +20,6 @@ struct SpeciesParams {
   float horizontalTorque = 0.005f;
   float velocityEpsilon = 0.0001f;
   float torqueStrength = 0.1f;
-  float fieldOfViewDeg = 120.0f;
+  float fieldOfViewDeg = 180.0f;
   bool isPredator = false;
 };
