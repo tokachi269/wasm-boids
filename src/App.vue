@@ -226,6 +226,7 @@ const tmpCurrentOffset = new THREE.Vector3();
 const tmpYawQuaternion = new THREE.Quaternion();
 const tmpForwardVector = new THREE.Vector3();
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
+const hiddenInstanceMatrix = new THREE.Matrix4().makeScale(0, 0, 0);
 
 let lastRendererCanvas = null;
 const previousControlsState = {
@@ -307,6 +308,7 @@ function stopCameraFollow() {
 
 function readBoidPosition(index, outVector) {
   const count = boidCount();
+  console.log(count);
   if (index < 0 || index >= count) return false;
   const heapF32 = wasmModule.HEAPF32.buffer;
   const positionsArray = new Float32Array(heapF32, posPtr(), count * 3);
@@ -925,11 +927,11 @@ function animate() {
   lastTime = currentTime;
   if (!paused.value) update(deltaTime);
   const count = boidCount();
+    console.log(count);
   const heapF32 = wasmModule.HEAPF32.buffer;
   const positions = new Float32Array(heapF32, posPtr(), count * 3);
   const orientations = new Float32Array(heapF32, oriPtr(), count * 4);
   const dummy = new THREE.Object3D();
-  const identityMatrix = new THREE.Matrix4();
   const camPos = camera.position;
 
   updateCameraFollow(positions, orientations);
@@ -998,9 +1000,9 @@ function animate() {
     // マトリクスを設定
     if (useHigh) {
       activeMeshHigh.setMatrixAt(i, dummy.matrix);
-      activeMeshLow.setMatrixAt(i, identityMatrix);
+      activeMeshLow.setMatrixAt(i, hiddenInstanceMatrix);
     } else {
-      activeMeshHigh.setMatrixAt(i, identityMatrix);
+      activeMeshHigh.setMatrixAt(i, hiddenInstanceMatrix);
       activeMeshLow.setMatrixAt(i, dummy.matrix);
     }
 

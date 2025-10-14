@@ -3,6 +3,7 @@
 #include "boids_tree.h"
 #include "platform_utils.h"
 #include "species_params.h"
+#include "debug_utils.h"
 #include <algorithm>
 #include <cfloat>
 #include <glm/glm.hpp>
@@ -573,6 +574,10 @@ void BoidTree::initializeBoids(
           glm::vec3(posDist(gen), posDist(gen), posDist(gen));
       buf.velocities[offset] =
           glm::vec3(velDist(gen), velDist(gen), velDist(gen));
+      debug::check_invalid_value(
+          buf.positions[offset], "BoidTree::initializeBoids position");
+      debug::check_invalid_value(
+          buf.velocities[offset], "BoidTree::initializeBoids velocity");
       buf.speciesIds[offset] = speciesId;
       ++offset;
     }

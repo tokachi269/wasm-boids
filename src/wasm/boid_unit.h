@@ -44,6 +44,7 @@ public:
 
     int getMaxID() const;
     bool isBoidUnit() const;
+    bool hasValidBufferIndex(int gIdx) const;
     void computeBoundingSphere();
     void computeBoidInteraction(float dt);
     void applyInterUnitInfluence(BoidUnit *other, float dt = 1.0f);

@@ -1,6 +1,7 @@
 #include "boid_unit.h"
 #include "boids_tree.h"
 #include "pool_accessor.h"
+#include "debug_utils.h"
 #include <algorithm>
 #include <future>
 #include <glm/glm.hpp>
@@ -12,6 +13,25 @@
 #include <vector>
 
 bool BoidUnit::isBoidUnit() const { return children.empty(); }
+
+bool BoidUnit::hasValidBufferIndex(int gIdx) const {
+  if (!buf || gIdx < 0)
+    return false;
+
+  const std::size_t idx = static_cast<std::size_t>(gIdx);
+  const auto &soa = *buf;
+  auto fits = [&](std::size_t size) { return idx < size; };
+
+  return fits(soa.positions.size()) && fits(soa.velocities.size()) &&
+         fits(soa.accelerations.size()) && fits(soa.speciesIds.size()) &&
+         fits(soa.stresses.size()) && fits(soa.predatorInfluences.size()) &&
+         fits(soa.predatorTargetIndices.size()) &&
+         fits(soa.predatorTargetTimers.size()) && fits(soa.isAttracting.size()) &&
+         fits(soa.attractTimers.size()) &&
+         fits(soa.boidCohesionMemories.size()) &&
+         fits(soa.boidActiveNeighbors.size()) &&
+         fits(soa.orientations.size()) && fits(soa.ids.size());
+}
 
 /**
  * 小角度近似を使用した軽量回転関数。
@@ -50,21 +70,26 @@ inline glm::vec3 approxRotate(const glm::vec3 &v, const glm::vec3 &axis,
  */
 void BoidUnit::computeBoundingSphere() {
   if (isBoidUnit()) {
-    if (indices.empty())
+    if (indices.empty() || !buf || buf->positions.empty())
       return;
 
     // 中心を計算
     center = glm::vec3(0.0f);
-    for (int gIdx : indices)
-      center += buf->positions[gIdx];
+    for (int gIdx : indices) {
+      if (gIdx >= 0 && gIdx < static_cast<int>(buf->positions.size())) {
+        center += buf->positions[gIdx];
+      }
+    }
     center /= static_cast<float>(indices.size());
 
     // 平均距離と分散を計算
     float sum = 0.0f, sum2 = 0.0f;
     for (int gIdx : indices) {
-      float d = glm::distance(center, buf->positions[gIdx]);
-      sum += d;
-      sum2 += d * d;
+      if (gIdx >= 0 && gIdx < static_cast<int>(buf->positions.size())) {
+        float d = glm::distance(center, buf->positions[gIdx]);
+        sum += d;
+        sum2 += d * d;
+      }
     }
     float mean = sum / static_cast<float>(indices.size());
     float var = sum2 / static_cast<float>(indices.size()) - mean * mean;
@@ -151,7 +176,13 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
 
       if (current->isBoidUnit()) {
         for (int idxA : predatorUnit->indices) {
+          if (!predatorUnit->hasValidBufferIndex(idxA))
+            continue;
+
           for (int idxB : current->indices) {
+            if (!current->hasValidBufferIndex(idxB))
+              continue;
+
             int sidB = soa->speciesIds[idxB];
             if (globalSpeciesParams[sidB].isPredator)
               continue;
@@ -170,10 +201,9 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
             escapeStrength = escapeStrength * escapeStrength *
                              (3.0f - 2.0f * escapeStrength);
             // 逃走力を大幅に強化（放射線状逃走のため）
-            soa->predatorInfluences[idxB] += escapeDir * escapeStrength * 5.0f;
-
             float stressLevel =
                 glm::clamp(0.4f + escapeStrength * 0.6f, 0.0f, 1.0f);
+            soa->predatorInfluences[idxB] += escapeDir * escapeStrength * 5.0f;
             soa->stresses[idxB] = std::max(soa->stresses[idxB], stressLevel);
           }
         }
@@ -201,12 +231,18 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
   // 通常の影響処理（非捕食者または通常時）
   if (!indices.empty() && !other->indices.empty()) {
     for (int idxA : indices) {
+      if (!hasValidBufferIndex(idxA))
+        continue;
+
       glm::vec3 sumVel = glm::vec3(0.00001f);
       glm::vec3 sumPos = glm::vec3(0.00001f);
       glm::vec3 sep = glm::vec3(0.00001f);
       int cnt = 0;
       int sidA = speciesId;
       for (int idxB : other->indices) {
+        if (!other->hasValidBufferIndex(idxB))
+          continue;
+        
         // 種族IDチェック: 異なる種族同士では群れ行動を行わない
         int sidB = other->buf->speciesIds[idxB];
         if (sidA != sidB) {
@@ -357,10 +393,19 @@ void BoidUnit::updateRecursive(float dt) {
     if (current->isBoidUnit()) {
       for (size_t i = 0; i < current->indices.size(); ++i) {
         int gIdx = current->indices[i];
+        if (!current->hasValidBufferIndex(gIdx))
+          continue;
+
         int sid = current->buf->speciesIds[gIdx];
         glm::vec3 velocity = current->buf->velocities[gIdx];
         glm::vec3 acceleration = current->buf->accelerations[gIdx];
         glm::vec3 position = current->buf->positions[gIdx];
+        debug::check_invalid_value(
+            velocity, "BoidUnit::updateRecursive velocity");
+        debug::check_invalid_value(
+            acceleration, "BoidUnit::updateRecursive acceleration");
+        debug::check_invalid_value(
+            position, "BoidUnit::updateRecursive position");
 
         // -----------------------------------------------
         // 捕食者専用の追跡加速度を加算
@@ -368,7 +413,10 @@ void BoidUnit::updateRecursive(float dt) {
         if (globalSpeciesParams[sid].isPredator &&
             current->buf->predatorTargetIndices[gIdx] >= 0) {
           int tgtIdx = current->buf->predatorTargetIndices[gIdx];
-          glm::vec3 tgtPos = current->buf->positions[tgtIdx];
+          if (!current->hasValidBufferIndex(tgtIdx)) {
+            current->buf->predatorTargetIndices[gIdx] = -1;
+          } else {
+            glm::vec3 tgtPos = current->buf->positions[tgtIdx];
           glm::vec3 diff = tgtPos - position;
           float d2 = glm::dot(diff, diff);
           // if (targetIndex == gIdx) {
@@ -402,6 +450,7 @@ void BoidUnit::updateRecursive(float dt) {
             //           std::to_string(glm::length(chaseAcc)));
             // }
             acceleration += chaseAcc;
+          }
           } // -----------------------------------------------
           // 共通処理: stress/predatorInfluence のブレンド(被捕食者のみ)
           // -----------------------------------------------
@@ -411,8 +460,14 @@ void BoidUnit::updateRecursive(float dt) {
 
           // 実際のストレスレベルを使用（敵が近いほど逃走を優先）
           float currentStress = current->buf->stresses[gIdx];
+          debug::check_invalid_value(
+              currentStress,
+              "BoidUnit::updateRecursive predator stress");
           float predatorInfluenceMagnitude =
               glm::length(current->buf->predatorInfluences[gIdx]);
+          debug::check_invalid_value(
+              predatorInfluenceMagnitude,
+              "BoidUnit::updateRecursive predator influence magnitude");
 
           // 逃走重みを大幅に強化（放射線状逃走を実現）
           float escapeWeight = 0.8f; // 基本80%で逃走を優先
@@ -427,17 +482,26 @@ void BoidUnit::updateRecursive(float dt) {
           glm::vec3 escapeForce = current->buf->predatorInfluences[gIdx];
           if (predatorInfluenceMagnitude > 0.001f) {
             escapeForce = glm::normalize(escapeForce) * 10.0f; // 強い逃走力
+            debug::check_invalid_value(
+                escapeForce,
+                "BoidUnit::updateRecursive predator escape force");
           }
 
           acceleration =
               acceleration * (1.0f - escapeWeight) + escapeForce * escapeWeight;
+          debug::check_invalid_value(
+              acceleration,
+              "BoidUnit::updateRecursive acceleration post predator");
           // console.call<void>("log", "STRESS: gIdx=" + std::to_string(gIdx) +
           //                               " stress=" + std::to_string(stress) +
           //                               " acc=" +
           //                               glm::to_string(acceleration) + "
           //                               pos=" + glm::to_string(position));
-        } // stress に基づく滑らかな速度調整
+        }
+
         float currentStress = current->buf->stresses[gIdx];
+        debug::check_invalid_value(
+            currentStress, "BoidUnit::updateRecursive stress");
         float stressFactor = 1.0f;
 
         // 滑らかな遷移による速度制御（閾値なしの連続関数）
@@ -459,24 +523,41 @@ void BoidUnit::updateRecursive(float dt) {
         }
 
         float maxSpeed = globalSpeciesParams[sid].maxSpeed * stressFactor;
+        debug::check_invalid_value(
+            maxSpeed, "BoidUnit::updateRecursive maxSpeed");
 
         // -----------------------------------------------
         // 共通処理: 速度予測と回転角制限
         // -----------------------------------------------
         glm::vec3 desiredVelocity = velocity + acceleration * dt;
+        debug::check_invalid_value(
+            desiredVelocity,
+            "BoidUnit::updateRecursive desiredVelocity");
         glm::vec3 oldDir = glm::normalize(velocity);
+        debug::check_invalid_value(
+            oldDir, "BoidUnit::updateRecursive oldDir");
         glm::vec3 newDir = glm::normalize(desiredVelocity);
+        debug::check_invalid_value(
+            newDir, "BoidUnit::updateRecursive newDir initial");
         float speed = glm::length(desiredVelocity);
+        debug::check_invalid_value(
+            speed, "BoidUnit::updateRecursive speed");
 
         float dotProduct = glm::dot(oldDir, newDir);
+        debug::check_invalid_value(
+            dotProduct, "BoidUnit::updateRecursive dotProduct");
         float angle = acosf(glm::clamp(dotProduct, -1.0f, 1.0f));
+        debug::check_invalid_value(
+            angle, "BoidUnit::updateRecursive angle");
         float maxTurnAngle =
             globalSpeciesParams[sid].maxTurnAngle * stressFactor;
+        debug::check_invalid_value(
+            maxTurnAngle, "BoidUnit::updateRecursive maxTurnAngle");
 
         if (globalSpeciesParams[sid].isPredator &&
             current->buf->predatorTargetIndices[gIdx] >= 0) {
           maxTurnAngle *= 1.5f; // 捕食者の追跡時は回転制限を緩和
-        } // ストレス時の緊急回避用に旋回角度を緩やかに緩和（振動防止）
+        }
         if (currentStress > 0.7f) {
           // 高ストレス時のみ、穏やかに旋回能力を向上（振動防止）
           float emergencyTurnFactor =
@@ -491,6 +572,9 @@ void BoidUnit::updateRecursive(float dt) {
             axis /= glm::sqrt(axisLength2);
             float rot = glm::min(angle, maxTurnAngle * dt);
             newDir = approxRotate(oldDir, axis, rot);
+            debug::check_invalid_value(
+                newDir,
+                "BoidUnit::updateRecursive newDir post turn clamp");
           }
         }
 
@@ -500,15 +584,21 @@ void BoidUnit::updateRecursive(float dt) {
         float tilt = newDir.y;
         if (fabsf(tilt) > 1e-4f) {
           glm::vec3 flatDir = glm::normalize(glm::vec3(newDir.x, 0, newDir.z));
+          debug::check_invalid_value(
+              flatDir, "BoidUnit::updateRecursive flatDir");
           glm::vec3 axis = glm::cross(newDir, flatDir);
           float flatAngle =
               acosf(glm::clamp(glm::dot(newDir, flatDir), -1.0f, 1.0f));
+          debug::check_invalid_value(
+              flatAngle, "BoidUnit::updateRecursive flatAngle");
           float axisLength2 = glm::length2(axis);
           if (flatAngle > 1e-4f && axisLength2 > 1e-8f) {
             axis /= glm::sqrt(axisLength2);
             float rot = glm::min(
                 flatAngle, globalSpeciesParams[sid].horizontalTorque * dt);
             newDir = approxRotate(newDir, axis, rot);
+            debug::check_invalid_value(
+                newDir, "BoidUnit::updateRecursive newDir post tilt");
           }
         }
 
@@ -517,12 +607,28 @@ void BoidUnit::updateRecursive(float dt) {
         // -----------------------------------------------
         float finalSpeed =
             glm::clamp(speed, globalSpeciesParams[sid].minSpeed, maxSpeed);
+        debug::check_invalid_value(finalSpeed,
+                                   "BoidUnit::updateRecursive finalSpeed");
+        debug::check_invalid_value(newDir,
+                                   "BoidUnit::updateRecursive newDir pre assign");
 
-        current->buf->velocities[gIdx] = newDir * finalSpeed;
-        current->buf->positions[gIdx] += current->buf->velocities[gIdx] * dt;
+        glm::vec3 updatedVelocity = newDir * finalSpeed;
+        debug::check_invalid_value(updatedVelocity,
+                                   "BoidUnit::updateRecursive updatedVelocity");
+        glm::vec3 updatedPosition = position + updatedVelocity * dt;
+        debug::check_invalid_value(updatedPosition,
+                                   "BoidUnit::updateRecursive updatedPosition");
+
+        current->buf->velocities[gIdx] = updatedVelocity;
+        current->buf->positions[gIdx] = updatedPosition;
         current->buf->accelerations[gIdx] = glm::vec3(0.0f);
         // predatorInfluences を減衰させて逃走時間を調整
         current->buf->predatorInfluences[gIdx] *= 0.5f; // 50%保持で逃走を継続
+        debug::check_invalid_value(
+            current->buf->predatorInfluences[gIdx],
+            "BoidUnit::updateRecursive predatorInfluence post decay");
+        debug::check_invalid_value(newDir,
+                                   "BoidUnit::updateRecursive newDir pre orientation");
         current->buf->orientations[gIdx] = BoidUnit::dirToQuatRollZero(
             newDir); // stress を時間経過で減少（逃走時間を短縮）
         if (current->buf->stresses[gIdx] > 0.0f) {
@@ -532,6 +638,9 @@ void BoidUnit::updateRecursive(float dt) {
           if (current->buf->stresses[gIdx] < 0.0f) {
             current->buf->stresses[gIdx] = 0.0f;
           }
+          debug::check_invalid_value(
+              current->buf->stresses[gIdx],
+              "BoidUnit::updateRecursive stress post decay");
         }
       }
     } else {
@@ -552,13 +661,19 @@ inline float BoidUnit::easeOut(float t) {
   return t * t * (3.0f - 2.0f * t);
 }
 inline glm::quat BoidUnit::dirToQuatRollZero(const glm::vec3 &forward) {
+  debug::check_invalid_value(forward,
+                             "BoidUnit::dirToQuatRollZero forward");
   glm::vec3 f = glm::normalize(forward);
+  debug::check_invalid_value(f, "BoidUnit::dirToQuatRollZero f");
   glm::vec3 up(0.0f, 1.0f, 0.0f);
   if (fabsf(glm::dot(f, up)) > 0.99f) { // 平行回避
     up = glm::vec3(1.0f, 0.0f, 0.0f);   // フォールバック
   }
   glm::vec3 right = glm::normalize(glm::cross(up, f));
+  debug::check_invalid_value(right,
+                             "BoidUnit::dirToQuatRollZero right");
   up = glm::cross(f, right); // 直交基底
+  debug::check_invalid_value(up, "BoidUnit::dirToQuatRollZero up");
   glm::mat3 R(right, up, f); // 列順：X,Y,Z
   return glm::quat_cast(R);  // 正規化済 quat
 }
@@ -573,6 +688,10 @@ inline glm::quat BoidUnit::dirToQuatRollZero(const glm::vec3 &forward) {
  * - 捕食者の追跡ターゲット選択と更新
  */
 void BoidUnit::computeBoidInteraction(float dt) {
+  // 早期リターン: バッファが初期化されていない場合
+  if (!buf || buf->positions.empty() || buf->velocities.empty()) {
+    return;
+  }
   glm::vec3 separation;
   glm::vec3 alignment;
   glm::vec3 cohesion;
@@ -613,8 +732,22 @@ void BoidUnit::computeBoidInteraction(float dt) {
     cohesion = glm::vec3(0.00001f);
     sid = speciesId;
     gIdx = indices[index];
+    
+    if (!hasValidBufferIndex(gIdx))
+      continue;
+    
     pos = buf->positions[gIdx];
     vel = buf->velocities[gIdx];
+    debug::check_invalid_value(
+      pos, "BoidUnit::computeBoidInteraction position");
+    debug::check_invalid_value(
+      vel, "BoidUnit::computeBoidInteraction velocity");
+    debug::check_invalid_value(
+      buf->accelerations[gIdx],
+      "BoidUnit::computeBoidInteraction acceleration pre");
+    debug::check_invalid_value(
+      buf->stresses[gIdx],
+      "BoidUnit::computeBoidInteraction stress pre");
     const float viewRangeSq = globalSpeciesParams[sid].cohesionRange *
                               globalSpeciesParams[sid].cohesionRange;
     // console.call<void>("log", globalSpeciesParams[sid].species +
@@ -679,7 +812,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
           }
         }
       }
-      if (tgtIdx >= 0) {
+      if (tgtIdx >= 0 && hasValidBufferIndex(tgtIdx)) {
         tgtTime -= dt;
         glm::vec3 diff = buf->positions[tgtIdx] - pos;
         float d2 = glm::dot(diff, diff);
@@ -691,10 +824,16 @@ void BoidUnit::computeBoidInteraction(float dt) {
           //                ", vel: " +
           //                glm::to_string(buf->velocities[tgtIdx]));
           glm::vec3 direction = glm::normalize(diff);
+          debug::check_invalid_value(
+              direction,
+              "BoidUnit::computeBoidInteraction predator direction");
 
           // ターゲット方向に一定の加速度を適用
           // buf->accelerations[gIdx] += direction;
         }
+      } else if (tgtIdx >= 0) {
+        tgtIdx = -1;
+        tgtTime = 0.0f;
       }
     }
 
@@ -737,7 +876,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
     //    - 距離判定: distSq < viewRangeSq
     //    - 視界判定: normalized(diff)·normalized(vel) >= cosHalfFov
     // -------------------------------------------------------
-    if (activeCount < globalSpeciesParams[sid].maxNeighbors) {
+  if (activeCount < globalSpeciesParams[sid].maxNeighbors) {
       // 速度ベクトル vel がほぼゼロかどうかチェック
       float velLen2 = glm::length2(vel);
 
@@ -758,6 +897,8 @@ void BoidUnit::computeBoidInteraction(float dt) {
           continue;
 
         int gNeighbor = indices[i];
+        if (!hasValidBufferIndex(gNeighbor))
+          continue;
         glm::vec3 diff = buf->positions[gNeighbor] - pos;
         float distSq = glm::dot(diff, diff);
         if (distSq >= viewRangeSq)
@@ -814,23 +955,28 @@ void BoidUnit::computeBoidInteraction(float dt) {
     const int neighborCount = static_cast<int>(activeNeighbors.count());
     const float phi =
         float(neighborCount) / float(globalSpeciesParams[sid].maxNeighbors);
-    if (phi < 1.0f) {
-      // 群れの縁に出た場合は吸引ONでタイマーリセット
-      buf->isAttracting[gIdx] = 1;
-      buf->attractTimers[gIdx] = globalSpeciesParams[sid].tau;
-    } else if (buf->isAttracting[gIdx]) {
-      // 内部に戻った場合はタイマーカウントダウン
-      buf->attractTimers[gIdx] -= dt;
-      if (buf->attractTimers[gIdx] <= 0.0f) {
-        buf->isAttracting[gIdx] = 0;
-        buf->attractTimers[gIdx] = 0.0f;
+    
+    // 境界チェック
+    if (gIdx < static_cast<int>(buf->isAttracting.size()) &&
+        gIdx < static_cast<int>(buf->attractTimers.size())) {
+      if (phi < 1.0f) {
+        // 群れの縁に出た場合は吸引ONでタイマーリセット
+        buf->isAttracting[gIdx] = 1;
+        buf->attractTimers[gIdx] = globalSpeciesParams[sid].tau;
+      } else if (buf->isAttracting[gIdx]) {
+        // 内部に戻った場合はタイマーカウントダウン
+        buf->attractTimers[gIdx] -= dt;
+        if (buf->attractTimers[gIdx] <= 0.0f) {
+          buf->isAttracting[gIdx] = 0;
+          buf->attractTimers[gIdx] = 0.0f;
+        }
       }
     }
 
     // -------------------------------------------------------
     // 5-B. Fast-start 吸引項の加算 (isAttracting==1 の間)
     // -------------------------------------------------------
-    if (buf->isAttracting[gIdx]) {
+    if (gIdx < static_cast<int>(buf->isAttracting.size()) && buf->isAttracting[gIdx]) {
       glm::vec3 dirSum(0.0f);
       int dirCnt = 0;
 
@@ -844,10 +990,8 @@ void BoidUnit::computeBoidInteraction(float dt) {
           continue;
 
         int gNeighbor = indices[i];
-        // インデックス境界確認
-        if (gNeighbor >= static_cast<int>(buf->positions.size())) {
+        if (!hasValidBufferIndex(gNeighbor))
           continue;
-        }
 
         glm::vec3 diff = buf->positions[gNeighbor] - pos;
         float distSq = glm::dot(diff, diff);
@@ -863,10 +1007,17 @@ void BoidUnit::computeBoidInteraction(float dt) {
 
       if (dirCnt > 0) {
         glm::vec3 avgDir = glm::normalize(dirSum / float(dirCnt));
+        debug::check_invalid_value(
+            avgDir, "BoidUnit::computeBoidInteraction attract avgDir");
         glm::vec3 desiredVel = avgDir * globalSpeciesParams[sid].maxSpeed;
         glm::vec3 attractAcc =
             (desiredVel - vel) * globalSpeciesParams[sid].lambda;
         buf->accelerations[gIdx] += attractAcc;
+        debug::check_invalid_value(
+            attractAcc, "BoidUnit::computeBoidInteraction attractAcc");
+        debug::check_invalid_value(
+            buf->accelerations[gIdx],
+            "BoidUnit::computeBoidInteraction acceleration post attract");
       }
     }
 
@@ -886,6 +1037,8 @@ void BoidUnit::computeBoidInteraction(float dt) {
           continue;
 
         int gNeighbor = indices[i];
+        if (!hasValidBufferIndex(gNeighbor))
+          continue;
         glm::vec3 diff = buf->positions[gNeighbor] - pos;
         float distSq = glm::dot(diff, diff);
         if (distSq <= 1e-4f)
@@ -911,6 +1064,9 @@ void BoidUnit::computeBoidInteraction(float dt) {
       if (sepLen2 > EPS) {
         totalSeparation = (sumSep * (1.0f / glm::sqrt(sepLen2))) *
                           globalSpeciesParams[sid].separation;
+        debug::check_invalid_value(
+            totalSeparation,
+            "BoidUnit::computeBoidInteraction totalSeparation");
       }
 
       // 凝集の最終ベクトル
@@ -921,6 +1077,9 @@ void BoidUnit::computeBoidInteraction(float dt) {
       if (cohLen2 > EPS) {
         totalCohesion = (cohDir * (1.0f / glm::sqrt(cohLen2))) *
                         globalSpeciesParams[sid].cohesion;
+        debug::check_invalid_value(
+            totalCohesion,
+            "BoidUnit::computeBoidInteraction totalCohesion");
       }
 
       // 整列の最終ベクトル
@@ -931,19 +1090,30 @@ void BoidUnit::computeBoidInteraction(float dt) {
       if (aliLen2 > EPS) {
         totalAlignment = (aliDir * (1.0f / glm::sqrt(aliLen2))) *
                          globalSpeciesParams[sid].alignment;
+        debug::check_invalid_value(
+            totalAlignment,
+            "BoidUnit::computeBoidInteraction totalAlignment");
       }
 
       // --- 回転トルクによる向き補正（alignment方向へ向ける） ---
       float velLen2_2 = glm::length2(vel);
       if (velLen2_2 > EPS) {
         glm::vec3 forward2 = vel * (1.0f / glm::sqrt(velLen2_2));
+        debug::check_invalid_value(
+            forward2, "BoidUnit::computeBoidInteraction forward2");
 
         // “totalAlignment” がゼロベクトルでないかチェック
         float aliLen2_check = glm::length2(totalAlignment);
         if (aliLen2_check > EPS) {
           glm::vec3 tgt2 = totalAlignment * (1.0f / glm::sqrt(aliLen2_check));
+          debug::check_invalid_value(
+              tgt2, "BoidUnit::computeBoidInteraction tgt2");
           float dot2 = glm::clamp(glm::dot(forward2, tgt2), -1.0f, 1.0f);
+          debug::check_invalid_value(
+              dot2, "BoidUnit::computeBoidInteraction dot2");
           float ang2 = acosf(dot2);
+          debug::check_invalid_value(
+              ang2, "BoidUnit::computeBoidInteraction ang2");
 
           if (ang2 > 1e-4f) {
             glm::vec3 axis2 = glm::cross(forward2, tgt2);
@@ -954,13 +1124,20 @@ void BoidUnit::computeBoidInteraction(float dt) {
                   std::min(ang2, globalSpeciesParams[sid].torqueStrength * dt);
               rot2 = std::min(rot2, globalSpeciesParams[sid].maxTurnAngle);
               glm::vec3 newDir2 = approxRotate(forward2, axis2, rot2);
+              debug::check_invalid_value(
+                  newDir2, "BoidUnit::computeBoidInteraction newDir2");
 
               // 速度ベクトルを回転後の方向に更新
               vel = newDir2 * glm::length(vel);
-
-              // 加速度にもトルク分を加算
-              buf->accelerations[gIdx] +=
+              debug::check_invalid_value(
+                  vel, "BoidUnit::computeBoidInteraction rotated velocity");
+                          // -----------------------------------------------
+                          // 共通処理: stress/predatorInfluence のブレンド(被捕食者のみ)
+                          // -----------------------------------------------
                   axis2 * ang2 * globalSpeciesParams[sid].torqueStrength;
+              debug::check_invalid_value(
+                  buf->accelerations[gIdx],
+                  "BoidUnit::computeBoidInteraction acceleration post torque");
             }
           }
         }
@@ -974,6 +1151,9 @@ void BoidUnit::computeBoidInteraction(float dt) {
       // --- 最終的な加速度をバッファに書き込み ---
       buf->accelerations[gIdx] +=
           totalSeparation + totalAlignment + totalCohesion;
+      debug::check_invalid_value(
+          buf->accelerations[gIdx],
+          "BoidUnit::computeBoidInteraction acceleration post final");
     }
   }
 }
@@ -996,14 +1176,24 @@ bool BoidUnit::needsSplit(float splitRadius, float directionVarThresh,
   // 方向のバラつき判定
   if (indices.size() > 1) {
     glm::vec3 avg = glm::vec3(0.0f);
-    for (int gIdx : indices)
+    int validCount = 0;
+    for (int gIdx : indices) {
+      if (!hasValidBufferIndex(gIdx))
+        continue;
       avg += glm::normalize(buf->velocities[gIdx]);
-    avg /= static_cast<float>(indices.size());
+      ++validCount;
+    }
+    if (validCount == 0)
+      return false;
+    avg /= static_cast<float>(validCount);
 
     float var = 0.0f;
-    for (int gIdx : indices)
+    for (int gIdx : indices) {
+      if (!hasValidBufferIndex(gIdx))
+        continue;
       var += glm::length(glm::normalize(buf->velocities[gIdx]) - avg);
-    var /= static_cast<float>(indices.size());
+    }
+    var /= static_cast<float>(validCount);
 
     if (var > directionVarThresh)
       return true;

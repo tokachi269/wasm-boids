@@ -1,6 +1,7 @@
 #include <vector>
 #include <bitset>
 #include <unordered_map>
+#include <mutex>
 #include "boid.h"
 #include <glm/glm.hpp>
 #include <boost/align/aligned_allocator.hpp>
@@ -28,6 +29,8 @@ struct SoABuffers
     // 各BoidのcohesionMemoriesとactiveNeighbors（SOA形式）
     std::vector<std::vector<float>> boidCohesionMemories;  // dt累積（-1.0fで未使用）
     std::vector<std::bitset<16>> boidActiveNeighbors;      // 使用中slotのインデックス
+
+    std::mutex bufMutex; // SOAバッファの共有保護
 
     void reserveAll(std::size_t n)
     {
