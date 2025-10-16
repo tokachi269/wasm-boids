@@ -36,6 +36,159 @@ inline glm::vec3 approxRotate(const glm::vec3 &v, const glm::vec3 &axis,
   return v + angle * glm::cross(normalizedAxis, v);
 }
 
+static void updateLeafKinematics(BoidUnit *unit, float dt) {
+  for (size_t i = 0; i < unit->indices.size(); ++i) {
+    int gIdx = unit->indices[i];
+    int sid = unit->buf->speciesIds[gIdx];
+    glm::vec3 velocity = unit->buf->velocities[gIdx];
+    glm::vec3 acceleration = unit->buf->accelerations[gIdx];
+    glm::vec3 position = unit->buf->positions[gIdx];
+
+    // -----------------------------------------------
+    // 捕食者専用の追跡加速度を加算
+    // -----------------------------------------------
+    if (globalSpeciesParams[sid].isPredator &&
+        unit->buf->predatorTargetIndices[gIdx] >= 0) {
+      int tgtIdx = unit->buf->predatorTargetIndices[gIdx];
+      glm::vec3 tgtPos = unit->buf->positions[tgtIdx];
+      glm::vec3 diff = tgtPos - position;
+      float d2 = glm::dot(diff, diff);
+      if (d2 > 1e-4f) {
+        float dist = glm::sqrt(d2);
+        glm::vec3 chaseDir = diff / dist;
+        float desiredSpeed = globalSpeciesParams[sid].maxSpeed;
+
+        glm::vec3 desiredVel = chaseDir * desiredSpeed;
+        glm::vec3 chaseAcc = desiredVel - velocity;
+        acceleration += chaseAcc;
+      }
+    } else if (unit->buf->stresses[gIdx] > 0.1f ||
+               glm::length(unit->buf->predatorInfluences[gIdx]) > 0.001f) {
+
+      float currentStress = unit->buf->stresses[gIdx];
+      float predatorInfluenceMagnitude =
+          glm::length(unit->buf->predatorInfluences[gIdx]);
+
+      float escapeWeight = 0.8f; // 基本80%で逃走を優先
+      if (currentStress > 0.7f || predatorInfluenceMagnitude > 2.0f) {
+        escapeWeight = 0.95f; // 高ストレス時は95%逃走優先
+      } else if (currentStress > 0.4f ||
+                 predatorInfluenceMagnitude > 1.0f) {
+        escapeWeight = 0.9f; // 中ストレス時は90%逃走優先
+      }
+
+      glm::vec3 escapeForce = unit->buf->predatorInfluences[gIdx];
+      if (predatorInfluenceMagnitude > 0.001f) {
+        escapeForce = glm::normalize(escapeForce) * 10.0f; // 強い逃走力
+      }
+
+      acceleration = acceleration * (1.0f - escapeWeight) +
+                     escapeForce * escapeWeight;
+    }
+    float currentStress = unit->buf->stresses[gIdx];
+    float stressFactor = 1.0f;
+
+    if (currentStress > 0.95f) {
+      float t = (currentStress - 0.8f) / 0.2f;
+      stressFactor = 1.0f + 1.6f + t * 0.9f;
+    } else if (currentStress > 0.7f) {
+      float t = (currentStress - 0.2f) / 0.6f;
+      float smoothT = t * t * (3.0f - 2.0f * t);
+      stressFactor = 1.0f + 0.4f + smoothT * 1.8f;
+    } else {
+      float t = currentStress / 0.2f;
+      stressFactor = 1.0f + t * 0.4f;
+    }
+
+    float maxSpeed = globalSpeciesParams[sid].maxSpeed * stressFactor;
+
+    // -----------------------------------------------
+    // 共通処理: 速度予測と回転角制限
+    // -----------------------------------------------
+    glm::vec3 desiredVelocity = velocity + acceleration * dt;
+    constexpr float MIN_DIR_LEN2 = 1e-12f;
+
+    // 平方根を避けて速度ゼロ判定しつつ方向を確定
+    float oldSpeedSq = glm::length2(velocity);
+    glm::vec3 oldDir = velocity;
+    if (oldSpeedSq > MIN_DIR_LEN2) {
+      oldDir /= glm::sqrt(oldSpeedSq);
+    } else {
+      oldDir = glm::vec3(0.0f, 0.0f, 1.0f);
+    }
+
+    // `normalize` + `length` の重複 sqrt を避けてコスト削減
+    float desiredSpeedSq = glm::length2(desiredVelocity);
+    float speed = 0.0f;
+    glm::vec3 newDir = oldDir;
+    if (desiredSpeedSq > MIN_DIR_LEN2) {
+      speed = glm::sqrt(desiredSpeedSq);
+      newDir = desiredVelocity / speed;
+    }
+
+    float dotProduct = glm::dot(oldDir, newDir);
+    float angle = acosf(glm::clamp(dotProduct, -1.0f, 1.0f));
+    float maxTurnAngle = globalSpeciesParams[sid].maxTurnAngle * stressFactor;
+
+    if (globalSpeciesParams[sid].isPredator &&
+        unit->buf->predatorTargetIndices[gIdx] >= 0) {
+      maxTurnAngle *= 1.5f; // 捕食者の追跡時は回転制限を緩和
+    }
+    if (currentStress > 0.7f) {
+      float emergencyTurnFactor =
+          1.0f + (currentStress - 0.7f) * 5.0f; // 最大6.0倍の旋回能力
+      maxTurnAngle *= emergencyTurnFactor;
+    }
+
+    if (angle > maxTurnAngle) {
+      glm::vec3 axis = glm::cross(oldDir, newDir);
+      float axisLength2 = glm::length2(axis);
+      if (axisLength2 > 1e-8f) {
+        axis /= glm::sqrt(axisLength2);
+        float rot = glm::min(angle, maxTurnAngle * dt);
+        newDir = approxRotate(oldDir, axis, rot);
+      }
+    }
+
+    // -----------------------------------------------
+    // 共通処理: 水平トルク（tilt補正）
+    // -----------------------------------------------
+    float tilt = newDir.y;
+    if (fabsf(tilt) > 1e-4f) {
+      glm::vec3 flatDir = glm::normalize(glm::vec3(newDir.x, 0, newDir.z));
+      glm::vec3 axis = glm::cross(newDir, flatDir);
+      float flatAngle =
+          acosf(glm::clamp(glm::dot(newDir, flatDir), -1.0f, 1.0f));
+      float axisLength2 = glm::length2(axis);
+      if (flatAngle > 1e-4f && axisLength2 > 1e-8f) {
+        axis /= glm::sqrt(axisLength2);
+        float rot = glm::min(flatAngle,
+                             globalSpeciesParams[sid].horizontalTorque * dt);
+        newDir = approxRotate(newDir, axis, rot);
+      }
+    }
+
+    // -----------------------------------------------
+    // 共通処理: 速度クランプと位置更新
+    // -----------------------------------------------
+    float finalSpeed =
+        glm::clamp(speed, globalSpeciesParams[sid].minSpeed, maxSpeed);
+
+    unit->buf->velocities[gIdx] = newDir * finalSpeed;
+    unit->buf->positions[gIdx] += unit->buf->velocities[gIdx] * dt;
+    unit->buf->accelerations[gIdx] = glm::vec3(0.0f);
+    unit->buf->predatorInfluences[gIdx] *= 0.5f; // 50%保持で逃走を継続
+    unit->buf->orientations[gIdx] = BoidUnit::dirToQuatRollZero(newDir);
+    if (unit->buf->stresses[gIdx] > 0.0f) {
+      float decayRate = 1.0f;
+      unit->buf->stresses[gIdx] -= BoidUnit::easeOut(dt * decayRate);
+      if (unit->buf->stresses[gIdx] < 0.0f) {
+        unit->buf->stresses[gIdx] = 0.0f;
+      }
+    }
+  }
+}
+
 /**
  * ユニット内の Boid または子ノードを基にバウンディングスフィアを計算する。
  *
@@ -355,185 +508,9 @@ void BoidUnit::updateRecursive(float dt) {
     stack.pop();
 
     if (current->isBoidUnit()) {
-      for (size_t i = 0; i < current->indices.size(); ++i) {
-        int gIdx = current->indices[i];
-        int sid = current->buf->speciesIds[gIdx];
-        glm::vec3 velocity = current->buf->velocities[gIdx];
-        glm::vec3 acceleration = current->buf->accelerations[gIdx];
-        glm::vec3 position = current->buf->positions[gIdx];
-
-        // -----------------------------------------------
-        // 捕食者専用の追跡加速度を加算
-        // -----------------------------------------------
-        if (globalSpeciesParams[sid].isPredator &&
-            current->buf->predatorTargetIndices[gIdx] >= 0) {
-          int tgtIdx = current->buf->predatorTargetIndices[gIdx];
-          glm::vec3 tgtPos = current->buf->positions[tgtIdx];
-          glm::vec3 diff = tgtPos - position;
-          float d2 = glm::dot(diff, diff);
-          // if (targetIndex == gIdx) {
-          //   console.call<void>("log",
-          //                      "PRE: gIdx=" + std::to_string(gIdx) +
-          //                          " vel=" + glm::to_string(velocity) +
-          //                          " acc=" + glm::to_string(acceleration) +
-          //                          " pos=" + glm::to_string(position));
-          // }
-          if (d2 > 1e-4f) {
-            float dist = glm::sqrt(d2);
-            glm::vec3 chaseDir = diff / dist;
-            // if (targetIndex == gIdx) {
-            //   console.call<void>("log",
-            //                      "CHASE: dist=" + std::to_string(dist) +
-            //                          " tgtPos=" + glm::to_string(tgtPos) +
-            //                          " chaseDir=" +
-            //                          glm::to_string(chaseDir));
-            // }
-            // 到着減速: 近づくほど減速して振動を防ぐ
-            float desiredSpeed = globalSpeciesParams[sid].maxSpeed;
-
-            glm::vec3 desiredVel = chaseDir * desiredSpeed;
-            glm::vec3 chaseAcc = desiredVel - velocity;
-            // if (targetIndex == gIdx) {
-            //   console.call<void>(
-            //       "log",
-            //       "RESULT: desiredVel=" + glm::to_string(desiredVel) +
-            //           " chaseAcc=" + glm::to_string(chaseAcc) +
-            //           " accMagnitude=" +
-            //           std::to_string(glm::length(chaseAcc)));
-            // }
-            acceleration += chaseAcc;
-          } // -----------------------------------------------
-          // 共通処理: stress/predatorInfluence のブレンド(被捕食者のみ)
-          // -----------------------------------------------
-        } else if (current->buf->stresses[gIdx] > 0.1f ||
-                   glm::length(current->buf->predatorInfluences[gIdx]) >
-                       0.001f) {
-
-          // 実際のストレスレベルを使用（敵が近いほど逃走を優先）
-          float currentStress = current->buf->stresses[gIdx];
-          float predatorInfluenceMagnitude =
-              glm::length(current->buf->predatorInfluences[gIdx]);
-
-          // 逃走重みを大幅に強化（放射線状逃走を実現）
-          float escapeWeight = 0.8f; // 基本80%で逃走を優先
-          if (currentStress > 0.7f || predatorInfluenceMagnitude > 2.0f) {
-            escapeWeight = 0.95f; // 高ストレス時は95%逃走優先
-          } else if (currentStress > 0.4f ||
-                     predatorInfluenceMagnitude > 1.0f) {
-            escapeWeight = 0.9f; // 中ストレス時は90%逃走優先
-          }
-
-          // 逃走方向を正規化して強化（放射線状逃走）
-          glm::vec3 escapeForce = current->buf->predatorInfluences[gIdx];
-          if (predatorInfluenceMagnitude > 0.001f) {
-            escapeForce = glm::normalize(escapeForce) * 10.0f; // 強い逃走力
-          }
-
-          acceleration =
-              acceleration * (1.0f - escapeWeight) + escapeForce * escapeWeight;
-          // console.call<void>("log", "STRESS: gIdx=" + std::to_string(gIdx) +
-          //                               " stress=" + std::to_string(stress) +
-          //                               " acc=" +
-          //                               glm::to_string(acceleration) + "
-          //                               pos=" + glm::to_string(position));
-        } // stress に基づく滑らかな速度調整
-        float currentStress = current->buf->stresses[gIdx];
-        float stressFactor = 1.0f;
-
-        // 滑らかな遷移による速度制御（閾値なしの連続関数）
-        if (currentStress > 0.95f) {
-          // 高ストレス時: 逃走優先で高速移動
-          float t = (currentStress - 0.8f) / 0.2f; // 0.8-1.0を0-1に正規化
-          stressFactor = 1.0f + 1.6f + t * 0.9f; // 2.6倍から3.5倍へ滑らかに遷移
-        } else if (currentStress > 0.7f) {
-          // 中ストレス時: 再結集のための高速移動（滑らかな曲線）
-          float t = (currentStress - 0.2f) / 0.6f; // 0.2-0.8を0-1に正規化
-          // スムーズステップ関数で滑らかな遷移
-          float smoothT = t * t * (3.0f - 2.0f * t);
-          stressFactor =
-              1.0f + 0.4f + smoothT * 1.8f; // 1.4倍から2.6倍へ滑らかに遷移
-        } else {
-          // 低ストレス時: 通常速度からの滑らかな移行
-          float t = currentStress / 0.2f; // 0-0.2を0-1に正規化
-          stressFactor = 1.0f + t * 0.4f; // 1.0倍から1.4倍へ滑らかに遷移
-        }
-
-        float maxSpeed = globalSpeciesParams[sid].maxSpeed * stressFactor;
-
-        // -----------------------------------------------
-        // 共通処理: 速度予測と回転角制限
-        // -----------------------------------------------
-        glm::vec3 desiredVelocity = velocity + acceleration * dt;
-        glm::vec3 oldDir = glm::normalize(velocity);
-        glm::vec3 newDir = glm::normalize(desiredVelocity);
-        float speed = glm::length(desiredVelocity);
-
-        float dotProduct = glm::dot(oldDir, newDir);
-        float angle = acosf(glm::clamp(dotProduct, -1.0f, 1.0f));
-        float maxTurnAngle =
-            globalSpeciesParams[sid].maxTurnAngle * stressFactor;
-
-        if (globalSpeciesParams[sid].isPredator &&
-            current->buf->predatorTargetIndices[gIdx] >= 0) {
-          maxTurnAngle *= 1.5f; // 捕食者の追跡時は回転制限を緩和
-        } // ストレス時の緊急回避用に旋回角度を緩やかに緩和（振動防止）
-        if (currentStress > 0.7f) {
-          // 高ストレス時のみ、穏やかに旋回能力を向上（振動防止）
-          float emergencyTurnFactor =
-              1.0f + (currentStress - 0.7f) * 5.0f; // 最大6.0倍の旋回能力
-          maxTurnAngle *= emergencyTurnFactor;
-        }
-
-        if (angle > maxTurnAngle) {
-          glm::vec3 axis = glm::cross(oldDir, newDir);
-          float axisLength2 = glm::length2(axis);
-          if (axisLength2 > 1e-8f) {
-            axis /= glm::sqrt(axisLength2);
-            float rot = glm::min(angle, maxTurnAngle * dt);
-            newDir = approxRotate(oldDir, axis, rot);
-          }
-        }
-
-        // -----------------------------------------------
-        // 共通処理: 水平トルク（tilt補正）
-        // -----------------------------------------------
-        float tilt = newDir.y;
-        if (fabsf(tilt) > 1e-4f) {
-          glm::vec3 flatDir = glm::normalize(glm::vec3(newDir.x, 0, newDir.z));
-          glm::vec3 axis = glm::cross(newDir, flatDir);
-          float flatAngle =
-              acosf(glm::clamp(glm::dot(newDir, flatDir), -1.0f, 1.0f));
-          float axisLength2 = glm::length2(axis);
-          if (flatAngle > 1e-4f && axisLength2 > 1e-8f) {
-            axis /= glm::sqrt(axisLength2);
-            float rot = glm::min(
-                flatAngle, globalSpeciesParams[sid].horizontalTorque * dt);
-            newDir = approxRotate(newDir, axis, rot);
-          }
-        }
-
-        // -----------------------------------------------
-        // 共通処理: 速度クランプと位置更新
-        // -----------------------------------------------
-        float finalSpeed =
-            glm::clamp(speed, globalSpeciesParams[sid].minSpeed, maxSpeed);
-
-        current->buf->velocities[gIdx] = newDir * finalSpeed;
-        current->buf->positions[gIdx] += current->buf->velocities[gIdx] * dt;
-        current->buf->accelerations[gIdx] = glm::vec3(0.0f);
-        // predatorInfluences を減衰させて逃走時間を調整
-        current->buf->predatorInfluences[gIdx] *= 0.5f; // 50%保持で逃走を継続
-        current->buf->orientations[gIdx] = BoidUnit::dirToQuatRollZero(
-            newDir); // stress を時間経過で減少（逃走時間を短縮）
-        if (current->buf->stresses[gIdx] > 0.0f) {
-          // ストレス減衰を大幅に速くして、適度な逃走時間を実現
-          float decayRate = 1.0f;
-          current->buf->stresses[gIdx] -= BoidUnit::easeOut(dt * decayRate);
-          if (current->buf->stresses[gIdx] < 0.0f) {
-            current->buf->stresses[gIdx] = 0.0f;
-          }
-        }
-      }
+      BoidUnit *unit = current;
+      asyncTasks.emplace_back(
+          pool.enqueue([unit, dt] { updateLeafKinematics(unit, dt); }));
     } else {
       // パフォーマンス最適化: children の直接ポインタアクセス
       const size_t childrenSize = current->children.size();
@@ -543,6 +520,10 @@ void BoidUnit::updateRecursive(float dt) {
       }
     }
   }
+
+  for (auto &f : asyncTasks)
+    f.get();
+  asyncTasks.clear();
 
   // 関数終了時にカウンターをリセット
   callCount--;
