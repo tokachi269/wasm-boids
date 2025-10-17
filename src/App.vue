@@ -43,14 +43,6 @@
                 表示レイヤ下限: <input type="range" min="1" max="20" v-model="unitLayer" />
                 {{ unitLayer }}
               </label>
-              <label style="margin-left:1em;">
-                <input type="checkbox" v-model="useInstancedRendering" />
-                Instanced描画
-              </label>
-              <label style="margin-left:1em;">
-                <input type="checkbox" v-model="useZeroCopyBuffers" />
-                ゼロコピー
-              </label>
             </div>
           </details>
         </details>
@@ -205,8 +197,6 @@ const showUnitSpheres = ref(false);
 const showUnitLines = ref(false);
 const showUnitColors = ref(false);
 const unitLayer = ref(1);
-const useInstancedRendering = ref(true);
-const useZeroCopyBuffers = ref(true);
 
 const isFollowSelectionMode = ref(false);
 const isFollowing = ref(false);
@@ -633,9 +623,6 @@ function onWindowResize() {
 let instancedMeshHigh = null; // 高ポリゴン用
 let instancedMeshLow = null;  // 低ポリゴン用
 let groundMaterial = null;    // 地面マテリアルの参照
-let boidLODs = [];            // 個別描画用 LOD
-let positionsCopy = null;
-let orientationsCopy = null;
 
 // LOD用ジオメトリ・マテリアルを使い回す
 const boidGeometryHigh = new THREE.SphereGeometry(1, 8, 8);
@@ -657,14 +644,14 @@ let originalLowMat = null;
 let lastShowUnitColors = false;
 
 function initInstancedBoids(count) {
-  disposeBoidLODs();
   if (!boidModel.children || !boidModel.children[0]) {
     console.error('Boid model does not have valid children.');
     return;
   }
 
   // 既存のメッシュを削除
-  disposeInstancedMeshes();
+  if (instancedMeshHigh) scene.remove(instancedMeshHigh);
+  if (instancedMeshLow) scene.remove(instancedMeshLow);
   // InstancedMeshを作成（最初はvertexColors無効でテクスチャ表示）
   const highMaterial = originalMaterial.clone();
   highMaterial.vertexColors = false; // 最初はテクスチャ表示
@@ -705,59 +692,6 @@ function initInstancedBoids(count) {
 }
 
 
-
-function disposeInstancedMeshes() {
-  if (instancedMeshHigh) {
-    scene.remove(instancedMeshHigh);
-    instancedMeshHigh = null;
-  }
-  if (instancedMeshLow) {
-    scene.remove(instancedMeshLow);
-    instancedMeshLow = null;
-  }
-}
-
-function disposeBoidLODs() {
-  if (!boidLODs.length) return;
-  for (const lod of boidLODs) {
-    scene.remove(lod);
-  }
-  boidLODs = [];
-}
-
-function initBoidLODs(count) {
-  disposeInstancedMeshes();
-  disposeBoidLODs();
-  for (let i = 0; i < count; i++) {
-    const lod = new THREE.LOD();
-
-    const meshHigh = new THREE.Mesh(boidGeometryHigh, boidMaterial);
-    meshHigh.castShadow = !isMobileDevice();
-    meshHigh.receiveShadow = !isMobileDevice();
-  meshHigh.scale.set(0.5, 0.5, 2.0);
-
-    const meshLow = new THREE.Mesh(boidGeometryLow, boidMaterial);
-    meshLow.castShadow = !isMobileDevice();
-    meshLow.receiveShadow = !isMobileDevice();
-  meshLow.scale.set(0.5, 0.5, 2.0);
-
-    lod.addLevel(meshHigh, 0);
-    lod.addLevel(meshLow, 100);
-
-    scene.add(lod);
-    boidLODs.push(lod);
-  }
-}
-
-function initBoidVisuals(count) {
-  if (!scene) return;
-  if (useInstancedRendering.value) {
-    if (!boidModel || !boidModel.children || !boidModel.children[0]) return;
-    initInstancedBoids(count);
-  } else {
-    initBoidLODs(count);
-  }
-}
 
 // 初期化時のコールバック（頻度が低いため匿名関数でも問題なし）
 function loadBoidModel(callback) {
@@ -993,26 +927,10 @@ function animate() {
   if (!paused.value) update(deltaTime);
   const count = boidCount();
   const heapF32 = wasmModule.HEAPF32.buffer;
-  const positionsView = new Float32Array(heapF32, posPtr(), count * 3);
-  const orientationsView = new Float32Array(heapF32, oriPtr(), count * 4);
-
-  if (!useZeroCopyBuffers.value) {
-    if (!positionsCopy || positionsCopy.length !== positionsView.length) {
-      positionsCopy = new Float32Array(positionsView.length);
-    }
-    positionsCopy.set(positionsView);
-
-    if (!orientationsCopy || orientationsCopy.length !== orientationsView.length) {
-      orientationsCopy = new Float32Array(orientationsView.length);
-    }
-    orientationsCopy.set(orientationsView);
-  }
-
-  const positions = useZeroCopyBuffers.value ? positionsView : positionsCopy;
-  const orientations = useZeroCopyBuffers.value ? orientationsView : orientationsCopy;
+  const positions = new Float32Array(heapF32, posPtr(), count * 3);
+  const orientations = new Float32Array(heapF32, oriPtr(), count * 4);
   const dummy = new THREE.Object3D();
   const camPos = camera.position;
-  const hiddenElements = hiddenInstanceMatrix.elements;
 
   updateCameraFollow(positions, orientations);
 
@@ -1077,7 +995,6 @@ function animate() {
     dummy.position.fromArray(positions, i * 3);
     dummy.quaternion.fromArray(orientations, i * 4);
     dummy.updateMatrix();
-    const matrixElems = dummy.matrix.elements;
 
     // LOD判定の最適化
     let useHigh;
@@ -1090,22 +1007,12 @@ function animate() {
     }
 
     // マトリクスを設定
-    if (isInstanced) {
-      const base = i * 16;
-      if (useHigh) {
-        highMatrixArray.set(matrixElems, base);
-        lowMatrixArray.set(hiddenElements, base);
-      } else {
-        highMatrixArray.set(hiddenElements, base);
-        lowMatrixArray.set(matrixElems, base);
-      }
-    } else if (boidLODs[i]) {
-      boidLODs[i].position.copy(dummy.position);
-      boidLODs[i].quaternion.copy(dummy.quaternion);
-      boidLODs[i].updateMatrix();
-      if (camera) {
-        boidLODs[i].update(camera);
-      }
+    if (useHigh) {
+      activeMeshHigh.setMatrixAt(i, dummy.matrix);
+      activeMeshLow.setMatrixAt(i, hiddenInstanceMatrix);
+    } else {
+      activeMeshHigh.setMatrixAt(i, hiddenInstanceMatrix);
+      activeMeshLow.setMatrixAt(i, dummy.matrix);
     }
 
     // 捕食者の特別表示（最適化：事前計算されたルックアップを使用）
@@ -1157,10 +1064,8 @@ function animate() {
   lastShowUnitColors = showUnitColors.value;
 
   // マトリクスの更新
-  if (isInstanced) {
-    activeMeshHigh.instanceMatrix.needsUpdate = true;
-    activeMeshLow.instanceMatrix.needsUpdate = true;
-  }
+  activeMeshHigh.instanceMatrix.needsUpdate = true;
+  activeMeshLow.instanceMatrix.needsUpdate = true;
 
   controls.update();
 
@@ -1243,7 +1148,7 @@ function startSimulation() {
   // callInitBoids に渡す（この vector は C++ 側で vector<SpeciesParams> になる）
   wasmModule.callInitBoids(vector, 1, 3, 0.25);
   build(16, 0);
-  initBoidVisuals(calculateTotalBoidCount(settings));
+  initInstancedBoids(calculateTotalBoidCount(settings));
   animate();
 }
 
@@ -1289,8 +1194,6 @@ onBeforeUnmount(() => {
     stats.dom.parentNode.removeChild(stats.dom);
   }
   stats = null;
-  disposeInstancedMeshes();
-  disposeBoidLODs();
   stopMemoryMonitoring();
 });
 
@@ -1386,29 +1289,13 @@ watch(
   { deep: true } // 深い変更も監視
 );
 
-watch(useInstancedRendering, () => {
-  positionsCopy = null;
-  orientationsCopy = null;
-  const currentCount = boidCount();
-  if (currentCount > 0) {
-    initBoidVisuals(currentCount);
-  }
-});
-
-watch(useZeroCopyBuffers, () => {
-  positionsCopy = null;
-  orientationsCopy = null;
-});
-
 // flockSize変更のハンドラ関数（匿名関数を避けてパフォーマンス改善）
 function handleFlockSizeChange(newSize) {
   if (setFlockSize) {
     // flockSize変更時
     setFlockSize(newSize, 40, 0.25);
     // Three.js 側の初期化
-    initBoidVisuals(newSize);
-    positionsCopy = null;
-    orientationsCopy = null;
+    initInstancedBoids(newSize);
   }
 }
 
