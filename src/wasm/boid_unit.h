@@ -28,7 +28,7 @@ public:
 
     std::vector<BoidUnit *> children;
     glm::vec3 center{}, averageVelocity{};
-    float radius = 0.0f;
+    glm::vec3 boundsMin{0.0f}, boundsMax{0.0f};
     int level = 0;
     int frameCount = 0;
 
@@ -60,6 +60,7 @@ public:
     static glm::quat dirToQuatRollZero(const glm::vec3 &forward);
     void applyPredatorInfluence(int gIdx, glm::vec3 &acceleration, const glm::vec3 &position);
     static float easeOut(float t);
+    float boundingRadius() const;
 };
 
 void printTree(const BoidUnit *node, int depth = 0);

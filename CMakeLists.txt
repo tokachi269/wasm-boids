@@ -93,8 +93,8 @@ set(EMCC_LINK_FLAGS_RELEASE
 set(COMMON_SOURCES
     src/wasm/boid_factory.cpp
     src/wasm/entry.cpp
-    src/wasm/boid_unit.cpp
     src/wasm/boids_tree.cpp
+    src/wasm/dynamic_bvh.cpp
     src/wasm/main.cpp
 )
 

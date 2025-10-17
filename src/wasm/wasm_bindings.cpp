@@ -71,16 +71,9 @@ value_object<SpeciesParams>("SpeciesParams")
         .function("getBoidCount", &BoidTree::getBoidCount)
         .function("initializeBoids", &BoidTree::initializeBoids)
         .function("getGlobalSpeciesParams", &BoidTree::getGlobalSpeciesParams)
-        .function("setGlobalSpeciesParams", &BoidTree::setGlobalSpeciesParams)
-        .property("root", &BoidTree::root, allow_raw_pointers());
-
-    class_<BoidUnit>("BoidUnit")
-        .property("center", &BoidUnit::center)
-        .property("radius", &BoidUnit::radius)
-        .property("children", &BoidUnit::children, allow_raw_pointers());
+        .function("setGlobalSpeciesParams", &BoidTree::setGlobalSpeciesParams);
 
     register_vector<Boid>("VectorBoid");
-    register_vector<BoidUnit *>("VectorBoidUnit");
     register_vector<SpeciesParams>("VectorSpeciesParams");
 
     function("setGlobalSpeciesParamsFromJS", &setGlobalSpeciesParamsFromJS);

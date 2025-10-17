@@ -3,6 +3,7 @@
 #include "pool_accessor.h"
 #include <algorithm>
 #include <future>
+#include <limits>
 #include <glm/glm.hpp>
 #include <glm/gtc/random.hpp>
 #include <glm/gtx/norm.hpp>
@@ -203,53 +204,49 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
  */
 void BoidUnit::computeBoundingSphere() {
   if (isBoidUnit()) {
-    if (indices.empty())
+    if (indices.empty()) {
+      center = glm::vec3(0.0f);
+      boundsMin = glm::vec3(0.0f);
+      boundsMax = glm::vec3(0.0f);
       return;
-
-    // 中心を計算
-    center = glm::vec3(0.0f);
-    for (int gIdx : indices)
-      center += buf->positions[gIdx];
-    center /= static_cast<float>(indices.size());
-
-    // 平均距離と分散を計算
-    float sum = 0.0f, sum2 = 0.0f;
-    for (int gIdx : indices) {
-      float d = glm::distance(center, buf->positions[gIdx]);
-      sum += d;
-      sum2 += d * d;
     }
-    float mean = sum / static_cast<float>(indices.size());
-    float var = sum2 / static_cast<float>(indices.size()) - mean * mean;
-    float stddev = var > 0.0f ? std::sqrt(var) : 0.0f;
 
-    // 平均 + α × 標準偏差（α = 1.0）で半径を決定
-    radius = mean + 1.0f * stddev;
-  } else {
-    if (children.empty())
-      return; // 子ノードの中心を計算 - パフォーマンス最適化
+    // AABB を求め、中心を更新
+    glm::vec3 minPos(std::numeric_limits<float>::max());
+    glm::vec3 maxPos(std::numeric_limits<float>::lowest());
     center = glm::vec3(0.0f);
+    for (int gIdx : indices) {
+      glm::vec3 pos = buf->positions[gIdx];
+      center += pos;
+      minPos = glm::min(minPos, pos);
+      maxPos = glm::max(maxPos, pos);
+    }
+    center /= static_cast<float>(indices.size());
+    boundsMin = minPos;
+    boundsMax = maxPos;
+  } else {
+    if (children.empty()) {
+      center = glm::vec3(0.0f);
+      boundsMin = glm::vec3(0.0f);
+      boundsMax = glm::vec3(0.0f);
+      return;
+    }
+
+    center = glm::vec3(0.0f);
+    glm::vec3 minPos(std::numeric_limits<float>::max());
+    glm::vec3 maxPos(std::numeric_limits<float>::lowest());
     const size_t childrenSize = children.size();
     const BoidUnit *const *childrenData = children.data();
 
     for (size_t i = 0; i < childrenSize; ++i) {
-      center += childrenData[i]->center;
+      const BoidUnit *child = childrenData[i];
+      center += child->center;
+      minPos = glm::min(minPos, child->boundsMin);
+      maxPos = glm::max(maxPos, child->boundsMax);
     }
     center /= static_cast<float>(childrenSize);
-
-    // 子ノード中心までの平均距離 + 子ノード半径 - パフォーマンス最適化
-    float sum = 0.0f, sum2 = 0.0f;
-    for (size_t i = 0; i < childrenSize; ++i) {
-      const BoidUnit *child = childrenData[i];
-      float d = glm::distance(center, child->center) + child->radius;
-      sum += d;
-      sum2 += d * d;
-    }
-    float mean = sum / static_cast<float>(childrenSize);
-    float var = sum2 / static_cast<float>(childrenSize) - mean * mean;
-    float stddev = var > 0.0f ? std::sqrt(var) : 0.0f;
-
-    radius = mean + 1.0f * stddev;
+    boundsMin = minPos;
+    boundsMax = maxPos;
   }
 }
 const int targetIndex = 50; // ログを出力する特定の Boid のインデックス
@@ -531,6 +528,10 @@ void BoidUnit::updateRecursive(float dt) {
 inline float BoidUnit::easeOut(float t) {
   // イージング関数 (ease-out)
   return t * t * (3.0f - 2.0f * t);
+}
+float BoidUnit::boundingRadius() const {
+  glm::vec3 halfExtents = 0.5f * (boundsMax - boundsMin);
+  return glm::length(halfExtents);
 }
 inline glm::quat BoidUnit::dirToQuatRollZero(const glm::vec3 &forward) {
   glm::vec3 f = glm::normalize(forward);

@@ -102,7 +102,7 @@ function fetchTreeStructure() {
 }
 
 function getDefaultSettings() {
-  const boidCount = isMobileDevice() ? 3000 : 10000;
+  const boidCount = isMobileDevice() ? 3000 : 200;
 
   return [{
     species: 'Boids',         // 種族名
@@ -1030,7 +1030,7 @@ function animate() {
   if (!isInstanced && boidLODs.length !== count) {
     initBoidLODs(count);
   }
-
+  
   // 捕食者マーカーの最適化：5フレームに1回のみ更新
   if (frameCounter - lastPredatorUpdateFrame >= PREDATOR_UPDATE_INTERVAL) {
     const predatorCount = settings.filter(s => s.isPredator).reduce((total, s) => total + s.count, 0);

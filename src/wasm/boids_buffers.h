@@ -3,6 +3,7 @@
 #include <unordered_map>
 #include "boid.h"
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <boost/align/aligned_allocator.hpp>
 template <typename T>
 using A16 = boost::alignment::aligned_allocator<T, 16>;
@@ -28,6 +29,7 @@ struct SoABuffers
     // 各BoidのcohesionMemoriesとactiveNeighbors（SOA形式）
     std::vector<std::vector<float>> boidCohesionMemories;  // dt累積（-1.0fで未使用）
     std::vector<std::bitset<16>> boidActiveNeighbors;      // 使用中slotのインデックス
+    std::vector<std::vector<int>> boidNeighborSlots;       // slot -> neighbor boid index
 
     void reserveAll(std::size_t n)
     {
@@ -45,6 +47,7 @@ struct SoABuffers
         predatorInfluences.reserve(n);
         boidCohesionMemories.reserve(n);
         boidActiveNeighbors.reserve(n);
+        boidNeighborSlots.reserve(n);
     }
 
     // Boid 数に合わせてフラグをクリア/サイズ調整
@@ -64,5 +67,6 @@ struct SoABuffers
         predatorInfluences.resize(n, glm::vec3(0.0f));
         boidCohesionMemories.resize(n);
         boidActiveNeighbors.resize(n);
+        boidNeighborSlots.resize(n);
     }
 };
