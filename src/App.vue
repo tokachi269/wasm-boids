@@ -40,6 +40,14 @@
                 Unit色分け
               </label>
               <label style="margin-left:1em;">
+                <input type="checkbox" v-model="enableTailAnimation" />
+                尾のくねり
+              </label>
+              <label style="margin-left:1em;">
+                <input type="checkbox" v-model="enableTailOnLod" />
+                LODもくねり
+              </label>
+              <label style="margin-left:1em;">
                 表示レイヤ下限: <input type="range" min="1" max="20" v-model="unitLayer" />
                 {{ unitLayer }}
               </label>
@@ -193,6 +201,8 @@ let scene, camera, renderer, controls, composer;
 const paused = ref(false);
 
 const useInstancedRendering = ref(true);
+const enableTailAnimation = ref(true);
+const enableTailOnLod = ref(true);
 
 // WebGL復旧機能の状態管理
 let rendererRetryTimer = null;
@@ -225,6 +235,38 @@ const rendererConfigs = [
 let simulationPending = false;
 let simulationInitialized = false;
 let pendingSimulationReset = true;
+
+// 尾のアニメーション管理オブジェクト
+const tailAnimation = {
+  baseHighMaterial: null,        // 元の高品質マテリアル
+  baseLowMaterial: null,         // 元のLODマテリアル
+  animatedHighMaterial: null,    // 尾アニメ付き高品質マテリアル
+  animatedLowMaterial: null,     // 尾アニメ付きLODマテリアル
+  applyToLod: true,              // LODメッシュにも適用するかのフラグ
+  phaseAttribute: null,          // 各インスタンスの位相オフセット
+  speedAttribute: null,          // 各インスタンスの速度
+  turnAttribute: null,           // 各インスタンスの旋回量
+  previousVelocities: null,      // 前フレームの速度（旋回計算用）
+  smoothedSpeed: null,           // 速度のスムージング用バッファ
+  smoothedTurn: null,            // 旋回量のスムージング用バッファ
+  elapsedTime: 0,                // 尾アニメーション用の累積時間（停止時も保持）
+  uniforms: {
+    uTailTime: { value: 0 },            // 時間（波形生成用）
+    uTailAmplitude: { value: 0.08 },    // 振幅（全身の揺れ幅）
+    uTailFrequency: { value: 14.0 },    // 周波数（くねり速度）
+    uTailPhaseStride: { value: 4.0 },   // 体の長さ方向の位相差（波長に相当）
+    uTailTurnStrength: { value: 0.1 },  // 旋回時の強度
+    uTailSpeedScale: { value: 3 },      // 速度による影響度
+    uTailRight: { value: new THREE.Vector3(1, 0, 0) },     // 尾アニメの右方向ベクトル
+    uTailForward: { value: new THREE.Vector3(0, 1, 0) },   // 尾アニメの進行方向ベクトル
+    uTailUp: { value: new THREE.Vector3(0, 0, 1) },        // 尾アニメの上方向ベクトル
+    uTailEnable: { value: 0 }           // アニメーション有効/無効
+  },
+  smoothing: {
+    speed: 0.25,  // 速度の追従係数（0に近いほど滑らか）
+    turn: 0.1    // 旋回の追従係数
+  }
+};
 
 const showUnits = ref(true);
 const showUnitSpheres = ref(false);
@@ -311,6 +353,293 @@ function returnToPool(pool, obj) {
 // マテリアル変数をグローバルスコープで定義
 let boidMaterial = null;
 let boidLodMaterial = null;
+
+// 魚のジオメトリに体の位置座標属性を追加する関数
+function augmentFishGeometry(geometry) {
+  if (!geometry) return geometry;
+  if (geometry.getAttribute('aBodyCoord')) return geometry; // 既に追加済み
+
+  const cloned = geometry.clone();
+  cloned.computeBoundingBox();
+  const bbox = cloned.boundingBox;
+  const pos = cloned.attributes.position;
+  const count = pos.count;
+
+  const rangeX = bbox.max.x - bbox.min.x;
+  const rangeY = bbox.max.y - bbox.min.y;
+  const rangeZ = bbox.max.z - bbox.min.z;
+
+  let axisIndex = 0;
+  let axisRange = rangeX;
+  if (rangeY >= axisRange && rangeY >= rangeZ) {
+    axisIndex = 1;
+    axisRange = rangeY;
+  } else if (rangeZ >= axisRange && rangeZ >= rangeY) {
+    axisIndex = 2;
+    axisRange = rangeZ;
+  }
+
+  const axisMin = axisIndex === 0 ? bbox.min.x : axisIndex === 1 ? bbox.min.y : bbox.min.z;
+  const axisMax = axisIndex === 0 ? bbox.max.x : axisIndex === 1 ? bbox.max.y : bbox.max.z;
+  const range = Math.max(1e-4, axisMax - axisMin);
+
+  const bodyCoord = new Float32Array(count);
+  for (let i = 0; i < count; i++) {
+    let coordSource;
+    if (axisIndex === 0) {
+      coordSource = pos.getX(i);
+    } else if (axisIndex === 1) {
+      coordSource = pos.getY(i);
+    } else {
+      coordSource = pos.getZ(i);
+    }
+    // 魚の頭が-Y方向なので、座標を反転（頭=0、尾=1）
+    const coord = 1 - (coordSource - axisMin) / range;
+    bodyCoord[i] = THREE.MathUtils.clamp(coord, 0, 1);
+  }
+
+  const forward = new THREE.Vector3(axisIndex === 0 ? 1 : 0, axisIndex === 1 ? 1 : 0, axisIndex === 2 ? 1 : 0);
+  const upRef = Math.abs(forward.dot(new THREE.Vector3(0, 1, 0))) > 0.999 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 1, 0);
+  const right = new THREE.Vector3().crossVectors(upRef, forward).normalize();
+  const up = new THREE.Vector3().crossVectors(forward, right).normalize();
+
+  cloned.userData.tailBasis = {
+    forward: forward.toArray(),
+    right: right.toArray(),
+    up: up.toArray(),
+    axisIndex
+  };
+
+  cloned.setAttribute('aBodyCoord', new THREE.BufferAttribute(bodyCoord, 1));
+  return cloned;
+}
+
+// 尾のアニメーション用カスタムマテリアルを作成する関数
+function createTailMaterial(sourceMaterial) {
+  const material = sourceMaterial.clone();
+  material.onBeforeCompile = (shader) => {
+    // シェーダにuniformを追加
+    shader.uniforms.uTailTime = tailAnimation.uniforms.uTailTime;
+    shader.uniforms.uTailAmplitude = tailAnimation.uniforms.uTailAmplitude;
+    shader.uniforms.uTailFrequency = tailAnimation.uniforms.uTailFrequency;
+    shader.uniforms.uTailPhaseStride = tailAnimation.uniforms.uTailPhaseStride;
+    shader.uniforms.uTailTurnStrength = tailAnimation.uniforms.uTailTurnStrength;
+    shader.uniforms.uTailSpeedScale = tailAnimation.uniforms.uTailSpeedScale;
+    shader.uniforms.uTailRight = tailAnimation.uniforms.uTailRight;
+    shader.uniforms.uTailForward = tailAnimation.uniforms.uTailForward;
+    shader.uniforms.uTailUp = tailAnimation.uniforms.uTailUp;
+    shader.uniforms.uTailEnable = tailAnimation.uniforms.uTailEnable;
+
+    // 頂点シェーダにuniformとattributeを追加
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <common>',
+      `#include <common>
+      uniform float uTailTime;
+      uniform float uTailAmplitude;
+      uniform float uTailFrequency;
+      uniform float uTailPhaseStride;
+      uniform float uTailTurnStrength;
+      uniform float uTailSpeedScale;
+      uniform vec3 uTailRight;
+      uniform vec3 uTailForward;
+      uniform vec3 uTailUp;
+      uniform float uTailEnable;
+      attribute float aBodyCoord;
+      attribute float instanceTailPhase;
+      attribute float instanceTailSpeed;
+      attribute float instanceTailTurn;
+      `
+    );
+
+    // 頂点変換処理に尾のアニメーションを追加（メイン描画用）
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <begin_vertex>',
+      `#include <begin_vertex>
+      if (uTailEnable > 0.5) {
+        vec3 originalPos = transformed;
+        vec3 right = normalize(uTailRight);
+        vec3 forward = normalize(uTailForward);
+        vec3 up = normalize(uTailUp);
+        
+        float localX = dot(originalPos, right);
+        float localY = dot(originalPos, forward);
+        float localZ = dot(originalPos, up);
+        
+        float bodyCoord = clamp(aBodyCoord, 0.0, 1.0);
+        float tailWeight = smoothstep(0.0, 0.35, bodyCoord);
+        float speedFactor = clamp(instanceTailSpeed * uTailSpeedScale, 0.0, 2.0);
+        
+        // 波形計算
+        float phase = instanceTailPhase + uTailTime * uTailFrequency;
+        float wavePhase = phase + bodyCoord * uTailPhaseStride;
+        float wag = sin(wavePhase) * uTailAmplitude;
+        float turnOffset = instanceTailTurn * uTailTurnStrength;
+        float motion = wag * (0.4 + 0.6 * speedFactor) + turnOffset;
+        
+        // 先端部分で揺れを減衰（0.8以上で減衰開始）
+        float tipDamping = 1.0 - smoothstep(0.7, 1.0, bodyCoord) * 0.3;
+        float bendStrength = mix(0.02, 1.0, tailWeight) * tipDamping;
+        
+        // 回転変形
+        float bendAngle = motion * bendStrength;
+        float s = sin(bendAngle);
+        float c = cos(bendAngle);
+        float rotX = localX * c - localY * s;
+        float rotY = localX * s + localY * c;
+        
+        // 横揺れ
+        float sway = motion * 0.4 * tipDamping;
+        rotX += sway * (0.05 + 0.95 * bodyCoord);
+        
+        vec3 rotated = right * rotX + forward * rotY + up * localZ;
+        transformed = rotated;
+      }
+      `
+    );
+
+    // 深度パス（SSAO、シャドウマップ用）での頂点変換
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <project_vertex>',
+      `#include <project_vertex>
+      // 深度パス用の尾アニメーション変形
+      #ifdef DEPTH_PACKING
+      if (uTailEnable > 0.5) {
+        vec3 viewPos = mvPosition.xyz;
+        mat3 normalMatrix3 = mat3(normalMatrix);
+        vec3 right = normalize(normalMatrix3 * uTailRight);
+        vec3 forward = normalize(normalMatrix3 * uTailForward);
+        vec3 up = normalize(normalMatrix3 * uTailUp);
+        
+        float localX = dot(viewPos, right);
+        float localY = dot(viewPos, forward);
+        float localZ = dot(viewPos, up);
+        
+        float bodyCoord = clamp(aBodyCoord, 0.0, 1.0);
+        float tailWeight = smoothstep(0.0, 0.35, bodyCoord);
+        float speedFactor = clamp(instanceTailSpeed * uTailSpeedScale, 0.0, 2.0);
+        
+        // 波形計算
+        float phase = instanceTailPhase + uTailTime * uTailFrequency;
+        float wavePhase = phase + bodyCoord * uTailPhaseStride;
+        float wag = sin(wavePhase) * uTailAmplitude;
+        float turnOffset = instanceTailTurn * uTailTurnStrength;
+        float motion = wag * (0.4 + 0.6 * speedFactor) + turnOffset;
+        
+        // 先端部分で揺れを減衰（深度パス用）
+        float tipDamping = 1.0 - smoothstep(0.7, 1.0, bodyCoord) * 0.3;
+        float bendStrength = mix(0.02, 1.0, tailWeight) * tipDamping;
+        
+        // 回転変形
+        float bendAngle = motion * bendStrength;
+        float s = sin(bendAngle);
+        float c = cos(bendAngle);
+        float rotX = localX * c - localY * s;
+        float rotY = localX * s + localY * c;
+        
+        // 横揺れ
+        float sway = motion * 0.4 * tipDamping;
+        rotX += sway * (0.05 + 0.95 * bodyCoord);
+        
+        vec3 rotated = right * rotX + forward * rotY + up * localZ;
+        mvPosition.xyz = rotated;
+        gl_Position = projectionMatrix * mvPosition;
+      }
+      #endif
+      `
+    );
+  };
+  return material;
+}
+
+// 尾のアニメーション用インスタンス属性を初期化する関数
+function ensureTailAttributes(count) {
+  // 各インスタンスにランダムな位相オフセットを設定
+  const phaseArray = new Float32Array(count);
+  for (let i = 0; i < count; i++) {
+    phaseArray[i] = Math.random() * Math.PI * 2;
+  }
+  
+  // インスタンス属性を作成
+  tailAnimation.phaseAttribute = new THREE.InstancedBufferAttribute(phaseArray, 1);
+  tailAnimation.speedAttribute = new THREE.InstancedBufferAttribute(new Float32Array(count), 1);
+  tailAnimation.turnAttribute = new THREE.InstancedBufferAttribute(new Float32Array(count), 1);
+  
+  // 動的更新を有効にする
+  tailAnimation.speedAttribute.setUsage(THREE.DynamicDrawUsage);
+  tailAnimation.turnAttribute.setUsage(THREE.DynamicDrawUsage);
+  
+  // 前フレームの速度バッファを初期化
+  tailAnimation.previousVelocities = new Float32Array(count * 3);
+  tailAnimation.previousVelocities.fill(0);
+  tailAnimation.smoothedSpeed = new Float32Array(count);
+  tailAnimation.smoothedTurn = new Float32Array(count);
+  
+  // 高品質メッシュに属性を追加
+  if (instancedMeshHigh) {
+    instancedMeshHigh.geometry.setAttribute('instanceTailPhase', tailAnimation.phaseAttribute);
+    instancedMeshHigh.geometry.setAttribute('instanceTailSpeed', tailAnimation.speedAttribute);
+    instancedMeshHigh.geometry.setAttribute('instanceTailTurn', tailAnimation.turnAttribute);
+  }
+  
+  // LODメッシュに属性を追加
+  if (instancedMeshLow) {
+    instancedMeshLow.geometry.setAttribute('instanceTailPhase', tailAnimation.phaseAttribute);
+    instancedMeshLow.geometry.setAttribute('instanceTailSpeed', tailAnimation.speedAttribute);
+    instancedMeshLow.geometry.setAttribute('instanceTailTurn', tailAnimation.turnAttribute);
+  }
+  
+  // 更新フラグを設定
+  tailAnimation.phaseAttribute.needsUpdate = true;
+  tailAnimation.speedAttribute.needsUpdate = true;
+  tailAnimation.turnAttribute.needsUpdate = true;
+  tailAnimation.elapsedTime = 0;
+  tailAnimation.uniforms.uTailTime.value = 0;
+}
+
+// ジオメトリから尾アニメーションの基準ベクトルを設定
+function setTailBasisFromGeometry(geometry) {
+  if (!geometry || !geometry.userData?.tailBasis) return;
+  const basis = geometry.userData.tailBasis;
+  if (basis.right) {
+    tailAnimation.uniforms.uTailRight.value.fromArray(basis.right);
+  }
+  if (basis.forward) {
+    tailAnimation.uniforms.uTailForward.value.fromArray(basis.forward);
+  }
+  if (basis.up) {
+    tailAnimation.uniforms.uTailUp.value.fromArray(basis.up);
+  }
+}
+
+// 尾のアニメーションマテリアルの有効/無効を切り替える関数
+function updateTailAnimationMaterials() {
+  const enabled = enableTailAnimation.value && tailAnimation.animatedHighMaterial && instancedMeshHigh;
+  tailAnimation.uniforms.uTailEnable.value = enabled ? 1 : 0;
+  
+  if (!instancedMeshHigh) return;
+  
+  if (enabled) {
+    // アニメーション有効時：カスタムマテリアルに切り替え
+    if (tailAnimation.animatedHighMaterial) {
+      instancedMeshHigh.material = tailAnimation.animatedHighMaterial;
+      instancedMeshHigh.material.needsUpdate = true;
+    }
+    if (instancedMeshLow && tailAnimation.animatedLowMaterial) {
+      instancedMeshLow.material = tailAnimation.animatedLowMaterial;
+      instancedMeshLow.material.needsUpdate = true;
+    }
+  } else {
+    // アニメーション無効時：元のマテリアルに戻す
+    if (tailAnimation.baseHighMaterial) {
+      instancedMeshHigh.material = tailAnimation.baseHighMaterial;
+      instancedMeshHigh.material.needsUpdate = true;
+    }
+    if (instancedMeshLow && tailAnimation.baseLowMaterial) {
+      instancedMeshLow.material = tailAnimation.baseLowMaterial;
+      instancedMeshLow.material.needsUpdate = true;
+    }
+  }
+}
 
 // ツリーの最大深さを計算
 function calcMaxDepth(unit, depth = 0) {
@@ -581,7 +910,7 @@ function initThreeJS({ rebuildScene = false } = {}) {
       dirLight.shadow.camera.right = 100;
       dirLight.shadow.camera.top = 100;
       dirLight.shadow.camera.bottom = -100;
-      dirLight.shadow.camera.near = 1;
+      dirLight.shadow.camera.near = 0.2;
       dirLight.shadow.camera.far = 1000;
       dirLight.shadow.mapSize.width = 2048;
       dirLight.shadow.mapSize.height = 2048;
@@ -761,6 +1090,21 @@ function initInstancedBoids(count) {
   scene.add(instancedMeshHigh);
   scene.add(instancedMeshLow);
 
+  if (tailAnimation.animatedHighMaterial) {
+    tailAnimation.animatedHighMaterial.dispose();
+  }
+  if (tailAnimation.animatedLowMaterial) {
+    tailAnimation.animatedLowMaterial.dispose();
+  }
+  tailAnimation.baseHighMaterial = instancedMeshHigh.material;
+  tailAnimation.baseLowMaterial = instancedMeshLow.material;
+  setTailBasisFromGeometry(instancedMeshHigh.geometry);
+  setTailBasisFromGeometry(instancedMeshLow.geometry);
+  tailAnimation.animatedHighMaterial = createTailMaterial(instancedMeshHigh.material);
+  tailAnimation.animatedLowMaterial = createTailMaterial(instancedMeshLow.material);
+  ensureTailAttributes(count);
+  updateTailAnimationMaterials();
+
   console.log('InstancedMeshes created with vertex colors enabled');
 }
 
@@ -861,6 +1205,7 @@ function loadBoidModel(callback) {
       boidModel = gltf.scene;
       boidModel.traverse((child) => {
         if (child.isMesh) {
+          child.geometry = augmentFishGeometry(child.geometry);
           child.material = boidMaterial;
         }
       });
@@ -876,6 +1221,7 @@ function loadBoidModel(callback) {
       boidModelLod = gltf.scene;
       boidModelLod.traverse((child) => {
         if (child.isMesh) {
+          child.geometry = augmentFishGeometry(child.geometry);
           child.material = boidLodMaterial;
         }
       });
@@ -1023,13 +1369,45 @@ function animate() {
   const heapF32 = wasmModule.HEAPF32.buffer;
   const positions = new Float32Array(heapF32, posPtr(), count * 3);
   const orientations = new Float32Array(heapF32, oriPtr(), count * 4);
+  const velocities = new Float32Array(heapF32, velPtr(), count * 3);
   const dummy = new THREE.Object3D();
   const camPos = camera.position;
+
+  const isInstanced = useInstancedRendering.value && instancedMeshHigh && instancedMeshLow;
+
+  // 尾のアニメーション時間を更新
+  if (!paused.value) {
+    tailAnimation.elapsedTime += deltaTime;
+  }
+  tailAnimation.uniforms.uTailTime.value = tailAnimation.elapsedTime;
+
+  // 尾アニメーションの利用可否を判定
+  const tailArraysAvailable = enableTailAnimation.value && isInstanced && tailAnimation.speedAttribute && tailAnimation.turnAttribute;
+  const tailUpdateEnabled = tailArraysAvailable && !paused.value;
+  tailAnimation.uniforms.uTailEnable.value = tailArraysAvailable ? 1 : 0;
+  
+  // 尾アニメーション用バッファを取得
+  let tailSpeedArray = null;
+  let tailTurnArray = null;
+  let prevVelocities = null;
+  let smoothedSpeedBuffer = null;
+  let smoothedTurnBuffer = null;
+  let speedSmoothing = 1;
+  let turnSmoothing = 1;
+  if (tailArraysAvailable) {
+    tailSpeedArray = tailAnimation.speedAttribute.array;
+    tailTurnArray = tailAnimation.turnAttribute.array;
+    prevVelocities = tailAnimation.previousVelocities;
+    smoothedSpeedBuffer = tailAnimation.smoothedSpeed;
+    smoothedTurnBuffer = tailAnimation.smoothedTurn;
+    speedSmoothing = THREE.MathUtils.clamp(tailAnimation.smoothing?.speed ?? 1, 0, 1);
+    turnSmoothing = THREE.MathUtils.clamp(tailAnimation.smoothing?.turn ?? 1, 0, 1);
+  }
+  let tailDataDirty = false; // バッファ更新フラグ
 
   updateCameraFollow(positions, orientations);
 
   // 使用するメッシュを決定（早期宣言）
-  const isInstanced = useInstancedRendering.value && instancedMeshHigh && instancedMeshLow;
   let activeMeshHigh = isInstanced ? instancedMeshHigh : null;
   let activeMeshLow = isInstanced ? instancedMeshLow : null;
   let highMatrixArray = null;
@@ -1119,6 +1497,82 @@ function animate() {
       marker.quaternion.copy(dummy.quaternion);
       predatorIndex++;
     }
+
+    // 現在フレームの速度ベクトルを取得
+    const vBase = i * 3;
+    const vx = velocities[vBase];
+    const vy = velocities[vBase + 1];
+    const vz = velocities[vBase + 2];
+    
+    // 前フレームの速度ベクトルを取得（旋回量計算用）
+    const hasPrevVelocityBuffer = tailArraysAvailable && !!prevVelocities;
+    let prevVx = 0;
+    let prevVy = 0;
+    let prevVz = 0;
+    if (hasPrevVelocityBuffer) {
+      prevVx = prevVelocities[vBase];
+      prevVy = prevVelocities[vBase + 1];
+      prevVz = prevVelocities[vBase + 2];
+    }
+
+    // 尾のアニメーションに参加するかを判定（高品質またはLOD適用時）
+    const participatesInTail = tailArraysAvailable && (useHigh || tailAnimation.applyToLod);
+    if (participatesInTail && tailUpdateEnabled) {
+      // 現在の速度を計算
+      const rawSpeed = Math.sqrt(vx * vx + vy * vy + vz * vz);
+      
+      // 旋回量を計算（前フレームとの向きの変化から角速度を求める）
+      let turnValue = 0;
+      if (hasPrevVelocityBuffer) {
+        const prevLen = Math.hypot(prevVx, prevVz); // 前フレームの水平速度
+        const currLen = Math.hypot(vx, vz);         // 現在フレームの水平速度
+        if (currLen > 1e-4 && prevLen > 1e-4) {
+          // 正規化された速度ベクトルで角度差を計算
+          const prevX = prevVx / prevLen;
+          const prevZ = prevVz / prevLen;
+          const currX = vx / currLen;
+          const currZ = vz / currLen;
+          const det = prevX * currZ - prevZ * currX; // 外積のY成分（回転方向）
+          const dot = THREE.MathUtils.clamp(prevX * currX + prevZ * currZ, -1, 1); // 内積
+          const angle = Math.atan2(det, dot);        // 角度差
+          const dt = Math.max(deltaTime, 1e-3);      // フレーム間時間
+          turnValue = THREE.MathUtils.clamp(angle / dt, -2.5, 2.5); // 角速度に変換
+        }
+      }
+
+      // スムージング処理（カクつきを抑えるため前フレームとの線形補間）
+      const previousSpeed = smoothedSpeedBuffer ? smoothedSpeedBuffer[i] : rawSpeed;
+      const previousTurn = smoothedTurnBuffer ? smoothedTurnBuffer[i] : turnValue;
+      const smoothedSpeed = THREE.MathUtils.lerp(previousSpeed, rawSpeed, speedSmoothing);
+      const smoothedTurn = THREE.MathUtils.lerp(previousTurn, turnValue, turnSmoothing);
+
+      // スムージング用バッファを更新
+      if (smoothedSpeedBuffer) smoothedSpeedBuffer[i] = smoothedSpeed;
+      if (smoothedTurnBuffer) smoothedTurnBuffer[i] = smoothedTurn;
+
+      // インスタンス属性に反映し、変化があればGPU更新フラグを立てる
+      const prevSpeedAttr = tailSpeedArray[i];
+      const prevTurnAttr = tailTurnArray[i];
+      tailSpeedArray[i] = smoothedSpeed;
+      tailTurnArray[i] = smoothedTurn;
+      if (!tailDataDirty && (Math.abs(prevSpeedAttr - smoothedSpeed) > 1e-4 || Math.abs(prevTurnAttr - smoothedTurn) > 1e-4)) {
+        tailDataDirty = true;
+      }
+
+      // 次フレーム用に現在の速度を保存
+      if (hasPrevVelocityBuffer) {
+        prevVelocities[vBase] = vx;
+        prevVelocities[vBase + 1] = vy;
+        prevVelocities[vBase + 2] = vz;
+      }
+    } else if (participatesInTail && hasPrevVelocityBuffer && !tailUpdateEnabled) {
+      // 停止中でも速度バッファを更新（再生時の初期値として使用）
+      prevVelocities[vBase] = vx;
+      prevVelocities[vBase + 1] = vy;
+      prevVelocities[vBase + 2] = vz;
+      if (smoothedSpeedBuffer) smoothedSpeedBuffer[i] = Math.sqrt(vx * vx + vy * vy + vz * vz);
+      if (smoothedTurnBuffer) smoothedTurnBuffer[i] = 0;
+    }
   }// 頂点カラーの更新（最適化：10フレームに1回のみ）
   if (showUnitColors.value && (frameCounter - lastColorUpdateFrame >= COLOR_UPDATE_INTERVAL)) {
     const mappingPtrValue = boidUnitMappingPtr();
@@ -1160,6 +1614,12 @@ function animate() {
   // マトリクスの更新
   activeMeshHigh.instanceMatrix.needsUpdate = true;
   activeMeshLow.instanceMatrix.needsUpdate = true;
+
+  // 尾のアニメーションバッファが更新されたらGPUに送信
+  if (tailDataDirty) {
+    tailAnimation.speedAttribute.needsUpdate = true;
+    tailAnimation.turnAttribute.needsUpdate = true;
+  }
 
   controls?.update();
 
@@ -1400,6 +1860,15 @@ watch(
   handleSettingsChange,
   { deep: true } // 深い変更も監視
 );
+
+watch(enableTailAnimation, () => {
+  updateTailAnimationMaterials();
+}, { immediate: true });
+
+watch(enableTailOnLod, (value) => {
+  tailAnimation.applyToLod = value;
+  updateTailAnimationMaterials();
+}, { immediate: true });
 
 // flockSize変更のハンドラ関数（匿名関数を避けてパフォーマンス改善）
 function handleFlockSizeChange(newSize) {
