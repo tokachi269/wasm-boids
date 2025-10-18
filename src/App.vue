@@ -192,6 +192,40 @@ let scene, camera, renderer, controls, composer;
 
 const paused = ref(false);
 
+const useInstancedRendering = ref(true);
+
+// WebGL復旧機能の状態管理
+let rendererRetryTimer = null;
+let rendererInitAttempt = 0;
+// 段階的フォールバック設定（モバイル・コンテキストロス対応）
+const rendererConfigs = [
+  (isMobile) => ({
+    antialias: !isMobile,
+    depth: true,
+    alpha: false,
+    powerPreference: isMobile ? 'low-power' : 'high-performance'
+  }),
+  () => ({
+    antialias: false,
+    depth: true,
+    stencil: false,
+    alpha: false,
+    powerPreference: 'low-power'
+  }),
+  () => ({
+    antialias: false,
+    depth: false,
+    stencil: false,
+    alpha: false,
+    powerPreference: 'low-power'
+  })
+];
+
+// シミュレーション初期化の制御フラグ
+let simulationPending = false;
+let simulationInitialized = false;
+let pendingSimulationReset = true;
+
 const showUnits = ref(true);
 const showUnitSpheres = ref(false);
 const showUnitLines = ref(false);
@@ -506,112 +540,151 @@ function updateCameraFollow(positionsArray, orientationsArray) {
   controls.target.lerp(followTargetPosition, 0.2);
 }
 
-function initThreeJS() {
+// WebGLレンダラー初期化（段階的フォールバック対応）
+function initThreeJS({ rebuildScene = false } = {}) {
   const width = window.innerWidth;
-  const height = window.innerHeight; scene = new THREE.Scene();
-  // フォグ（背景と同じ色で境界をなじませる）
-  scene.fog = new THREE.Fog(toHex(OCEAN_COLORS.FOG), 3, 14);
+  const height = window.innerHeight;
+  const isMobile = isMobileDevice();
 
-  camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
-  camera.position.set(2.19, -6.30, 5.76);
-  camera.lookAt(0, 0, 0);
-  camera.position.set(2.19, -5.80, 5.76);
+  // シーン再構築またはコンテキストロス復旧時
+  if (rebuildScene || !scene) {
+    scene = new THREE.Scene();
+    scene.fog = new THREE.Fog(toHex(OCEAN_COLORS.FOG), 3, 14);
 
-  renderer = new THREE.WebGLRenderer({
-    antialias: !isMobileDevice(), // スマホではアンチエイリアスを無効化
-    depth: true, // 深度バッファを有効化
-    powerPreference: isMobileDevice() ? "low-power" : "high-performance"
-  });
-  // スマホ用ピクセル比調整（パフォーマンス向上）
-  renderer.setPixelRatio(isMobileDevice() ? Math.min(window.devicePixelRatio, 2) : window.devicePixelRatio);
-  renderer.setSize(width, height);
-  renderer.shadowMap.enabled = !isMobileDevice(); // スマホでは影を無効化
-  if (!isMobileDevice()) {
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap; // 影を柔らかく（PCのみ）
+    camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
+    camera.position.set(2.19, -5.80, 5.76);
+    camera.lookAt(0, 0, 0);
+
+    const groundGeo = new THREE.PlaneGeometry(100, 100);
+    groundMaterial = createFadeOutGroundMaterial();
+    const ground = new THREE.Mesh(groundGeo, groundMaterial);
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = -7;
+    ground.receiveShadow = true;
+    scene.add(ground);
+
+    createOceanSphere();
+
+    const ambientLight = new THREE.AmbientLight(toHex(OCEAN_COLORS.AMBIENT_LIGHT), 1.3);
+    scene.add(ambientLight);
+
+    const dirLight = new THREE.DirectionalLight(toHex(OCEAN_COLORS.SUN_LIGHT), 23.0);
+    dirLight.position.set(0, 60, 30);
+    dirLight.castShadow = !isMobile;
+
+    const bottomLight = new THREE.DirectionalLight(toHex(OCEAN_COLORS.BOTTOM_LIGHT), 0);
+    bottomLight.position.set(0, -30, 0);
+    scene.add(bottomLight);
+
+    if (!isMobile) {
+      dirLight.shadow.camera.left = -100;
+      dirLight.shadow.camera.right = 100;
+      dirLight.shadow.camera.top = 100;
+      dirLight.shadow.camera.bottom = -100;
+      dirLight.shadow.camera.near = 1;
+      dirLight.shadow.camera.far = 1000;
+      dirLight.shadow.mapSize.width = 2048;
+      dirLight.shadow.mapSize.height = 2048;
+      dirLight.shadow.bias = -0.001;
+      dirLight.shadow.normalBias = 0.01;
+    }
+
+    scene.add(dirLight);
+  } else {
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
   }
-  renderer.outputColorSpace = THREE.SRGBColorSpace; // 色空間を統一
 
-  threeContainer.value.appendChild(renderer.domElement);
+  // 失敗回数に応じて軽量設定に切り替え
+  const configFactory = rendererConfigs[Math.min(rendererInitAttempt, rendererConfigs.length - 1)];
+  const rendererOptions = configFactory(isMobile);
 
-  // WebGLコンテキストロス対策
+  let newRenderer = null;
+  try {
+    newRenderer = new THREE.WebGLRenderer(rendererOptions);
+  } catch (error) {
+    console.warn('WebGLRenderer creation failed:', error);
+    rendererInitAttempt = Math.min(rendererInitAttempt + 1, rendererConfigs.length - 1);
+    scheduleRendererRetry();
+    return false;
+  }
+
+  const gl = newRenderer.getContext();
+  if (!gl) {
+    console.warn('WebGL context could not be created.');
+    newRenderer.dispose();
+    rendererInitAttempt = Math.min(rendererInitAttempt + 1, rendererConfigs.length - 1);
+    scheduleRendererRetry();
+    return false;
+  }
+
+  renderer = newRenderer;
+  if (rendererRetryTimer) {
+    clearTimeout(rendererRetryTimer);
+    rendererRetryTimer = null;
+  }
+
+  const basePixelRatio = isMobile ? Math.min(window.devicePixelRatio, 2) : window.devicePixelRatio;
+  const pixelRatio = rendererInitAttempt === 0 ? basePixelRatio : 1;
+  renderer.setPixelRatio(pixelRatio);
+  renderer.setSize(width, height);
+  // 復旧時は影を無効化してパフォーマンス向上
+  const enableShadows = !isMobile && rendererInitAttempt === 0;
+  renderer.shadowMap.enabled = enableShadows;
+  if (enableShadows) {
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  }
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+  if (threeContainer.value) {
+    threeContainer.value.appendChild(renderer.domElement);
+  }
+
+  lastRendererCanvas = renderer.domElement;
+  lastRendererCanvas.addEventListener('click', handleCanvasClick);
+
   setupWebGLContextLossHandling();
 
-  camera.aspect = width / height;
-  camera.updateProjectionMatrix();
-
+  if (controls) {
+    controls.removeEventListener('start', handleControlsInteractionStart);
+    controls.removeEventListener('end', handleControlsInteractionEnd);
+    controls.dispose();
+  }
   controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.dampingFactor = 0.1;
   controls.addEventListener('start', handleControlsInteractionStart);
   controls.addEventListener('end', handleControlsInteractionEnd);
 
-  lastRendererCanvas = renderer.domElement;
-  lastRendererCanvas.addEventListener('click', handleCanvasClick);
-  const groundGeo = new THREE.PlaneGeometry(100, 100);
-  groundMaterial = createFadeOutGroundMaterial(); // グローバル変数に保存
-  const ground = new THREE.Mesh(groundGeo, groundMaterial);
-  ground.rotation.x = -Math.PI / 2;
-  ground.position.y = -7;
-  ground.receiveShadow = true; // 影を受ける
-  scene.add(ground);
-
-  // 大きなsphereで海中環境を作成
-  createOceanSphere();
-
-  // 海中の環境光（定数使用）
-  const ambientLight = new THREE.AmbientLight(toHex(OCEAN_COLORS.AMBIENT_LIGHT), 1.3);
-  scene.add(ambientLight);
-
-  // メインの太陽光（定数使用、スマホでは影を無効化）
-  const dirLight = new THREE.DirectionalLight(toHex(OCEAN_COLORS.SUN_LIGHT), 23.0);
-  dirLight.position.set(0, 60, 30);
-  dirLight.castShadow = !isMobileDevice(); // スマホでは影を無効化
-
-  // 下からの反射光（定数使用）
-  const bottomLight = new THREE.DirectionalLight(toHex(OCEAN_COLORS.BOTTOM_LIGHT), 0);
-  bottomLight.position.set(0, -30, 0);
-  scene.add(bottomLight);
-
-  // 影カメラの範囲を広げる（PCのみ）
-  if (!isMobileDevice()) {
-    dirLight.shadow.camera.left = -100;
-    dirLight.shadow.camera.right = 100;
-    dirLight.shadow.camera.top = 100;
-    dirLight.shadow.camera.bottom = -100;
-    dirLight.shadow.camera.near = 1;
-    dirLight.shadow.camera.far = 1000;
-
-    // スマホでは影の解像度を下げる
-    dirLight.shadow.mapSize.width = isMobileDevice() ? 512 : 2048;
-    dirLight.shadow.mapSize.height = isMobileDevice() ? 512 : 2048;
-    dirLight.shadow.bias = -0.001;
-    dirLight.shadow.normalBias = 0.01;
-  }
-  scene.add(dirLight);
-  // EffectComposer の初期化（スマホ以外の場合のみ）
-  if (!isMobileDevice()) {
-    // EffectComposer の初期化
+  // 復旧時はポストプロセシングを無効化
+  const enableComposer = !isMobile && rendererInitAttempt === 0;
+  if (enableComposer) {
     composer = new EffectComposer(renderer);
-
-    // RenderPass を追加
     const renderPass = new RenderPass(scene, camera);
     composer.addPass(renderPass);
 
     const ssaoPass = new SSAOPass(scene, camera, width, height);
-    ssaoPass.kernelRadius = 8; // サンプル半径（大きくすると効果が広がる）
-    ssaoPass.minDistance = 0.001; // 最小距離（小さくすると近距離の効果が強調される）
-    ssaoPass.maxDistance = 0.01; // 最大距離（大きくすると遠距離の効果が強調される）
+    ssaoPass.kernelRadius = 8;
+    ssaoPass.minDistance = 0.001;
+    ssaoPass.maxDistance = 0.01;
     composer.addPass(ssaoPass);
 
-    // UnrealBloomPass を追加（任意）
     const bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 1.5, 0.4, 0.85);
     composer.addPass(bloomPass);
+  } else {
+    composer = null;
   }
-  // ウィンドウリサイズ対応
+
+  window.removeEventListener('resize', onWindowResize);
   window.addEventListener('resize', onWindowResize);
+
+  rendererInitAttempt = 0;
+  tryStartSimulation();
+  return true;
 }
 
 function onWindowResize() {
+  if (!camera || !renderer) return;
   const width = window.innerWidth;
   const height = window.innerHeight;
   camera.aspect = width / height;
@@ -829,6 +902,12 @@ function loadBoidModel(callback) {
 }
 
 function clearUnitVisuals() {
+  // シーン復旧中の場合は配列のみクリア
+  if (!scene) {
+    unitSpheres = [];
+    unitLines = [];
+    return;
+  }
   for (const mesh of unitSpheres) scene.remove(mesh);
   for (const line of unitLines) scene.remove(line);
   unitSpheres = [];
@@ -901,7 +980,18 @@ let lastTime = performance.now(); // 前回のフレームのタイムスタン�
 
 // アニメーション継続用の命名関数（匿名関数を避けてパフォーマンス改善）
 function scheduleNextFrame() {
-  animationTimer = setTimeout(animate, FRAME_INTERVAL);
+  animationTimer = setTimeout(() => {
+    animationTimer = null;
+    animate();
+  }, FRAME_INTERVAL);
+}
+
+// アニメーションループを安全に停止
+function stopAnimationLoop() {
+  if (animationTimer) {
+    clearTimeout(animationTimer);
+    animationTimer = null;
+  }
 }
 
 // 種族インデックスの事前計算（設定変更時のみ実行）
@@ -925,6 +1015,10 @@ function animate() {
   const deltaTime = (currentTime - lastTime) / 1000;
   lastTime = currentTime;
   if (!paused.value) update(deltaTime);
+  // レンダラー復旧中は描画をスキップ
+  if (!renderer || !scene || !camera) {
+    return;
+  }
   const count = boidCount();
   const heapF32 = wasmModule.HEAPF32.buffer;
   const positions = new Float32Array(heapF32, posPtr(), count * 3);
@@ -1067,9 +1161,14 @@ function animate() {
   activeMeshHigh.instanceMatrix.needsUpdate = true;
   activeMeshLow.instanceMatrix.needsUpdate = true;
 
-  controls.update();
+  controls?.update();
 
-  (isMobileDevice() ? renderer : composer).render(scene, camera);
+  // ポストプロセシングかダイレクトレンダリング
+  if (composer) {
+    composer.render(scene, camera);
+  } else {
+    renderer.render(scene, camera);
+  }
   stats?.end();
 
   scheduleNextFrame();
@@ -1142,19 +1241,43 @@ function calculateTotalBoidCount(settingsArray) {
   return sum;
 }
 
-function startSimulation() {
+// シミュレーション開始をキューに登録（非同期初期化対応）
+function queueSimulationStart(resetSimulation = true) {
+  pendingSimulationReset = resetSimulation;
+  simulationPending = true;
+  simulationInitialized = false;
+  tryStartSimulation();
+}
+
+// 条件が整った時点でシミュレーションを開始
+function tryStartSimulation() {
+  if (!simulationPending) return;
+  if (!renderer || !scene || !camera) return;
+  if (!boidModel || !boidModelLod) return;
+  simulationPending = false;
+  simulationInitialized = true;
+  const shouldReset = pendingSimulationReset;
+  pendingSimulationReset = true;
+  startSimulation(shouldReset);
+}
+
+function startSimulation(resetSimulation = true) {
   // WebAssembly モジュール用に SpeciesParams を初期化
-  const vector = createSpeciesParamsVector(settings);
-  // callInitBoids に渡す（この vector は C++ 側で vector<SpeciesParams> になる）
-  wasmModule.callInitBoids(vector, 1, 3, 0.25);
+  if (resetSimulation) {
+    const vector = createSpeciesParamsVector(settings);
+    wasmModule.callInitBoids(vector, 1, 3, 0.25);
+  }
   build(16, 0);
   initInstancedBoids(calculateTotalBoidCount(settings));
+  // 既存のループを停止してから新しいループを開始
+  stopAnimationLoop();
+  lastTime = performance.now();
   animate();
 }
 
 // 初期化時のコールバック（頻度が低いため匿名関数でも問題なし）
 onMounted(() => {
-  initThreeJS();
+  initThreeJS({ rebuildScene: true });
   loadBoidModel(() => {
     console.log('Boid model loaded successfully.');
     // stats.jsの初期化とDOM追加
@@ -1168,7 +1291,7 @@ onMounted(() => {
     stats.dom.style.left = 'auto';
     stats.dom.style.zIndex = 1000;
 
-    startSimulation();
+    queueSimulationStart();
     
     // メモリ監視を開始
     startMemoryMonitoring();
@@ -1177,19 +1300,8 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
-  stopCameraFollow();
   window.removeEventListener('keydown', handleKeydown);
-  window.removeEventListener('resize', onWindowResize);
-  if (lastRendererCanvas) {
-    lastRendererCanvas.removeEventListener('click', handleCanvasClick);
-    lastRendererCanvas = null;
-  }
-  controls?.removeEventListener('start', handleControlsInteractionStart);
-  controls?.removeEventListener('end', handleControlsInteractionEnd);
-  if (animationTimer) {
-    clearTimeout(animationTimer);
-    animationTimer = null;
-  }
+  disposeThreeResources();
   if (stats?.dom?.parentNode) {
     stats.dom.parentNode.removeChild(stats.dom);
   }
@@ -1422,27 +1534,99 @@ function createFadeOutGroundMaterial() {
   return material;
 }
 
-// WebGLコンテキストロス対策（軽量版）
+// Three.jsリソースを安全に破棄（メモリリーク防止）
+function disposeThreeResources() {
+  stopCameraFollow();
+  stopAnimationLoop();
+  if (composer) {
+    composer.renderTarget1?.dispose?.();
+    composer.renderTarget2?.dispose?.();
+    composer = null;
+  }
+  if (controls) {
+    controls.removeEventListener('start', handleControlsInteractionStart);
+    controls.removeEventListener('end', handleControlsInteractionEnd);
+    controls.dispose();
+    controls = null;
+  }
+  if (renderer) {
+    const canvas = renderer.domElement;
+    canvas.removeEventListener('click', handleCanvasClick);
+    canvas.removeEventListener('webglcontextlost', handleWebGLContextLost);
+    canvas.removeEventListener('webglcontextrestored', handleWebGLContextRestored);
+    if (canvas.parentNode) {
+      canvas.parentNode.removeChild(canvas);
+    }
+    renderer.dispose();
+    renderer = null;
+  }
+  window.removeEventListener('resize', onWindowResize);
+  lastRendererCanvas = null;
+  scene = null;
+  camera = null;
+  unitSpheres = [];
+  unitLines = [];
+  instancedMeshHigh = null;
+  instancedMeshLow = null;
+  predatorMarkers = [];
+  boidLodStates = [];
+  speciesIndexLookup = [];
+  if (rendererRetryTimer) {
+    clearTimeout(rendererRetryTimer);
+    rendererRetryTimer = null;
+  }
+}
+
+// 遅延してレンダラー復旧を試行（モバイル考慮）
+function scheduleRendererRetry() {
+  if (rendererRetryTimer) {
+    return;
+  }
+  const delay = isMobileDevice() ? 1500 : 800;
+  rendererRetryTimer = setTimeout(() => {
+    rendererRetryTimer = null;
+    initThreeJS({ rebuildScene: true });
+  }, delay);
+}
+
+// WebGLコンテキストロス時の自動復旧処理
+function handleWebGLContextLost(event) {
+  console.warn('WebGLコンテキストが失われました。自動復旧を試みます。');
+  event.preventDefault();
+  rendererInitAttempt = Math.min(rendererInitAttempt + 1, rendererConfigs.length - 1);
+  disposeThreeResources();
+  queueSimulationStart(true);
+  scheduleRendererRetry();
+}
+
+function handleWebGLContextRestored() {
+  console.info('WebGLコンテキストが復旧しました。');
+}
+
+// メモリ不足時の復旧処理（ページリロードの代替）
+function handleLowMemoryRecovery() {
+  console.warn('WebGLメモリ使用量が高いため、レンダラーの再初期化を試みます。');
+  rendererInitAttempt = Math.min(rendererInitAttempt + 1, rendererConfigs.length - 1);
+  disposeThreeResources();
+  queueSimulationStart(true);
+  scheduleRendererRetry();
+}
+
+// WebGLコンテキストロス・復旧イベントの設定
 function setupWebGLContextLossHandling() {
   if (!renderer) return;
 
   const canvas = renderer.domElement;
-  
-  // コンテキストロス時の処理
-  canvas.addEventListener('webglcontextlost', (event) => {
-    console.warn('WebGLコンテキストが失われました - ページをリロードします');
-    event.preventDefault();
-    
-    // シンプルに2秒後にリロード
-    setTimeout(() => {
-      location.reload();
-    }, 2000);
-  }, false);
+  canvas.removeEventListener('webglcontextlost', handleWebGLContextLost);
+  canvas.removeEventListener('webglcontextrestored', handleWebGLContextRestored);
+  canvas.addEventListener('webglcontextlost', handleWebGLContextLost, false);
+  canvas.addEventListener('webglcontextrestored', handleWebGLContextRestored, false);
 }
 
 
 
 // 軽量メモリ監視（モバイル向け）
+// WebGLメモリ監視（モバイル向け軽量版）
 function monitorWebGLMemory() {
   if (!renderer || !renderer.info || !isMobileDevice()) return;
   
@@ -1453,10 +1637,9 @@ function monitorWebGLMemory() {
   const geometries = memoryInfo.geometries || 0;
   const textures = memoryInfo.textures || 0;
   
-  // メモリ使用量が非常に高い場合のみ警告
+  // メモリ使用量が非常に高い場合のみ復旧を試みる
   if (geometries > 100 || textures > 50) {
-    console.warn('WebGLメモリ使用量が高いため、ページをリロードします');
-    location.reload();
+    handleLowMemoryRecovery();
   }
 }
 
