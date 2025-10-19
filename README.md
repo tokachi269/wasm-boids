@@ -2,6 +2,7 @@
 
 [Demo](https://tokachi269.github.io/wasm-boids/)
 
+<img width="1471" height="1193" alt="Image" src="https://github.com/user-attachments/assets/7d597a84-e659-4b84-bad3-bd4237db115f" />
 
 # wasm-boids 🐟️  
 
