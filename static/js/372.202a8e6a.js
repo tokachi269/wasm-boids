@@ -1,0 +1,1 @@
+(self["webpackChunkwasm_boids"]=self["webpackChunkwasm_boids"]||[]).push([[372],{372:()=>{}}]);
