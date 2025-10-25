@@ -1,71 +1,45 @@
 <template>
   <div id="app">
     <div class="ui-overlay">
-      <div class="ui-panel">
-        <h1>Boids Simulation</h1>
-        <details>
-          <summary>Settings</summary>
-          <div v-for="(s, i) in settings" :key="i">
-            <Settings :settings="s" />
-          </div>
-          <button @click="resetSettings" style="margin-bottom:1em;">リセット</button>
-          <div class="follow-controls">
-            <button @click="handleFollowButtonClick" :disabled="totalBoids === 0">
-              {{ followButtonLabel }}
-            </button>
-            <label class="follow-orientation">
-              <input type="checkbox" v-model="alignCameraWithBoid" />
-              追従時に魚の向きにカメラを合わせる
-            </label>
-            <p v-if="followStatusText" class="follow-status">{{ followStatusText }}</p>
-          </div>
-          <details style="margin-bottom:1em;">
-            <summary>デバッグ</summary>
-            <div>壊れてるよ</div>
-            <div style="margin-top:0.5em;">
-              <label>
-                <input type="checkbox" v-model="showUnits" />
-                Unit可視化
-              </label>
-              <label style="margin-left:1em;">
-                <input type="checkbox" v-model="showUnitSpheres" />
-                スフィアのみ表示
-              </label>
-              <label style="margin-left:1em;">
-                <input type="checkbox" v-model="showUnitLines" />
-                線のみ表示
-              </label>
-              <label style="margin-left:1em;">
-                <input type="checkbox" v-model="showUnitColors" />
-                Unit色分け
-              </label>
-              <label style="margin-left:1em;">
-                <input type="checkbox" v-model="enableTailAnimation" />
-                尾のくねり
-              </label>
-              <label style="margin-left:1em;">
-                <input type="checkbox" v-model="enableTailOnLod" />
-                LODもくねり
-              </label>
-              <label style="margin-left:1em;">
-                表示レイヤ下限: <input type="range" min="1" max="20" v-model="unitLayer" />
-                {{ unitLayer }}
-              </label>
-            </div>
-          </details>
-        </details>
-        <div class="info">
-          <p>Boids Count: {{ totalBoids }}</p>
+      <h1>Boids Simulation</h1>
+      <details>
+        <summary>Settings</summary>
+        <div v-for="(s, i) in settings" :key="i">
+          <Settings :settings="s" />
         </div>
+        <button @click="resetSettings" style="margin-bottom:1em;">リセット</button>
+        <div>
+          <label>
+            <input type="checkbox" v-model="showUnits" />
+            Unit可視化
+          </label>
+          <label style="margin-left:1em;">
+            <input type="checkbox" v-model="showUnitSpheres" />
+            スフィアのみ表示
+          </label> <label style="margin-left:1em;">
+            <input type="checkbox" v-model="showUnitLines" />
+            線のみ表示
+          </label>
+          <label style="margin-left:1em;">
+            <input type="checkbox" v-model="showUnitColors" />
+            Unit色分け
+          </label>
+          <label style="margin-left:1em;">
+            表示レイヤ下限: <input type="range" min="1" max="20" v-model="unitLayer" />
+            {{ unitLayer }}
+          </label>
+        </div>
+      </details>
+      <div class="info">
+        <p>Boids Count: {{ totalBoids }}</p>
       </div>
     </div>
-    <div ref="threeContainer" class="three-container" @touchstart="handleTouchStart" @touchmove="handleTouchMove"
-      @touchend="handleTouchEnd" />
+    <div ref="threeContainer" class="three-container" />
   </div>
 </template>
 
 <script setup>
-import { inject, onMounted, onBeforeUnmount, reactive, ref, watch, toRaw, computed } from 'vue';
+import { computed, inject, onMounted, reactive, ref, watch, toRaw } from 'vue';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import Settings from './components/Settings.vue';
@@ -75,23 +49,18 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { SSAOPass } from 'three/examples/jsm/postprocessing/SSAOPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
-import { color } from 'three/tsl';
-import { vertexColor } from 'three/tsl';
 
 const wasmModule = inject('wasmModule');
 if (!wasmModule) {
   console.error('wasmModule not provided');
 }
 
-const posPtr = wasmModule.cwrap('posPtr', 'number', [])
-const velPtr = wasmModule.cwrap('velPtr', 'number', [])
-const oriPtr = wasmModule.cwrap('oriPtr', 'number', [])
-const boidCount = wasmModule.cwrap('boidCount', 'number', [])
+const stepSimulation = wasmModule.cwrap('stepSimulation', 'number', ['number'])
 const build = wasmModule.cwrap('build', 'void', ['number', 'number'])
-const update = wasmModule.cwrap('update', 'void', ['number'])
 const setFlockSize = wasmModule.cwrap('setFlockSize', 'void', ['number', 'number', 'number'])
 const exportTreeStructure = wasmModule.cwrap('exportTreeStructure', 'object', [])
 const boidUnitMappingPtr = wasmModule.cwrap('boidUnitMappingPtr', 'number', []);
+const currentFirstBoidX = wasmModule.cwrap('currentFirstBoidX', 'number', []);
 // const getUnitCount = wasmModule.cwrap('getUnitCount', 'number', []);
 // const getUnitCentersPtr = wasmModule.cwrap('getUnitCentersPtr', 'number', []);
 // const getUnitParentIndicesPtr = wasmModule.cwrap('getUnitParentIndicesPtr', 'number', []);
@@ -100,66 +69,43 @@ function fetchTreeStructure() {
   const treeData = exportTreeStructure();
   return treeData;
 }
+const mobileBoidCount = isMobileDevice() ? 6000 : 10000;
 
-function getDefaultSettings() {
-  const boidCount = isMobileDevice() ? 3000 : 10000;
-
-  return [{
-    species: 'Boids',         // 種族名
-    count: boidCount,         // 群れの数（スマホなら3000、PCなら10000）
-    cohesion: 32,             // 凝集
-    cohesionRange: 30,        // 凝集範囲
-    separation: 8,            // 分離
-    separationRange: 0.6,     // 分離範囲
-    alignment: 17,            // 整列
-    alignmentRange: 6,        // 整列範囲
-    maxSpeed: 0.26,           // 最大速度
-    maxTurnAngle: 0.25,       // 最大旋回角
-    maxNeighbors: 6,          // 最大近傍数
-    horizontalTorque: 0.019,  // 水平化トルク
-    torqueStrength: 10,       // 回転トルク強度
-    lambda: 0.62,             // 速度調整係数
-    tau: 1.5                  // 記憶時間スケール
-  }, {
-    species: 'Predator',
-    count: 1,
-    cohesion: 5.58,                     // 捕食者には使わない
-    separation: 0.0,
-    alignment: 0.0,
-    maxSpeed: 1.37,                     // 速く逃げられるよう速度は大きめ
-    minSpeed: 0.4,
-    maxTurnAngle: 0.2,
-    separationRange: 14.0,
-    alignmentRange: 11.0,
-    cohesionRange: 77.0,
-    maxNeighbors: 0,
+const DEFAULT_SETTINGS = [{
+  species: 'Boids',         // 種族名
+  count: mobileBoidCount,   // 群れの数（スマホなら6000、PCなら10000）
+  cohesion: 32,             // 凝集
+  cohesionRange: 30,        // 凝集範囲
+  separation: 8,            // 分離
+  separationRange: 0.6,     // 分離範囲
+  alignment: 17,            // 整列
+  alignmentRange: 6,        // 整列範囲
+  maxSpeed: 0.26,           // 最大速度
+  maxTurnAngle: 0.25,       // 最大旋回角
+  maxNeighbors: 6,          // 最大近傍数
+  horizontalTorque: 0.019,  // 水平化トルク
+  torqueStrength: 10,       // 回転トルク強度
+  lambda: 0.62,             // 速度調整係数
+  tau: 1.5                  // 記憶時間スケール
+}, {
+  species: 'Predator',
+  count: 1,
+  cohesion: 5.58,                     // 捕食者には使わない
+  separation: 0.0,
+  alignment: 0.0,
+  maxSpeed: 1.37,                     // 速く逃げられるよう速度は大きめ
+  minSpeed: 0.4,
+  maxTurnAngle: 0.2,
+  separationRange: 14.0,
+  alignmentRange: 11.0,
+  cohesionRange: 77.0,
+  maxNeighbors: 0,
   lambda: 0.05,
   tau: 1.0, // 捕食者は常に追いかける
-    horizontalTorque: 0.022,
-    torqueStrength: 0.0,
-    isPredator: true                // ← 捕食者フラグ
-  }];
-}
-
-function ensureSettingsFields(settingsArray) {
-  const defaults = getDefaultSettings();
-  const defaultMap = new Map(defaults.map((def, index) => [def.species || index, def]));
-
-  for (let i = 0; i < settingsArray.length; i++) {
-    const current = settingsArray[i];
-    const fallback = defaultMap.get(current.species) || defaults[0] || {};
-
-    if (current.lambda === undefined) {
-      current.lambda = fallback.lambda ?? 0.05;
-    }
-
-    if (current.tau === undefined) {
-      current.tau = fallback.tau ?? 0.2;
-    }
-  }
-
-  return settingsArray;
-}
+  horizontalTorque: 0.022,
+  torqueStrength: 0.0,
+  isPredator: true                // ← 捕食者フラグ
+}];
 
 function loadSettings() {
   try {
@@ -167,106 +113,24 @@ function loadSettings() {
     if (saved) {
       const parsed = JSON.parse(saved);
       if (Array.isArray(parsed)) {
-        return ensureSettingsFields(parsed); // 配列として保存されている場合のみ返す
+        return parsed; // 配列として保存されている場合のみ返す
       }
     }
   } catch (error) {
     console.error('Failed to load settings from localStorage:', error);
   }
-  return ensureSettingsFields(getDefaultSettings()); // デフォルト値を返す
+  return DEFAULT_SETTINGS; // デフォルト値を返す
 }
 
 const settings = reactive(loadSettings());
 
-// 全Boidsの合計を計算するcomputed
-const totalBoids = computed(() => {
-  return settings.reduce((total, setting) => total + (setting.count || 0), 0);
-});
-
-const followButtonLabel = computed(() => {
-  if (isFollowing.value) return '追従を停止';
-  if (isFollowSelectionMode.value) return '追従選択をキャンセル';
-  return '追従する魚を選ぶ';
-});
-
-const followStatusText = computed(() => {
-  if (isFollowSelectionMode.value) return '追従したい魚をクリックしてください';
-  if (isFollowing.value) return `Boid #${followedBoidId.value + 1} を追従中`;
-  return '';
-});
+let cachedTotalBoidCount = getTotalBoidCount();
+const totalBoids = computed(() => getTotalBoidCount());
 
 const threeContainer = ref(null);
 let scene, camera, renderer, controls, composer;
 
 const paused = ref(false);
-
-const useInstancedRendering = ref(true);
-const enableTailAnimation = ref(true);
-const enableTailOnLod = ref(true);
-
-// WebGL復旧機能の状態管理
-let rendererRetryTimer = null;
-let rendererInitAttempt = 0;
-// 段階的フォールバック設定（モバイル・コンテキストロス対応）
-const rendererConfigs = [
-  (isMobile) => ({
-    antialias: !isMobile,
-    depth: true,
-    alpha: false,
-    powerPreference: isMobile ? 'low-power' : 'high-performance'
-  }),
-  () => ({
-    antialias: false,
-    depth: true,
-    stencil: false,
-    alpha: false,
-    powerPreference: 'low-power'
-  }),
-  () => ({
-    antialias: false,
-    depth: false,
-    stencil: false,
-    alpha: false,
-    powerPreference: 'low-power'
-  })
-];
-
-// シミュレーション初期化の制御フラグ
-let simulationPending = false;
-let simulationInitialized = false;
-let pendingSimulationReset = true;
-
-// 尾のアニメーション管理オブジェクト
-const tailAnimation = {
-  baseHighMaterial: null,        // 元の高品質マテリアル
-  baseLowMaterial: null,         // 元のLODマテリアル
-  animatedHighMaterial: null,    // 尾アニメ付き高品質マテリアル
-  animatedLowMaterial: null,     // 尾アニメ付きLODマテリアル
-  applyToLod: true,              // LODメッシュにも適用するかのフラグ
-  phaseAttribute: null,          // 各インスタンスの位相オフセット
-  speedAttribute: null,          // 各インスタンスの速度
-  turnAttribute: null,           // 各インスタンスの旋回量
-  previousVelocities: null,      // 前フレームの速度（旋回計算用）
-  smoothedSpeed: null,           // 速度のスムージング用バッファ
-  smoothedTurn: null,            // 旋回量のスムージング用バッファ
-  elapsedTime: 0,                // 尾アニメーション用の累積時間（停止時も保持）
-  uniforms: {
-    uTailTime: { value: 0 },            // 時間（波形生成用）
-    uTailAmplitude: { value: 0.08 },    // 振幅（全身の揺れ幅）
-    uTailFrequency: { value: 14.0 },    // 周波数（くねり速度）
-    uTailPhaseStride: { value: 4.0 },   // 体の長さ方向の位相差（波長に相当）
-    uTailTurnStrength: { value: 0.1 },  // 旋回時の強度
-    uTailSpeedScale: { value: 3 },      // 速度による影響度
-    uTailRight: { value: new THREE.Vector3(1, 0, 0) },     // 尾アニメの右方向ベクトル
-    uTailForward: { value: new THREE.Vector3(0, 1, 0) },   // 尾アニメの進行方向ベクトル
-    uTailUp: { value: new THREE.Vector3(0, 0, 1) },        // 尾アニメの上方向ベクトル
-    uTailEnable: { value: 0 }           // アニメーション有効/無効
-  },
-  smoothing: {
-    speed: 0.25,  // 速度の追従係数（0に近いほど滑らか）
-    turn: 0.1    // 旋回の追従係数
-  }
-};
 
 const showUnits = ref(true);
 const showUnitSpheres = ref(false);
@@ -274,372 +138,29 @@ const showUnitLines = ref(false);
 const showUnitColors = ref(false);
 const unitLayer = ref(1);
 
-const isFollowSelectionMode = ref(false);
-const isFollowing = ref(false);
-const followedBoidId = ref(-1);
-const alignCameraWithBoid = ref(false);
-
-watch(alignCameraWithBoid, () => {
-  if (!isFollowing.value) return;
-  const idx = followedBoidId.value;
-  if (idx < 0) return;
-  refreshFollowOffsets(idx);
-});
-
-const raycaster = new THREE.Raycaster();
-const pointerNdc = new THREE.Vector2();
-const followOffset = new THREE.Vector3();
-const followOffsetLocal = new THREE.Vector3();
-const followTargetPosition = new THREE.Vector3();
-const desiredCameraPosition = new THREE.Vector3();
-const tmpBoidPosition = new THREE.Vector3();
-const tmpRayToPoint = new THREE.Vector3();
-const tmpClosestPoint = new THREE.Vector3();
-const tmpQuaternion = new THREE.Quaternion();
-const tmpInverseQuaternion = new THREE.Quaternion();
-const tmpDesiredOffset = new THREE.Vector3();
-const tmpCurrentOffset = new THREE.Vector3();
-const tmpYawQuaternion = new THREE.Quaternion();
-const tmpForwardVector = new THREE.Vector3();
-const Y_AXIS = new THREE.Vector3(0, 1, 0);
-const hiddenInstanceMatrix = new THREE.Matrix4().makeScale(0, 0, 0);
-
-let lastRendererCanvas = null;
-const previousControlsState = {
-  enablePan: true,
-  enableZoom: true,
-};
-let isUserAdjustingCamera = false;
-
 let unitSpheres = [];
 let unitLines = [];
 
 let maxDepth = 1;
 let stats = null;
+let gpuStatsPanel = null;
+let glContext = null;
+let gpuTimerExt = null;
+let gpuQueryInFlight = null;
+let gpuPendingQuery = null;
+let lastGpuTimeMs = 0;
+let latestStatePtr = 0;
+let latestStateHeaderPtr = 0;
+let latestStateHeaderView = null;
+let latestPositionsPtr = 0;
+let latestVelocitiesPtr = 0;
+let latestOrientationsPtr = 0;
+let latestBoidCountFromWasm = 0;
+let frameCounter = 0;
+let debugTimer = 0;
 
 let animationTimer = null;
-let FRAME_INTERVAL = 1000 / 60;//1000 / 60; // 60FPS
-
-// パフォーマンス最適化用変数（スマホ用調整）
-let lastColorUpdateFrame = 0;
-let lastPredatorUpdateFrame = 0;
-let speciesIndexLookup = []; // 各BoidのspeciesIndexをキャッシュ
-let frameCounter = 0;
-const COLOR_UPDATE_INTERVAL = isMobileDevice() ? 20 : 10; // スマホは20フレーム、PCは10フレーム
-const PREDATOR_UPDATE_INTERVAL = isMobileDevice() ? 10 : 5; // スマホは10フレーム、PCは5フレーム
-
-// レンダリング最適化用変数（スマホ用調整）
-let lastLodUpdateFrame = 0;
-const LOD_UPDATE_INTERVAL = isMobileDevice() ? 5 : 3; // スマホは5フレーム、PCは3フレーム
-let boidLodStates = []; // 各BoidのLOD状態をキャッシュ
-
-// メモリプール最適化
-let matrixPool = [];
-let colorPool = [];
-let vec3Pool = [];
-
-// オブジェクトプールからオブジェクトを取得
-function getFromPool(pool, createFn) {
-  return pool.length > 0 ? pool.pop() : createFn();
-}
-
-// オブジェクトプールにオブジェクトを返却
-function returnToPool(pool, obj) {
-  if (pool.length < 100) { // プールサイズを制限
-    pool.push(obj);
-  }
-}
-
-// マテリアル変数をグローバルスコープで定義
-let boidMaterial = null;
-let boidLodMaterial = null;
-
-// 魚のジオメトリに体の位置座標属性を追加する関数
-function augmentFishGeometry(geometry) {
-  if (!geometry) return geometry;
-  if (geometry.getAttribute('aBodyCoord')) return geometry; // 既に追加済み
-
-  const cloned = geometry.clone();
-  cloned.computeBoundingBox();
-  const bbox = cloned.boundingBox;
-  const pos = cloned.attributes.position;
-  const count = pos.count;
-
-  const rangeX = bbox.max.x - bbox.min.x;
-  const rangeY = bbox.max.y - bbox.min.y;
-  const rangeZ = bbox.max.z - bbox.min.z;
-
-  let axisIndex = 0;
-  let axisRange = rangeX;
-  if (rangeY >= axisRange && rangeY >= rangeZ) {
-    axisIndex = 1;
-    axisRange = rangeY;
-  } else if (rangeZ >= axisRange && rangeZ >= rangeY) {
-    axisIndex = 2;
-    axisRange = rangeZ;
-  }
-
-  const axisMin = axisIndex === 0 ? bbox.min.x : axisIndex === 1 ? bbox.min.y : bbox.min.z;
-  const axisMax = axisIndex === 0 ? bbox.max.x : axisIndex === 1 ? bbox.max.y : bbox.max.z;
-  const range = Math.max(1e-4, axisMax - axisMin);
-
-  const bodyCoord = new Float32Array(count);
-  for (let i = 0; i < count; i++) {
-    let coordSource;
-    if (axisIndex === 0) {
-      coordSource = pos.getX(i);
-    } else if (axisIndex === 1) {
-      coordSource = pos.getY(i);
-    } else {
-      coordSource = pos.getZ(i);
-    }
-    // 魚の頭が-Y方向なので、座標を反転（頭=0、尾=1）
-    const coord = 1 - (coordSource - axisMin) / range;
-    bodyCoord[i] = THREE.MathUtils.clamp(coord, 0, 1);
-  }
-
-  const forward = new THREE.Vector3(axisIndex === 0 ? 1 : 0, axisIndex === 1 ? 1 : 0, axisIndex === 2 ? 1 : 0);
-  const upRef = Math.abs(forward.dot(new THREE.Vector3(0, 1, 0))) > 0.999 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 1, 0);
-  const right = new THREE.Vector3().crossVectors(upRef, forward).normalize();
-  const up = new THREE.Vector3().crossVectors(forward, right).normalize();
-
-  cloned.userData.tailBasis = {
-    forward: forward.toArray(),
-    right: right.toArray(),
-    up: up.toArray(),
-    axisIndex
-  };
-
-  cloned.setAttribute('aBodyCoord', new THREE.BufferAttribute(bodyCoord, 1));
-  return cloned;
-}
-
-// 尾のアニメーション用カスタムマテリアルを作成する関数
-function createTailMaterial(sourceMaterial) {
-  const material = sourceMaterial.clone();
-  material.onBeforeCompile = (shader) => {
-    // シェーダにuniformを追加
-    shader.uniforms.uTailTime = tailAnimation.uniforms.uTailTime;
-    shader.uniforms.uTailAmplitude = tailAnimation.uniforms.uTailAmplitude;
-    shader.uniforms.uTailFrequency = tailAnimation.uniforms.uTailFrequency;
-    shader.uniforms.uTailPhaseStride = tailAnimation.uniforms.uTailPhaseStride;
-    shader.uniforms.uTailTurnStrength = tailAnimation.uniforms.uTailTurnStrength;
-    shader.uniforms.uTailSpeedScale = tailAnimation.uniforms.uTailSpeedScale;
-    shader.uniforms.uTailRight = tailAnimation.uniforms.uTailRight;
-    shader.uniforms.uTailForward = tailAnimation.uniforms.uTailForward;
-    shader.uniforms.uTailUp = tailAnimation.uniforms.uTailUp;
-    shader.uniforms.uTailEnable = tailAnimation.uniforms.uTailEnable;
-
-    // 頂点シェーダにuniformとattributeを追加
-    shader.vertexShader = shader.vertexShader.replace(
-      '#include <common>',
-      `#include <common>
-      uniform float uTailTime;
-      uniform float uTailAmplitude;
-      uniform float uTailFrequency;
-      uniform float uTailPhaseStride;
-      uniform float uTailTurnStrength;
-      uniform float uTailSpeedScale;
-      uniform vec3 uTailRight;
-      uniform vec3 uTailForward;
-      uniform vec3 uTailUp;
-      uniform float uTailEnable;
-      attribute float aBodyCoord;
-      attribute float instanceTailPhase;
-      attribute float instanceTailSpeed;
-      attribute float instanceTailTurn;
-      `
-    );
-
-    // 頂点変換処理に尾のアニメーションを追加（メイン描画用）
-    shader.vertexShader = shader.vertexShader.replace(
-      '#include <begin_vertex>',
-      `#include <begin_vertex>
-      if (uTailEnable > 0.5) {
-        vec3 originalPos = transformed;
-        vec3 right = normalize(uTailRight);
-        vec3 forward = normalize(uTailForward);
-        vec3 up = normalize(uTailUp);
-        
-        float localX = dot(originalPos, right);
-        float localY = dot(originalPos, forward);
-        float localZ = dot(originalPos, up);
-        
-        float bodyCoord = clamp(aBodyCoord, 0.0, 1.0);
-        float tailWeight = smoothstep(0.0, 0.35, bodyCoord);
-        float speedFactor = clamp(instanceTailSpeed * uTailSpeedScale, 0.0, 2.0);
-        
-        // 波形計算
-        float phase = instanceTailPhase + uTailTime * uTailFrequency;
-        float wavePhase = phase + bodyCoord * uTailPhaseStride;
-        float wag = sin(wavePhase) * uTailAmplitude;
-        float turnOffset = instanceTailTurn * uTailTurnStrength;
-        float motion = wag * (0.4 + 0.6 * speedFactor) + turnOffset;
-        
-        // 先端部分で揺れを減衰（0.8以上で減衰開始）
-        float tipDamping = 1.0 - smoothstep(0.7, 1.0, bodyCoord) * 0.3;
-        float bendStrength = mix(0.02, 1.0, tailWeight) * tipDamping;
-        
-        // 回転変形
-        float bendAngle = motion * bendStrength;
-        float s = sin(bendAngle);
-        float c = cos(bendAngle);
-        float rotX = localX * c - localY * s;
-        float rotY = localX * s + localY * c;
-        
-        // 横揺れ
-        float sway = motion * 0.4 * tipDamping;
-        rotX += sway * (0.05 + 0.95 * bodyCoord);
-        
-        vec3 rotated = right * rotX + forward * rotY + up * localZ;
-        transformed = rotated;
-      }
-      `
-    );
-
-    // 深度パス（SSAO、シャドウマップ用）での頂点変換
-    shader.vertexShader = shader.vertexShader.replace(
-      '#include <project_vertex>',
-      `#include <project_vertex>
-      // 深度パス用の尾アニメーション変形
-      #ifdef DEPTH_PACKING
-      if (uTailEnable > 0.5) {
-        vec3 viewPos = mvPosition.xyz;
-        mat3 normalMatrix3 = mat3(normalMatrix);
-        vec3 right = normalize(normalMatrix3 * uTailRight);
-        vec3 forward = normalize(normalMatrix3 * uTailForward);
-        vec3 up = normalize(normalMatrix3 * uTailUp);
-        
-        float localX = dot(viewPos, right);
-        float localY = dot(viewPos, forward);
-        float localZ = dot(viewPos, up);
-        
-        float bodyCoord = clamp(aBodyCoord, 0.0, 1.0);
-        float tailWeight = smoothstep(0.0, 0.35, bodyCoord);
-        float speedFactor = clamp(instanceTailSpeed * uTailSpeedScale, 0.0, 2.0);
-        
-        // 波形計算
-        float phase = instanceTailPhase + uTailTime * uTailFrequency;
-        float wavePhase = phase + bodyCoord * uTailPhaseStride;
-        float wag = sin(wavePhase) * uTailAmplitude;
-        float turnOffset = instanceTailTurn * uTailTurnStrength;
-        float motion = wag * (0.4 + 0.6 * speedFactor) + turnOffset;
-        
-        // 先端部分で揺れを減衰（深度パス用）
-        float tipDamping = 1.0 - smoothstep(0.7, 1.0, bodyCoord) * 0.3;
-        float bendStrength = mix(0.02, 1.0, tailWeight) * tipDamping;
-        
-        // 回転変形
-        float bendAngle = motion * bendStrength;
-        float s = sin(bendAngle);
-        float c = cos(bendAngle);
-        float rotX = localX * c - localY * s;
-        float rotY = localX * s + localY * c;
-        
-        // 横揺れ
-        float sway = motion * 0.4 * tipDamping;
-        rotX += sway * (0.05 + 0.95 * bodyCoord);
-        
-        vec3 rotated = right * rotX + forward * rotY + up * localZ;
-        mvPosition.xyz = rotated;
-        gl_Position = projectionMatrix * mvPosition;
-      }
-      #endif
-      `
-    );
-  };
-  return material;
-}
-
-// 尾のアニメーション用インスタンス属性を初期化する関数
-function ensureTailAttributes(count) {
-  // 各インスタンスにランダムな位相オフセットを設定
-  const phaseArray = new Float32Array(count);
-  for (let i = 0; i < count; i++) {
-    phaseArray[i] = Math.random() * Math.PI * 2;
-  }
-  
-  // インスタンス属性を作成
-  tailAnimation.phaseAttribute = new THREE.InstancedBufferAttribute(phaseArray, 1);
-  tailAnimation.speedAttribute = new THREE.InstancedBufferAttribute(new Float32Array(count), 1);
-  tailAnimation.turnAttribute = new THREE.InstancedBufferAttribute(new Float32Array(count), 1);
-  
-  // 動的更新を有効にする
-  tailAnimation.speedAttribute.setUsage(THREE.DynamicDrawUsage);
-  tailAnimation.turnAttribute.setUsage(THREE.DynamicDrawUsage);
-  
-  // 前フレームの速度バッファを初期化
-  tailAnimation.previousVelocities = new Float32Array(count * 3);
-  tailAnimation.previousVelocities.fill(0);
-  tailAnimation.smoothedSpeed = new Float32Array(count);
-  tailAnimation.smoothedTurn = new Float32Array(count);
-  
-  // 高品質メッシュに属性を追加
-  if (instancedMeshHigh) {
-    instancedMeshHigh.geometry.setAttribute('instanceTailPhase', tailAnimation.phaseAttribute);
-    instancedMeshHigh.geometry.setAttribute('instanceTailSpeed', tailAnimation.speedAttribute);
-    instancedMeshHigh.geometry.setAttribute('instanceTailTurn', tailAnimation.turnAttribute);
-  }
-  
-  // LODメッシュに属性を追加
-  if (instancedMeshLow) {
-    instancedMeshLow.geometry.setAttribute('instanceTailPhase', tailAnimation.phaseAttribute);
-    instancedMeshLow.geometry.setAttribute('instanceTailSpeed', tailAnimation.speedAttribute);
-    instancedMeshLow.geometry.setAttribute('instanceTailTurn', tailAnimation.turnAttribute);
-  }
-  
-  // 更新フラグを設定
-  tailAnimation.phaseAttribute.needsUpdate = true;
-  tailAnimation.speedAttribute.needsUpdate = true;
-  tailAnimation.turnAttribute.needsUpdate = true;
-  tailAnimation.elapsedTime = 0;
-  tailAnimation.uniforms.uTailTime.value = 0;
-}
-
-// ジオメトリから尾アニメーションの基準ベクトルを設定
-function setTailBasisFromGeometry(geometry) {
-  if (!geometry || !geometry.userData?.tailBasis) return;
-  const basis = geometry.userData.tailBasis;
-  if (basis.right) {
-    tailAnimation.uniforms.uTailRight.value.fromArray(basis.right);
-  }
-  if (basis.forward) {
-    tailAnimation.uniforms.uTailForward.value.fromArray(basis.forward);
-  }
-  if (basis.up) {
-    tailAnimation.uniforms.uTailUp.value.fromArray(basis.up);
-  }
-}
-
-// 尾のアニメーションマテリアルの有効/無効を切り替える関数
-function updateTailAnimationMaterials() {
-  const enabled = enableTailAnimation.value && tailAnimation.animatedHighMaterial && instancedMeshHigh;
-  tailAnimation.uniforms.uTailEnable.value = enabled ? 1 : 0;
-  
-  if (!instancedMeshHigh) return;
-  
-  if (enabled) {
-    // アニメーション有効時：カスタムマテリアルに切り替え
-    if (tailAnimation.animatedHighMaterial) {
-      instancedMeshHigh.material = tailAnimation.animatedHighMaterial;
-      instancedMeshHigh.material.needsUpdate = true;
-    }
-    if (instancedMeshLow && tailAnimation.animatedLowMaterial) {
-      instancedMeshLow.material = tailAnimation.animatedLowMaterial;
-      instancedMeshLow.material.needsUpdate = true;
-    }
-  } else {
-    // アニメーション無効時：元のマテリアルに戻す
-    if (tailAnimation.baseHighMaterial) {
-      instancedMeshHigh.material = tailAnimation.baseHighMaterial;
-      instancedMeshHigh.material.needsUpdate = true;
-    }
-    if (instancedMeshLow && tailAnimation.baseLowMaterial) {
-      instancedMeshLow.material = tailAnimation.baseLowMaterial;
-      instancedMeshLow.material.needsUpdate = true;
-    }
-  }
-}
+const FRAME_INTERVAL = 1000 / 1000;//1000 / 60; // 60FPS
 
 // ツリーの最大深さを計算
 function calcMaxDepth(unit, depth = 0) {
@@ -660,360 +181,105 @@ function handleKeydown(e) {
   }
 }
 
-function stopCameraFollow() {
-  if (!isFollowing.value) return;
-  isFollowing.value = false;
-  followedBoidId.value = -1;
-  controls.enablePan = previousControlsState.enablePan;
-  controls.enableZoom = previousControlsState.enableZoom;
-  isUserAdjustingCamera = false;
-}
-
-function readBoidPosition(index, outVector) {
-  const count = boidCount();
-  if (index < 0 || index >= count) return false;
-  const heapF32 = wasmModule.HEAPF32.buffer;
-  const positionsArray = new Float32Array(heapF32, posPtr(), count * 3);
-  const base = index * 3;
-  outVector.set(positionsArray[base], positionsArray[base + 1], positionsArray[base + 2]);
-  return true;
-}
-
-function readBoidOrientation(index, outQuaternion) {
-  const count = boidCount();
-  if (index < 0 || index >= count) return false;
-  const heapF32 = wasmModule.HEAPF32.buffer;
-  const orientationsArray = new Float32Array(heapF32, oriPtr(), count * 4);
-  const base = index * 4;
-  outQuaternion.set(
-    orientationsArray[base],
-    orientationsArray[base + 1],
-    orientationsArray[base + 2],
-    orientationsArray[base + 3]
-  );
-  return true;
-}
-
-function extractYawQuaternion(sourceQuaternion, outQuaternion) {
-  tmpForwardVector.set(0, 0, 1).applyQuaternion(sourceQuaternion);
-  tmpForwardVector.y = 0;
-  if (tmpForwardVector.lengthSq() < 1e-6) {
-    outQuaternion.identity();
-    return outQuaternion;
-  }
-  tmpForwardVector.normalize();
-  const yaw = Math.atan2(tmpForwardVector.x, tmpForwardVector.z);
-  outQuaternion.setFromAxisAngle(Y_AXIS, yaw);
-  return outQuaternion;
-}
-
-function refreshFollowOffsets(index) {
-  if (!camera) return false;
-  if (!readBoidPosition(index, followTargetPosition)) return false;
-  followOffset.copy(camera.position).sub(followTargetPosition);
-  if (readBoidOrientation(index, tmpQuaternion)) {
-    extractYawQuaternion(tmpQuaternion, tmpYawQuaternion);
-    tmpInverseQuaternion.copy(tmpYawQuaternion).invert();
-    followOffsetLocal.copy(followOffset).applyQuaternion(tmpInverseQuaternion);
-  } else {
-    followOffsetLocal.copy(followOffset);
-  }
-  return true;
-}
-
-function handleControlsInteractionStart() {
-  if (isFollowing.value) {
-    isUserAdjustingCamera = true;
-  }
-}
-
-function handleControlsInteractionEnd() {
-  isUserAdjustingCamera = false;
-  if (isFollowing.value && followedBoidId.value >= 0) {
-    refreshFollowOffsets(followedBoidId.value);
-  }
-}
-
-function startCameraFollow(index) {
-  if (!readBoidPosition(index, followTargetPosition)) {
-    return;
-  }
-  followedBoidId.value = index;
-  isFollowSelectionMode.value = false;
-  isFollowing.value = true;
-  previousControlsState.enablePan = controls.enablePan;
-  previousControlsState.enableZoom = controls.enableZoom;
-  controls.enablePan = false;
-  controls.target.copy(followTargetPosition);
-  isUserAdjustingCamera = false;
-  refreshFollowOffsets(index);
-}
-
-function handleFollowButtonClick() {
-  if (isFollowing.value) {
-    stopCameraFollow();
-    return;
-  }
-
-  if (isFollowSelectionMode.value) {
-    isFollowSelectionMode.value = false;
-  } else {
-    isFollowSelectionMode.value = true;
-  }
-}
-
-function findClosestBoidIndex(ray) {
-  const count = boidCount();
-  if (count <= 0) return -1;
-
-  const heapF32 = wasmModule.HEAPF32.buffer;
-  const positionsArray = new Float32Array(heapF32, posPtr(), count * 3);
-
-  let bestIndex = -1;
-  let bestDistance = 0.6; // 許容半径
-
-  for (let i = 0; i < count; i++) {
-    const base = i * 3;
-    tmpBoidPosition.set(positionsArray[base], positionsArray[base + 1], positionsArray[base + 2]);
-
-    tmpRayToPoint.subVectors(tmpBoidPosition, ray.origin);
-    const t = tmpRayToPoint.dot(ray.direction);
-    if (t < 0) continue; // カメラの後方
-
-    tmpClosestPoint.copy(ray.direction).multiplyScalar(t).add(ray.origin);
-    const distance = tmpBoidPosition.distanceTo(tmpClosestPoint);
-
-    if (distance < bestDistance) {
-      bestDistance = distance;
-      bestIndex = i;
-    }
-  }
-
-  return bestIndex;
-}
-
-function handleCanvasClick(event) {
-  if (!isFollowSelectionMode.value || !renderer) return;
-
-  const rect = renderer.domElement.getBoundingClientRect();
-  pointerNdc.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-  pointerNdc.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-  raycaster.setFromCamera(pointerNdc, camera);
-
-  const boidIndex = findClosestBoidIndex(raycaster.ray);
-  if (boidIndex >= 0) {
-    startCameraFollow(boidIndex);
-  } else {
-    isFollowSelectionMode.value = false;
-  }
-}
-
-function computeYawQuaternionFromArray(orientationsArray, index, outQuaternion) {
-  if (!orientationsArray) return null;
-  tmpQuaternion.fromArray(orientationsArray, index * 4);
-  return extractYawQuaternion(tmpQuaternion, outQuaternion);
-}
-
-function updateCameraFollow(positionsArray, orientationsArray) {
-  if (!isFollowing.value) return;
-  const idx = followedBoidId.value;
-  const count = boidCount();
-  if (idx < 0 || idx >= count) {
-    stopCameraFollow();
-    return;
-  }
-
-  followTargetPosition.fromArray(positionsArray, idx * 3);
-  tmpCurrentOffset.copy(camera.position).sub(followTargetPosition);
-
-  if (alignCameraWithBoid.value && orientationsArray) {
-    const yawQuat = computeYawQuaternionFromArray(orientationsArray, idx, tmpYawQuaternion);
-    if (yawQuat) {
-      tmpDesiredOffset.copy(followOffsetLocal).applyQuaternion(yawQuat);
-
-      if (isUserAdjustingCamera) {
-        tmpInverseQuaternion.copy(yawQuat).invert();
-        followOffsetLocal.copy(tmpCurrentOffset).applyQuaternion(tmpInverseQuaternion);
-        tmpDesiredOffset.copy(followOffsetLocal).applyQuaternion(yawQuat);
-      }
-
-      desiredCameraPosition.copy(followTargetPosition).add(tmpDesiredOffset);
-      followOffset.copy(tmpDesiredOffset);
-    } else {
-      if (isUserAdjustingCamera) {
-        followOffset.copy(tmpCurrentOffset);
-      }
-      desiredCameraPosition.copy(followTargetPosition).add(followOffset);
-      followOffsetLocal.copy(followOffset);
-    }
-  } else {
-    if (isUserAdjustingCamera) {
-      followOffset.copy(tmpCurrentOffset);
-    }
-    desiredCameraPosition.copy(followTargetPosition).add(followOffset);
-
-    if (orientationsArray) {
-      const yawQuat = computeYawQuaternionFromArray(orientationsArray, idx, tmpYawQuaternion);
-      if (yawQuat) {
-        tmpInverseQuaternion.copy(yawQuat).invert();
-        followOffsetLocal.copy(followOffset).applyQuaternion(tmpInverseQuaternion);
-      } else {
-        followOffsetLocal.copy(followOffset);
-      }
-    } else {
-      followOffsetLocal.copy(followOffset);
-    }
-  }
-
-  camera.position.lerp(desiredCameraPosition, 0.2);
-  controls.target.lerp(followTargetPosition, 0.2);
-}
-
-// WebGLレンダラー初期化（段階的フォールバック対応）
-function initThreeJS({ rebuildScene = false } = {}) {
+function initThreeJS() {
   const width = window.innerWidth;
   const height = window.innerHeight;
-  const isMobile = isMobileDevice();
 
-  // シーン再構築またはコンテキストロス復旧時
-  if (rebuildScene || !scene) {
-    scene = new THREE.Scene();
-    scene.fog = new THREE.Fog(toHex(OCEAN_COLORS.FOG), 3, 14);
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(OCEAN_COLORS.DEEP_BLUE);
+  scene.fog = new THREE.Fog(toHex(OCEAN_COLORS.FOG), 0, 28);
+  createOceanSphere();
 
-    camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
-    camera.position.set(2.19, -5.80, 5.76);
-    camera.lookAt(0, 0, 0);
+  camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
+  camera.position.set(4, 7, 7);
+  camera.lookAt(0, 0, 0);
 
-    const groundGeo = new THREE.PlaneGeometry(100, 100);
-    groundMaterial = createFadeOutGroundMaterial();
-    const ground = new THREE.Mesh(groundGeo, groundMaterial);
-    ground.rotation.x = -Math.PI / 2;
-    ground.position.y = -7;
-    ground.receiveShadow = true;
-    scene.add(ground);
+  renderer = new THREE.WebGLRenderer({
+    antialias: true,
+    depth: true, // 深度バッファを有効化
 
-    createOceanSphere();
-
-    const ambientLight = new THREE.AmbientLight(toHex(OCEAN_COLORS.AMBIENT_LIGHT), 1.3);
-    scene.add(ambientLight);
-
-    const dirLight = new THREE.DirectionalLight(toHex(OCEAN_COLORS.SUN_LIGHT), 23.0);
-    dirLight.position.set(0, 60, 30);
-    dirLight.castShadow = !isMobile;
-
-    const bottomLight = new THREE.DirectionalLight(toHex(OCEAN_COLORS.BOTTOM_LIGHT), 0);
-    bottomLight.position.set(0, -30, 0);
-    scene.add(bottomLight);
-
-    if (!isMobile) {
-      dirLight.shadow.camera.left = -100;
-      dirLight.shadow.camera.right = 100;
-      dirLight.shadow.camera.top = 100;
-      dirLight.shadow.camera.bottom = -100;
-      dirLight.shadow.camera.near = 0.2;
-      dirLight.shadow.camera.far = 1000;
-      dirLight.shadow.mapSize.width = 2048;
-      dirLight.shadow.mapSize.height = 2048;
-      dirLight.shadow.bias = -0.001;
-      dirLight.shadow.normalBias = 0.01;
-    }
-
-    scene.add(dirLight);
-  } else {
-    camera.aspect = width / height;
-    camera.updateProjectionMatrix();
-  }
-
-  // 失敗回数に応じて軽量設定に切り替え
-  const configFactory = rendererConfigs[Math.min(rendererInitAttempt, rendererConfigs.length - 1)];
-  const rendererOptions = configFactory(isMobile);
-
-  let newRenderer = null;
-  try {
-    newRenderer = new THREE.WebGLRenderer(rendererOptions);
-  } catch (error) {
-    console.warn('WebGLRenderer creation failed:', error);
-    rendererInitAttempt = Math.min(rendererInitAttempt + 1, rendererConfigs.length - 1);
-    scheduleRendererRetry();
-    return false;
-  }
-
-  const gl = newRenderer.getContext();
-  if (!gl) {
-    console.warn('WebGL context could not be created.');
-    newRenderer.dispose();
-    rendererInitAttempt = Math.min(rendererInitAttempt + 1, rendererConfigs.length - 1);
-    scheduleRendererRetry();
-    return false;
-  }
-
-  renderer = newRenderer;
-  if (rendererRetryTimer) {
-    clearTimeout(rendererRetryTimer);
-    rendererRetryTimer = null;
-  }
-
-  const basePixelRatio = isMobile ? Math.min(window.devicePixelRatio, 2) : window.devicePixelRatio;
-  const pixelRatio = rendererInitAttempt === 0 ? basePixelRatio : 1;
-  renderer.setPixelRatio(pixelRatio);
+  });
+  renderer.setPixelRatio(window.devicePixelRatio); // 高DPI対応
   renderer.setSize(width, height);
-  // 復旧時は影を無効化してパフォーマンス向上
-  const enableShadows = !isMobile && rendererInitAttempt === 0;
-  renderer.shadowMap.enabled = enableShadows;
-  if (enableShadows) {
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap; // 影を柔らかく
+
+  glContext = renderer.getContext();
+  if (typeof WebGL2RenderingContext !== 'undefined' && glContext instanceof WebGL2RenderingContext) {
+    gpuTimerExt = glContext.getExtension('EXT_disjoint_timer_query_webgl2');
+    if (!gpuTimerExt) {
+      console.warn('EXT_disjoint_timer_query_webgl2 is not available; GPU timing disabled.');
+    }
+  } else {
+    gpuTimerExt = null;
   }
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
 
-  if (threeContainer.value) {
-    threeContainer.value.appendChild(renderer.domElement);
-  }
+  threeContainer.value.appendChild(renderer.domElement);
 
-  lastRendererCanvas = renderer.domElement;
-  lastRendererCanvas.addEventListener('click', handleCanvasClick);
+  camera.aspect = width / height;
+  camera.updateProjectionMatrix();
 
-  setupWebGLContextLossHandling();
-
-  if (controls) {
-    controls.removeEventListener('start', handleControlsInteractionStart);
-    controls.removeEventListener('end', handleControlsInteractionEnd);
-    controls.dispose();
-  }
   controls = new OrbitControls(camera, renderer.domElement);
-  controls.enableDamping = true;
+  controls.enableDamping = true; // なめらかな操作
   controls.dampingFactor = 0.1;
-  controls.addEventListener('start', handleControlsInteractionStart);
-  controls.addEventListener('end', handleControlsInteractionEnd);
 
-  // 復旧時はポストプロセシングを無効化
-  const enableComposer = !isMobile && rendererInitAttempt === 0;
-  if (enableComposer) {
+  // 地面メッシュ追加
+  const groundGeo = new THREE.PlaneGeometry(1000, 1000);
+  const groundMat = createFadeOutGroundMaterial();
+  groundMat.depthTest = true;
+  const ground = new THREE.Mesh(groundGeo, groundMat);
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.y = -10;
+  ground.receiveShadow = true; // 影を受ける
+  scene.add(ground);
+
+  // ライト
+  const ambientLight = new THREE.AmbientLight(toHex(OCEAN_COLORS.AMBIENT_LIGHT), 1);
+  scene.add(ambientLight);
+
+  // 太陽光（やや暖色のDirectionalLight）
+  const dirLight = new THREE.DirectionalLight(toHex(OCEAN_COLORS.SUN_LIGHT), 15); // 暖色＆強め
+  dirLight.position.set(300, 500, 200); // 高い位置から照らす
+  dirLight.castShadow = true;
+
+  // 影カメラの範囲を広げる
+  dirLight.shadow.camera.left = -100;
+  dirLight.shadow.camera.right = 100;
+  dirLight.shadow.camera.top = 100;
+  dirLight.shadow.camera.bottom = -100;
+  dirLight.shadow.camera.near = 1;
+  dirLight.shadow.camera.far = 1000;
+
+  dirLight.shadow.mapSize.width = 2048;
+  dirLight.shadow.mapSize.height = 2048;
+  dirLight.shadow.bias = -0.001;
+  dirLight.shadow.normalBias = 0.01;
+
+  scene.add(dirLight);
+  // EffectComposer の初期化（スマホ以外の場合のみ）
+  if (!isMobileDevice()) {
+    // EffectComposer の初期化
     composer = new EffectComposer(renderer);
+
+    // RenderPass を追加
     const renderPass = new RenderPass(scene, camera);
     composer.addPass(renderPass);
 
     const ssaoPass = new SSAOPass(scene, camera, width, height);
-    ssaoPass.kernelRadius = 8;
-    ssaoPass.minDistance = 0.001;
-    ssaoPass.maxDistance = 0.01;
+    ssaoPass.kernelRadius = 8; // サンプル半径（大きくすると効果が広がる）
+    ssaoPass.minDistance = 0.001; // 最小距離（小さくすると近距離の効果が強調される）
+    ssaoPass.maxDistance = 0.01; // 最大距離（大きくすると遠距離の効果が強調される）
     composer.addPass(ssaoPass);
 
+    // UnrealBloomPass を追加（任意）
     const bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 1.5, 0.4, 0.85);
     composer.addPass(bloomPass);
-  } else {
-    composer = null;
   }
-
-  window.removeEventListener('resize', onWindowResize);
+  // ウィンドウリサイズ対応
   window.addEventListener('resize', onWindowResize);
-
-  rendererInitAttempt = 0;
-  tryStartSimulation();
-  return true;
 }
 
 function onWindowResize() {
-  if (!camera || !renderer) return;
   const width = window.innerWidth;
   const height = window.innerHeight;
   camera.aspect = width / height;
@@ -1024,7 +290,316 @@ function onWindowResize() {
 // 一時的に従来方式に戻す - instancedMeshを単一で使用
 let instancedMeshHigh = null; // 高ポリゴン用
 let instancedMeshLow = null;  // 低ポリゴン用
-let groundMaterial = null;    // 地面マテリアルの参照
+const instancingMaterials = new Set();
+
+const TRIPLE_BUFFER_SIZE = 3;
+const HIDDEN_POSITION = 1e6;
+const IDENTITY_QUATERNION = [0, 0, 0, 1];
+// LOD距離閾値（平方距離）: 近距離はハイポリ、中距離はLOD+アニメ、遠距離はLOD静止
+const LOD_NEAR_DISTANCE_SQ = 4; // 2m以内はメインモデル
+const LOD_MID_DISTANCE_SQ = 25; // 5m以内はLODモデル＋アニメ
+const STREAM_USAGE = THREE.StreamDrawUsage ?? THREE.DynamicDrawUsage;
+const tailAnimation = {
+  uniforms: {
+    uTailTime: { value: 0 },            // 時間（波形生成用）
+    uTailAmplitude: { value: 0.14 },    // 振幅（全身の揺れ幅）
+    uTailFrequency: { value: 10.0 },    // 周波数（くねり速度）
+    uTailPhaseStride: { value: 5.0 },   // 体の長さ方向の位相差（波長に相当）
+    uTailTurnStrength: { value: 0.1 },  // 旋回時の強度
+    uTailSpeedScale: { value: 1 },      // 速度による影響度
+    uTailRight: { value: new THREE.Vector3(1, 0, 0) },     // 尾アニメの右方向ベクトル
+    uTailForward: { value: new THREE.Vector3(0, 0, 1) },   // 尾アニメの進行方向ベクトル
+    uTailUp: { value: new THREE.Vector3(0, 1, 0) },        // 尾アニメの上方向ベクトル
+    uTailEnable: { value: 1 }           // アニメーション有効/無効
+  },
+};
+
+// 海中シーンの色味をまとめて管理する定数群
+const OCEAN_COLORS = {
+  SKY_HIGHLIGHT: '#4fbaff',
+  SKY_BLUE: '#15a1ff',
+  DEEP_BLUE: '#002968',
+  SEAFLOOR: '#777465',
+  FOG: '#153a6c',
+  AMBIENT_LIGHT: '#2c9aff',
+  SUN_LIGHT: '#5389b7',
+  SIDE_LIGHT1: '#6ba3d0',
+  SIDE_LIGHT2: '#2d5f7a',
+  BOTTOM_LIGHT: '#0f2635',
+};
+
+// '#rrggbb' 形式の色を three.js の整数表現に変換
+const toHex = (colorStr) => parseInt(colorStr.replace('#', '0x'), 16);
+
+function createOceanSphere() {
+  if (!scene) return null;
+
+  // 上層→深層のグラデーションで海中の空気感を演出
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+  canvas.width = 512;
+  canvas.height = 512;
+
+  const gradient = context.createLinearGradient(0, 0, 0, canvas.height);
+  gradient.addColorStop(0, OCEAN_COLORS.SKY_HIGHLIGHT);
+  gradient.addColorStop(0.2, OCEAN_COLORS.SKY_BLUE);
+  gradient.addColorStop(0.6, OCEAN_COLORS.DEEP_BLUE);
+  gradient.addColorStop(1, OCEAN_COLORS.DEEP_BLUE);
+
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, canvas.width, canvas.height);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.generateMipmaps = false;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+
+  const sphereGeo = new THREE.SphereGeometry(300, 32, 32);
+  const sphereMat = new THREE.MeshBasicMaterial({
+    map: texture,
+    side: THREE.BackSide,
+    fog: false,
+  });
+
+  const oceanSphere = new THREE.Mesh(sphereGeo, sphereMat);
+  scene.add(oceanSphere);
+  return oceanSphere;
+}
+
+function createFadeOutGroundMaterial() {
+  const textureLoader = new THREE.TextureLoader();
+  const alphaMap = textureLoader.load('./models/groundAlfa.png');
+
+  alphaMap.minFilter = THREE.LinearFilter;
+  alphaMap.magFilter = THREE.LinearFilter;
+  alphaMap.wrapS = THREE.ClampToEdgeWrapping;
+  alphaMap.wrapT = THREE.ClampToEdgeWrapping;
+
+  const material = new THREE.MeshStandardMaterial({
+    color: toHex(OCEAN_COLORS.SEAFLOOR),
+    transparent: true,
+    alphaMap,
+    depthWrite: false,
+  });
+
+  material.roughness = 0.85;
+  material.metalness = 0.0;
+  return material;
+}
+
+function updateInstancingMaterialUniforms(time) {
+  tailAnimation.uniforms.uTailTime.value = time;
+}
+
+let bufferCursor = 0;
+let bufferSetHigh = null;
+let bufferSetLow = null;
+let cachedHeapBuffer = null;
+let cachedPositionsPtr = 0;
+let cachedOrientationsPtr = 0;
+let cachedPositionsView = null;
+let cachedOrientationsView = null;
+let cachedPositionsCount = 0;
+let cachedOrientationsCount = 0;
+let shaderTime = 0;
+let cachedVelocitiesPtr = 0;
+let cachedVelocitiesView = null;
+let cachedVelocitiesCount = 0;
+let tailPhaseSeeds = null;
+let previousVelocities = null;
+function createAttributeSet(count, itemSize) {
+  const length = count * itemSize;
+  const attributes = [];
+  for (let i = 0; i < TRIPLE_BUFFER_SIZE; i++) {
+    const attr = new THREE.InstancedBufferAttribute(new Float32Array(length), itemSize);
+    attr.setUsage(STREAM_USAGE);
+    attributes.push(attr);
+  }
+  return attributes;
+}
+
+function createBufferSet(count) {
+  // トリプルバッファ用の属性セットを作成（位置・姿勢・尾アニメ制御用）
+  return {
+    pos: createAttributeSet(count, 3),
+    quat: createAttributeSet(count, 4),
+    tailPhase: createAttributeSet(count, 1),
+    tailSpeed: createAttributeSet(count, 1),
+    tailTurn: createAttributeSet(count, 1),
+    tailDrive: createAttributeSet(count, 1), // 尾アニメの有効/無効制御（遠距離で0にして負荷削減）
+  };
+}
+
+function resetBufferSetToHidden(bufferSet) {
+  for (const attr of bufferSet.pos) {
+    const array = attr.array;
+    for (let i = 0; i < array.length; i += 3) {
+      array[i] = HIDDEN_POSITION;
+      array[i + 1] = HIDDEN_POSITION;
+      array[i + 2] = HIDDEN_POSITION;
+    }
+  }
+  for (const attr of bufferSet.quat) {
+    const array = attr.array;
+    for (let i = 0; i < array.length; i += 4) {
+      array[i] = 0;
+      array[i + 1] = 0;
+      array[i + 2] = 0;
+      array[i + 3] = 1;
+    }
+  }
+  for (const attr of bufferSet.tailPhase) {
+    attr.array.fill(0);
+  }
+  for (const attr of bufferSet.tailSpeed) {
+    attr.array.fill(0);
+  }
+  for (const attr of bufferSet.tailTurn) {
+    attr.array.fill(0);
+  }
+  for (const attr of bufferSet.tailDrive) {
+    attr.array.fill(0);
+  }
+}
+
+function applyBufferSet(mesh, bufferSet, index) {
+  // トリプルバッファの指定インデックスから属性をジオメトリに設定
+  mesh.geometry.setAttribute('instancePos', bufferSet.pos[index]);
+  mesh.geometry.setAttribute('instanceQuat', bufferSet.quat[index]);
+  mesh.geometry.setAttribute('instanceTailPhase', bufferSet.tailPhase[index]);
+  mesh.geometry.setAttribute('instanceTailSpeed', bufferSet.tailSpeed[index]);
+  mesh.geometry.setAttribute('instanceTailTurn', bufferSet.tailTurn[index]);
+  mesh.geometry.setAttribute('instanceTailDrive', bufferSet.tailDrive[index]);
+}
+
+function patchQuaternionInstancing(material) {
+  if (material.userData?.quaternionInstancingPatched) return;
+
+  material.onBeforeCompile = (shader) => {
+    Object.entries(tailAnimation.uniforms).forEach(([key, uniform]) => {
+      shader.uniforms[key] = uniform;
+    });
+
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        `#include <common>\nattribute vec3 instancePos;\nattribute vec4 instanceQuat;\nattribute float aBodyCoord;\nattribute float instanceTailPhase;\nattribute float instanceTailSpeed;\nattribute float instanceTailTurn;\nattribute float instanceTailDrive;\nuniform float uTailTime;\nuniform float uTailAmplitude;\nuniform float uTailFrequency;\nuniform float uTailPhaseStride;\nuniform float uTailTurnStrength;\nuniform float uTailSpeedScale;\nuniform vec3 uTailRight;\nuniform vec3 uTailForward;\nuniform vec3 uTailUp;\nuniform float uTailEnable;\nvec3 quatTransform(vec3 v, vec4 q) {\n  vec3 t = 2.0 * cross(q.xyz, v);\n  return v + q.w * t + cross(q.xyz, t);\n}`
+      )
+      .replace('#include <instancing_vertex>', `#ifdef USE_INSTANCING\n#endif`)
+      .replace(
+        '#include <begin_vertex>',
+  `#include <begin_vertex>\nif (uTailEnable > 0.5) {\n  float driveRaw = instanceTailDrive;\n  if (driveRaw > 0.01) {\n    float drive = clamp(driveRaw, 0.0, 1.0);\n    vec3 originalPos = transformed;\n    vec3 right = normalize(uTailRight);\n    vec3 forward = normalize(uTailForward);\n    vec3 up = normalize(uTailUp);\n\n    float localX = dot(originalPos, right);\n    float localY = dot(originalPos, forward);\n    float localZ = dot(originalPos, up);\n\n    float bodyCoord = clamp(aBodyCoord, 0.0, 1.0);\n    float tailWeight = smoothstep(0.0, 0.35, bodyCoord);\n    float speedFactor = clamp(instanceTailSpeed * uTailSpeedScale, 0.0, 2.0);\n\n    float phase = instanceTailPhase + uTailTime * uTailFrequency;\n    float wavePhase = phase + bodyCoord * uTailPhaseStride;\n    float wag = sin(wavePhase) * uTailAmplitude * drive;\n    float turnOffset = instanceTailTurn * uTailTurnStrength * drive;\n    float motion = wag * (0.4 + 0.6 * speedFactor) + turnOffset;\n\n    float tipDamping = 1.0 - smoothstep(0.7, 1.0, bodyCoord) * 0.3;\n    float bendStrength = mix(0.02, 1.0, tailWeight) * tipDamping;\n\n    float bendAngle = motion * bendStrength;\n    float s = sin(bendAngle);\n    float c = cos(bendAngle);\n    float rotX = localX * c - localY * s;\n    float rotY = localX * s + localY * c;\n\n    float sway = motion * 0.4 * tipDamping;\n    rotX += sway * (0.05 + 0.95 * bodyCoord);\n\n    vec3 rotated = right * rotX + forward * rotY + up * localZ;\n    transformed = rotated;\n  }\n}\ntransformed = quatTransform(transformed, instanceQuat) + instancePos;`
+      )
+      .replace(
+        '#include <beginnormal_vertex>',
+        '#include <beginnormal_vertex>\nobjectNormal = quatTransform(objectNormal, instanceQuat);'
+      )
+      .replace(
+        '#include <project_vertex>',
+        `#include <project_vertex>\n#ifdef DEPTH_PACKING\nif (uTailEnable > 0.5) {\n  float driveRaw = instanceTailDrive;\n  if (driveRaw > 0.01) {\n    float drive = clamp(driveRaw, 0.0, 1.0);\n    vec3 viewPos = mvPosition.xyz;\n    mat3 normalMatrix3 = mat3(normalMatrix);\n    vec3 right = normalize(normalMatrix3 * uTailRight);\n    vec3 forward = normalize(normalMatrix3 * uTailForward);\n    vec3 up = normalize(normalMatrix3 * uTailUp);\n\n    float localX = dot(viewPos, right);\n    float localY = dot(viewPos, forward);\n    float localZ = dot(viewPos, up);\n\n    float bodyCoord = clamp(aBodyCoord, 0.0, 1.0);\n    float tailWeight = smoothstep(0.0, 0.35, bodyCoord);\n    float speedFactor = clamp(instanceTailSpeed * uTailSpeedScale, 0.0, 2.0);\n\n    float phase = instanceTailPhase + uTailTime * uTailFrequency;\n    float wavePhase = phase + bodyCoord * uTailPhaseStride;\n    float wag = sin(wavePhase) * uTailAmplitude * drive;\n    float turnOffset = instanceTailTurn * uTailTurnStrength * drive;\n    float motion = wag * (0.4 + 0.6 * speedFactor) + turnOffset;\n\n    float tipDamping = 1.0 - smoothstep(0.7, 1.0, bodyCoord) * 0.3;\n    float bendStrength = mix(0.02, 1.0, tailWeight) * tipDamping;\n\n    float bendAngle = motion * bendStrength;\n    float s = sin(bendAngle);\n    float c = cos(bendAngle);\n    float rotX = localX * c - localY * s;\n    float rotY = localX * s + localY * c;\n\n    float sway = motion * 0.4 * tipDamping;\n    rotX += sway * (0.05 + 0.95 * bodyCoord);\n\n    vec3 rotated = right * rotX + forward * rotY + up * localZ;\n    mvPosition.xyz = rotated;\n    gl_Position = projectionMatrix * mvPosition;\n  }\n}\n#endif`
+      );
+
+    material.userData = {
+      ...(material.userData || {}),
+      quaternionInstancingPatched: true,
+    };
+  };
+
+  material.needsUpdate = true;
+  instancingMaterials.add(material);
+}
+
+function stepSimulationAndUpdateState(deltaTime) {
+  const statePtr = stepSimulation(deltaTime);
+  if (!statePtr) {
+    return latestBoidCountFromWasm;
+  }
+
+  latestStatePtr = statePtr;
+
+  const heapU8Buffer = wasmModule.HEAPU8.buffer;
+  if (
+    !latestStateHeaderView ||
+    latestStateHeaderPtr !== statePtr ||
+    latestStateHeaderView.buffer !== heapU8Buffer
+  ) {
+    latestStateHeaderView = new DataView(heapU8Buffer, statePtr, 16);
+    latestStateHeaderPtr = statePtr;
+  }
+
+  latestPositionsPtr = latestStateHeaderView.getUint32(0, true);
+  latestVelocitiesPtr = latestStateHeaderView.getUint32(4, true);
+  latestOrientationsPtr = latestStateHeaderView.getUint32(8, true);
+  latestBoidCountFromWasm = latestStateHeaderView.getInt32(12, true);
+
+  return latestBoidCountFromWasm;
+}
+
+function getWasmViews(count) {
+  const heapBuffer = wasmModule.HEAPF32.buffer;
+
+  if (cachedHeapBuffer !== heapBuffer) {
+    cachedHeapBuffer = heapBuffer;
+    cachedPositionsPtr = 0;
+    cachedOrientationsPtr = 0;
+    cachedVelocitiesPtr = 0;
+    cachedPositionsView = null;
+    cachedOrientationsView = null;
+    cachedVelocitiesView = null;
+    cachedPositionsCount = 0;
+    cachedOrientationsCount = 0;
+    cachedVelocitiesCount = 0;
+  }
+
+  const posPointer = latestPositionsPtr;
+  const oriPointer = latestOrientationsPtr;
+  const velPointer = latestVelocitiesPtr;
+
+  if (!posPointer || !oriPointer || !velPointer || count <= 0) {
+    return {
+      positions: cachedPositionsView ?? new Float32Array(0),
+      orientations: cachedOrientationsView ?? new Float32Array(0),
+      velocities: cachedVelocitiesView ?? new Float32Array(0),
+    };
+  }
+
+  if (
+    cachedPositionsView === null ||
+    cachedPositionsCount !== count ||
+    cachedPositionsPtr !== posPointer
+  ) {
+    cachedPositionsPtr = posPointer;
+    cachedPositionsView = new Float32Array(heapBuffer, cachedPositionsPtr, count * 3);
+    cachedPositionsCount = count;
+  }
+
+  if (
+    cachedOrientationsView === null ||
+    cachedOrientationsCount !== count ||
+    cachedOrientationsPtr !== oriPointer
+  ) {
+    cachedOrientationsPtr = oriPointer;
+    cachedOrientationsView = new Float32Array(heapBuffer, cachedOrientationsPtr, count * 4);
+    cachedOrientationsCount = count;
+  }
+
+  if (
+    cachedVelocitiesView === null ||
+    cachedVelocitiesCount !== count ||
+    cachedVelocitiesPtr !== velPointer
+  ) {
+    cachedVelocitiesPtr = velPointer;
+    cachedVelocitiesView = new Float32Array(heapBuffer, cachedVelocitiesPtr, count * 3);
+    cachedVelocitiesCount = count;
+  }
+
+  return {
+    positions: cachedPositionsView,
+    orientations: cachedOrientationsView,
+    velocities: cachedVelocitiesView,
+  };
+}
 
 // LOD用ジオメトリ・マテリアルを使い回す
 const boidGeometryHigh = new THREE.SphereGeometry(1, 8, 8);
@@ -1033,10 +608,12 @@ boidGeometryHigh.scale(0.5, 0.5, 2.0); // 少し小さくする
 boidGeometryLow.scale(0.5, 0.5, 2.0); // 少し小さくする
 let boidModel = null; // 読み込んだモデルを保持
 let boidModelLod = null; // 読み込んだモデルを保持
-let predatorModel = null; // 捕食者モデルを保持
 let originalMaterial = null; // 元のマテリアルを保持
 let originalMaterialLod = null; // 元のLODマテリアルを保持
-let predatorMaterial = null; // 捕食者用マテリアル
+let predatorModel = null;
+let predatorMaterial = null;
+let predatorMeshes = [];
+let predatorMeshCountCache = -1;
 
 // 起動時の正しいテクスチャマテリアルを保持
 let originalHighMat = null;
@@ -1045,6 +622,113 @@ let originalLowMat = null;
 // 前回のshowUnitColorsの状態を保持（OFF→ONの検知用）
 let lastShowUnitColors = false;
 
+function getPredatorCount() {
+  return settings.reduce((sum, s) => sum + ((s.isPredator && s.count) ? s.count : 0), 0);
+}
+
+function ensurePredatorMeshes(count) {
+  if (!predatorModel) return false;
+
+  while (predatorMeshes.length > count) {
+    const mesh = predatorMeshes.pop();
+    if (mesh) {
+      scene.remove(mesh);
+    }
+  }
+
+  while (predatorMeshes.length < count) {
+    const clone = predatorModel.clone(true);
+    clone.traverse((child) => {
+      if (child.isMesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
+    clone.visible = false;
+    scene.add(clone);
+    predatorMeshes.push(clone);
+  }
+
+  return predatorMeshes.length === count;
+}
+
+function createTailPhaseArray(count) {
+  const array = new Float32Array(count);
+  for (let i = 0; i < count; i++) {
+    array[i] = Math.random() * Math.PI * 2;
+  }
+  return array;
+}
+
+function applyTailPhaseSeeds(bufferSet, seeds) {
+  if (!bufferSet || !bufferSet.tailPhase) return;
+  for (const attr of bufferSet.tailPhase) {
+    attr.array.set(seeds);
+    attr.needsUpdate = true;
+  }
+}
+
+function ensureTailRuntimeBuffers(count) {
+  if (!previousVelocities || previousVelocities.length !== count * 3) {
+    previousVelocities = new Float32Array(count * 3);
+  }
+}
+
+function ensureBodyCoordAttribute(geometry) {
+  if (geometry.getAttribute('aBodyCoord')) return;
+  const position = geometry.getAttribute('position');
+  if (!position) return;
+
+  const count = position.count;
+  const array = position.array;
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+
+  for (let i = 0; i < count; i++) {
+    const ix = i * 3;
+    const x = array[ix];
+    const y = array[ix + 1];
+    const z = array[ix + 2];
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+    if (z < minZ) minZ = z;
+    if (z > maxZ) maxZ = z;
+  }
+
+  const rangeX = maxX - minX;
+  const rangeY = maxY - minY;
+  const rangeZ = maxZ - minZ;
+  let axis = 'z';
+  let min = minZ;
+  let range = rangeZ;
+
+  if (rangeX > rangeY && rangeX > rangeZ) {
+    axis = 'x';
+    min = minX;
+    range = rangeX;
+  } else if (rangeY > rangeZ) {
+    axis = 'y';
+    min = minY;
+    range = rangeY;
+  }
+
+  const bodyCoord = new Float32Array(count);
+  const denom = range > 0 ? range : 1;
+  for (let i = 0; i < count; i++) {
+    const ix = i * 3;
+    const value = axis === 'x' ? array[ix] : axis === 'y' ? array[ix + 1] : array[ix + 2];
+    bodyCoord[i] = (value - min) / denom;
+  }
+
+  geometry.setAttribute('aBodyCoord', new THREE.BufferAttribute(bodyCoord, 1));
+}
+
+function getTotalBoidCount() {
+  return settings.reduce((sum, s) => sum + (s.count || 0), 0);
+}
+
 function initInstancedBoids(count) {
   if (!boidModel.children || !boidModel.children[0]) {
     console.error('Boid model does not have valid children.');
@@ -1052,8 +736,15 @@ function initInstancedBoids(count) {
   }
 
   // 既存のメッシュを削除
-  if (instancedMeshHigh) scene.remove(instancedMeshHigh);
-  if (instancedMeshLow) scene.remove(instancedMeshLow);
+  if (instancedMeshHigh) {
+    scene.remove(instancedMeshHigh);
+    instancingMaterials.delete(instancedMeshHigh.material);
+  }
+  if (instancedMeshLow) {
+    scene.remove(instancedMeshLow);
+    instancingMaterials.delete(instancedMeshLow.material);
+  }
+  instancingMaterials.clear();
   // InstancedMeshを作成（最初はvertexColors無効でテクスチャ表示）
   const highMaterial = originalMaterial.clone();
   highMaterial.vertexColors = false; // 最初はテクスチャ表示
@@ -1061,21 +752,29 @@ function initInstancedBoids(count) {
   const lowMaterial = originalMaterialLod.clone();
   lowMaterial.vertexColors = false; // 最初はテクスチャ表示
 
+  patchQuaternionInstancing(highMaterial);
+  patchQuaternionInstancing(lowMaterial);
+
+  const highGeometry = boidModel.children[0].geometry;
+  const lowGeometry = boidModelLod.children[0].geometry;
+  ensureBodyCoordAttribute(highGeometry);
+  ensureBodyCoordAttribute(lowGeometry);
+
   instancedMeshHigh = new THREE.InstancedMesh(
-    boidModel.children[0].geometry,
+    highGeometry,
     highMaterial,
     count
   );
-  instancedMeshHigh.castShadow = !isMobileDevice(); // スマホでは影を無効化
-  instancedMeshHigh.receiveShadow = !isMobileDevice();
+  instancedMeshHigh.castShadow = true;
+  instancedMeshHigh.receiveShadow = true;
 
   instancedMeshLow = new THREE.InstancedMesh(
-    boidModelLod.children[0].geometry,
+    lowGeometry,
     lowMaterial,
     count
   );
-  instancedMeshLow.castShadow = !isMobileDevice(); // スマホでは影を無効化
-  instancedMeshLow.receiveShadow = !isMobileDevice();
+  instancedMeshLow.castShadow = true;
+  instancedMeshLow.receiveShadow = true;
 
   // インスタンスカラーを白で初期化
   const whiteColor = new THREE.Color(1, 1, 1);
@@ -1090,91 +789,122 @@ function initInstancedBoids(count) {
   scene.add(instancedMeshHigh);
   scene.add(instancedMeshLow);
 
-  if (tailAnimation.animatedHighMaterial) {
-    tailAnimation.animatedHighMaterial.dispose();
+  bufferSetHigh = createBufferSet(count);
+  bufferSetLow = createBufferSet(count);
+  resetBufferSetToHidden(bufferSetHigh);
+  resetBufferSetToHidden(bufferSetLow);
+  tailPhaseSeeds = createTailPhaseArray(count);
+  applyTailPhaseSeeds(bufferSetHigh, tailPhaseSeeds);
+  applyTailPhaseSeeds(bufferSetLow, tailPhaseSeeds);
+  bufferCursor = 0;
+  applyBufferSet(instancedMeshHigh, bufferSetHigh, bufferCursor);
+  applyBufferSet(instancedMeshLow, bufferSetLow, bufferCursor);
+
+  instancedMeshHigh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+  instancedMeshLow.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+  instancedMeshHigh.count = count;
+  instancedMeshLow.count = count;
+
+  cachedPositionsView = null;
+  cachedOrientationsView = null;
+  cachedPositionsCount = 0;
+  cachedOrientationsCount = 0;
+  cachedPositionsPtr = 0;
+  cachedOrientationsPtr = 0;
+  cachedVelocitiesView = null;
+  cachedVelocitiesCount = 0;
+  cachedVelocitiesPtr = 0;
+  previousVelocities = null;
+  shaderTime = 0;
+  ensureTailRuntimeBuffers(count);
+
+  const predators = getPredatorCount();
+  if (ensurePredatorMeshes(predators)) {
+    predatorMeshCountCache = predators;
   }
-  if (tailAnimation.animatedLowMaterial) {
-    tailAnimation.animatedLowMaterial.dispose();
+  for (const mesh of predatorMeshes) {
+    mesh.visible = false;
   }
-  tailAnimation.baseHighMaterial = instancedMeshHigh.material;
-  tailAnimation.baseLowMaterial = instancedMeshLow.material;
-  setTailBasisFromGeometry(instancedMeshHigh.geometry);
-  setTailBasisFromGeometry(instancedMeshLow.geometry);
-  tailAnimation.animatedHighMaterial = createTailMaterial(instancedMeshHigh.material);
-  tailAnimation.animatedLowMaterial = createTailMaterial(instancedMeshLow.material);
-  ensureTailAttributes(count);
-  updateTailAnimationMaterials();
 
   console.log('InstancedMeshes created with vertex colors enabled');
 }
 
 
 
-// 初期化時のコールバック（頻度が低いため匿名関数でも問題なし）
 function loadBoidModel(callback) {
   const loader = new GLTFLoader();
+  const basePath = process.env.BASE_URL || '/'; // publicPath を取得
   const textureLoader = new THREE.TextureLoader();
-
+  let pendingAssets = 3;
+  const notifyReady = () => {
+    pendingAssets = Math.max(0, pendingAssets - 1);
+    if (pendingAssets === 0) {
+      callback();
+    }
+  };
   const texture = textureLoader.load(
-    './models/fish.png',
-    () => console.log('Texture loaded successfully.'),
+    './models/fish.png', // テクスチャのパス
+    () => {
+      console.log('Texture loaded successfully.');
+    },
     undefined,
-    (error) => console.error('An error occurred while loading the texture:', error)
+    (error) => {
+      console.error('An error occurred while loading the texture:', error);
+    }
   );
-
   const textureLod = textureLoader.load(
-    './models/fish_lod.png',
-    () => console.log('Texture loaded successfully.'),
+    './models/fish_lod.png', // テクスチャのパス
+    () => {
+      console.log('Texture loaded successfully.');
+    },
     undefined,
-    (error) => console.error('An error occurred while loading the texture:', error)
+    (error) => {
+      console.error('An error occurred while loading the texture:', error);
+    }
   );
-
-  const normalMapLod = textureLoader.load(
-    './models/fish_lod_n.png',
-    () => console.log('LOD Normal map loaded successfully.'),
-    undefined,
-    (error) => console.error('An error occurred while loading the LOD normal map:', error)
-  );
+  texture.flipY = false;
+  texture.colorSpace = THREE.SRGBColorSpace; // sRGBカラー空間を使用
+  textureLod.flipY = false;
+  textureLod.colorSpace = THREE.SRGBColorSpace;
 
   const predatorTexture = textureLoader.load(
     './models/fishPredetor.png',
-    () => console.log('Predator texture loaded successfully.'),
+    () => {
+      console.log('Predator texture loaded successfully.');
+    },
     undefined,
-    (error) => console.error('An error occurred while loading the predator texture:', error)
+    (error) => {
+      console.error('An error occurred while loading the predator texture:', error);
+    }
   );
-
-  texture.flipY = false;
-  texture.colorSpace = THREE.SRGBColorSpace;
-  textureLod.flipY = false;
-  textureLod.colorSpace = THREE.SRGBColorSpace;
-  normalMapLod.flipY = false;
-  normalMapLod.colorSpace = THREE.LinearSRGBColorSpace; // ノーマルマップはLinear色空間
   predatorTexture.flipY = false;
   predatorTexture.colorSpace = THREE.SRGBColorSpace;
 
-  boidMaterial = new THREE.MeshStandardMaterial({
-    color: 0xffffff,
+  let boidMaterial = new THREE.MeshStandardMaterial({
+    color: 0xffffff, // 白色
     roughness: 0.5,
     metalness: 0,
-    transparent: false,
-    alphaTest: 0.5,
-    map: texture,
-    vertexColors: true,
+    transparent: false, // 半透明を有効化
+    alphaTest: 0.5,    // アルファテストを設定
+    map: texture,      // テクスチャを設定
+    vertexColors: true, // 通常時は無効
     vertexColor: 0xffffff
   });
 
-  boidLodMaterial = new THREE.MeshStandardMaterial({
-    color: 0xffffff,
+  let boidLodMaterial = new THREE.MeshStandardMaterial({
+    color: 0xffffff, // 白色
     roughness: 0.5,
     metalness: 0,
-    transparent: false,
-    alphaTest: 0.5,
-    map: textureLod,
-    normalMap: normalMapLod,
-    vertexColors: false,
+    transparent: false, // 半透明を有効化
+    alphaTest: 0.5,    // アルファテストを設定
+    map: textureLod,      // テクスチャを設定
+    vertexColors: false, // 通常時は無効
     vertexColor: 0xffffff
+
   });
 
+  originalMaterial = boidMaterial;
+  originalMaterialLod = boidLodMaterial;
   predatorMaterial = new THREE.MeshStandardMaterial({
     color: 0xffffff,
     roughness: 0.5,
@@ -1183,52 +913,48 @@ function loadBoidModel(callback) {
     alphaTest: 0.5,
     map: predatorTexture,
     vertexColors: false,
-    vertexColor: 0xffffff
+    vertexColor: 0xffffff,
   });
-
-  originalMaterial = boidMaterial;
-  originalMaterialLod = boidLodMaterial;
-
-  let modelsLoaded = 0;
-  const totalModels = 3;
-
-  const checkAllLoaded = () => {
-    modelsLoaded++;
-    if (modelsLoaded === totalModels) {
-      callback();
-    }
-  };
-
   loader.load(
-    `./models/boidModel.glb`,
+    `./models/boidModel.glb`, // モデルのパス
     (gltf) => {
       boidModel = gltf.scene;
+
+      // マテリアルの transparent と alphaTest を変更
       boidModel.traverse((child) => {
         if (child.isMesh) {
-          child.geometry = augmentFishGeometry(child.geometry);
-          child.material = boidMaterial;
+          child.material = boidMaterial; // 半透明を有効化
         }
       });
-      checkAllLoaded();
+
+      notifyReady();
     },
     undefined,
-    (error) => console.error('An error occurred while loading the model:', error)
+    (error) => {
+      console.error('An error occurred while loading the model:', error);
+      notifyReady();
+    }
   );
 
   loader.load(
-    `./models/boidModel_lod.glb`,
+    `./models/boidModel_lod.glb`, // LODモデルのパス
     (gltf) => {
       boidModelLod = gltf.scene;
+
+      // マテリアルの transparent と alphaTest を変更
       boidModelLod.traverse((child) => {
         if (child.isMesh) {
-          child.geometry = augmentFishGeometry(child.geometry);
-          child.material = boidLodMaterial;
+          child.material = boidLodMaterial; // 半透明を有効化
         }
       });
-      checkAllLoaded();
+
+      notifyReady();
     },
     undefined,
-    (error) => console.error('An error occurred while loading the LOD model:', error)
+    (error) => {
+      console.error('An error occurred while loading the LOD model:', error);
+      notifyReady();
+    }
   );
 
   loader.load(
@@ -1238,22 +964,22 @@ function loadBoidModel(callback) {
       predatorModel.traverse((child) => {
         if (child.isMesh) {
           child.material = predatorMaterial;
+          child.castShadow = true;
+          child.receiveShadow = true;
         }
       });
-      checkAllLoaded();
+      predatorMeshCountCache = -1;
+      notifyReady();
     },
     undefined,
-    (error) => console.error('An error occurred while loading the predator model:', error)
+    (error) => {
+      console.error('An error occurred while loading the predator model:', error);
+      notifyReady();
+    }
   );
 }
 
 function clearUnitVisuals() {
-  // シーン復旧中の場合は配列のみクリア
-  if (!scene) {
-    unitSpheres = [];
-    unitLines = [];
-    return;
-  }
   for (const mesh of unitSpheres) scene.remove(mesh);
   for (const line of unitLines) scene.remove(line);
   unitSpheres = [];
@@ -1319,267 +1045,255 @@ function drawUnitTree(unit, layer = 0) {
     }
   }
 }
-let positions, velocities, orientations;
-
-let predatorMarkers = []; // Predator 用のマーカーを保持（複数対応）
 let lastTime = performance.now(); // 前回のフレームのタイムスタンプ
-
-// アニメーション継続用の命名関数（匿名関数を避けてパフォーマンス改善）
-function scheduleNextFrame() {
-  animationTimer = setTimeout(() => {
-    animationTimer = null;
-    animate();
-  }, FRAME_INTERVAL);
-}
-
-// アニメーションループを安全に停止
-function stopAnimationLoop() {
-  if (animationTimer) {
-    clearTimeout(animationTimer);
-    animationTimer = null;
-  }
-}
-
-// 種族インデックスの事前計算（設定変更時のみ実行）
-function buildSpeciesIndexLookup() {
-  speciesIndexLookup = [];
-  let currentIndex = 0;
-
-  for (let s = 0; s < settings.length; s++) {
-    for (let i = 0; i < settings[s].count; i++) {
-      speciesIndexLookup[currentIndex] = s;
-      currentIndex++;
-    }
-  }
-}
 
 function animate() {
   stats?.begin();
-  frameCounter++;
 
   const currentTime = performance.now();
   const deltaTime = (currentTime - lastTime) / 1000;
   lastTime = currentTime;
-  if (!paused.value) update(deltaTime);
-  // レンダラー復旧中は描画をスキップ
-  if (!renderer || !scene || !camera) {
+
+  if (!paused.value) {
+    shaderTime += deltaTime;
+  }
+  updateInstancingMaterialUniforms(shaderTime);
+
+  const count = stepSimulationAndUpdateState(paused.value ? 0 : deltaTime);
+  if (!instancedMeshHigh || !instancedMeshLow || !bufferSetHigh || !bufferSetLow) {
+    controls.update();
+    (isMobileDevice() ? renderer : composer).render(scene, camera);
+    stats?.end();
+    animationTimer = setTimeout(animate, FRAME_INTERVAL);
     return;
   }
-  const count = boidCount();
-  const heapF32 = wasmModule.HEAPF32.buffer;
-  const positions = new Float32Array(heapF32, posPtr(), count * 3);
-  const orientations = new Float32Array(heapF32, oriPtr(), count * 4);
-  const velocities = new Float32Array(heapF32, velPtr(), count * 3);
-  const dummy = new THREE.Object3D();
+  if (gpuTimerExt && glContext && !gpuQueryInFlight && !gpuPendingQuery) {
+    const query = glContext.createQuery();
+    if (query) {
+      glContext.beginQuery(gpuTimerExt.TIME_ELAPSED_EXT, query);
+      gpuQueryInFlight = query;
+    }
+  }
+  const { positions, orientations, velocities } = getWasmViews(count);
+  if ((frameCounter++ & 63) === 0) {
+    currentFirstBoidX();
+  }
+  ensureTailRuntimeBuffers(count);
+
+  const currentIndex = bufferCursor;
+  const nextIndex = (currentIndex + 1) % TRIPLE_BUFFER_SIZE;
+  const highPosAttr = bufferSetHigh.pos[currentIndex];
+  const highQuatAttr = bufferSetHigh.quat[currentIndex];
+  const lowPosAttr = bufferSetLow.pos[currentIndex];
+  const lowQuatAttr = bufferSetLow.quat[currentIndex];
+  const highTailPhaseAttr = bufferSetHigh.tailPhase[currentIndex];
+  const highTailSpeedAttr = bufferSetHigh.tailSpeed[currentIndex];
+  const highTailTurnAttr = bufferSetHigh.tailTurn[currentIndex];
+  const highTailDriveAttr = bufferSetHigh.tailDrive[currentIndex];
+  const lowTailPhaseAttr = bufferSetLow.tailPhase[currentIndex];
+  const lowTailSpeedAttr = bufferSetLow.tailSpeed[currentIndex];
+  const lowTailTurnAttr = bufferSetLow.tailTurn[currentIndex];
+  const lowTailDriveAttr = bufferSetLow.tailDrive[currentIndex];
+  const highPosArray = highPosAttr.array;
+  const highQuatArray = highQuatAttr.array;
+  const lowPosArray = lowPosAttr.array;
+  const lowQuatArray = lowQuatAttr.array;
+  const highTailSpeedArray = highTailSpeedAttr.array;
+  const highTailTurnArray = highTailTurnAttr.array;
+  const highTailDriveArray = highTailDriveAttr.array;
+  const lowTailSpeedArray = lowTailSpeedAttr.array;
+  const lowTailTurnArray = lowTailTurnAttr.array;
+  const lowTailDriveArray = lowTailDriveAttr.array;
+
   const camPos = camera.position;
-
-  const isInstanced = useInstancedRendering.value && instancedMeshHigh && instancedMeshLow;
-
-  // 尾のアニメーション時間を更新
-  if (!paused.value) {
-    tailAnimation.elapsedTime += deltaTime;
-  }
-  tailAnimation.uniforms.uTailTime.value = tailAnimation.elapsedTime;
-
-  // 尾アニメーションの利用可否を判定
-  const tailArraysAvailable = enableTailAnimation.value && isInstanced && tailAnimation.speedAttribute && tailAnimation.turnAttribute;
-  const tailUpdateEnabled = tailArraysAvailable && !paused.value;
-  tailAnimation.uniforms.uTailEnable.value = tailArraysAvailable ? 1 : 0;
-  
-  // 尾アニメーション用バッファを取得
-  let tailSpeedArray = null;
-  let tailTurnArray = null;
-  let prevVelocities = null;
-  let smoothedSpeedBuffer = null;
-  let smoothedTurnBuffer = null;
-  let speedSmoothing = 1;
-  let turnSmoothing = 1;
-  if (tailArraysAvailable) {
-    tailSpeedArray = tailAnimation.speedAttribute.array;
-    tailTurnArray = tailAnimation.turnAttribute.array;
-    prevVelocities = tailAnimation.previousVelocities;
-    smoothedSpeedBuffer = tailAnimation.smoothedSpeed;
-    smoothedTurnBuffer = tailAnimation.smoothedTurn;
-    speedSmoothing = THREE.MathUtils.clamp(tailAnimation.smoothing?.speed ?? 1, 0, 1);
-    turnSmoothing = THREE.MathUtils.clamp(tailAnimation.smoothing?.turn ?? 1, 0, 1);
-  }
-  let tailDataDirty = false; // バッファ更新フラグ
-
-  updateCameraFollow(positions, orientations);
-
-  // 使用するメッシュを決定（早期宣言）
-  let activeMeshHigh = isInstanced ? instancedMeshHigh : null;
-  let activeMeshLow = isInstanced ? instancedMeshLow : null;
-  let highMatrixArray = null;
-  let lowMatrixArray = null;
-  if (isInstanced) {
-    highMatrixArray = activeMeshHigh.instanceMatrix.array;
-    lowMatrixArray = activeMeshLow.instanceMatrix.array;
-  }
-
-  if (!isInstanced && boidLODs.length !== count) {
-    initBoidLODs(count);
-  }
-
-  // 捕食者マーカーの最適化：5フレームに1回のみ更新
-  if (frameCounter - lastPredatorUpdateFrame >= PREDATOR_UPDATE_INTERVAL) {
-    const predatorCount = settings.filter(s => s.isPredator).reduce((total, s) => total + s.count, 0);
-
-    // 必要な捕食者マーカー数を確保
-    while (predatorMarkers.length < predatorCount && predatorModel) {
-      const newPredatorMarker = predatorModel.clone();
-      newPredatorMarker.traverse((child) => {
-        if (child.isMesh) {
-          child.material = predatorMaterial;
-        }
-      });
-      scene.add(newPredatorMarker);
-      predatorMarkers.push(newPredatorMarker);
+  const camX = camPos.x;
+  const camY = camPos.y;
+  const camZ = camPos.z;
+  // 捕食者の個体数と開始インデックスを計算（配列の末尾から捕食者を配置）
+  const predatorCount = getPredatorCount();
+  const predatorStartIndex = predatorCount > 0 ? Math.max(0, count - predatorCount) : count;
+  if (predatorMeshCountCache !== predatorCount) {
+    if (ensurePredatorMeshes(predatorCount)) {
+      predatorMeshCountCache = predatorCount;
     }
-
-    // 余分なマーカーを削除
-    while (predatorMarkers.length > predatorCount) {
-      const marker = predatorMarkers.pop();
-      scene.remove(marker);
-    }
-
-    lastPredatorUpdateFrame = frameCounter;
-  }  // 各Boidの位置と色を更新（最適化版）
-  let predatorIndex = 0; // 捕食者マーカーのインデックス
-
-  // 種族インデックスルックアップが未構築なら構築
-  if (speciesIndexLookup.length !== count) {
-    buildSpeciesIndexLookup();
+  }
+  for (const mesh of predatorMeshes) {
+    mesh.visible = false;
   }
 
-  // LOD状態の初期化
-  if (boidLodStates.length !== count) {
-    boidLodStates = new Array(count).fill(false);
-  }
+  const hiddenPos = HIDDEN_POSITION;
+  const [identityX, identityY, identityZ, identityW] = IDENTITY_QUATERNION;
 
-  // LOD判定の最適化：3フレームに1回のみ更新
-  const shouldUpdateLod = (frameCounter - lastLodUpdateFrame >= LOD_UPDATE_INTERVAL);
-  if (shouldUpdateLod) {
-    lastLodUpdateFrame = frameCounter;
-  }
-
+  // 各Boidの位置と姿勢を更新
   for (let i = 0; i < count; ++i) {
-    dummy.position.fromArray(positions, i * 3);
-    dummy.quaternion.fromArray(orientations, i * 4);
-    dummy.updateMatrix();
+    const basePos = i * 3;
+    const px = positions[basePos];
+    const py = positions[basePos + 1];
+    const pz = positions[basePos + 2];
+    const vx = velocities ? velocities[basePos] : 0;
+    const vy = velocities ? velocities[basePos + 1] : 0;
+    const vz = velocities ? velocities[basePos + 2] : 0;
+    const dx = px - camX;
+    const dy = py - camY;
+    const dz = pz - camZ;
+  const distSq = dx * dx + dy * dy + dz * dz;
+  // 3段階LOD: 近距離/中距離/遠距離を距離の平方で判定
+  const isNear = distSq < LOD_NEAR_DISTANCE_SQ;
+  const isMid = !isNear && distSq < LOD_MID_DISTANCE_SQ;
+  const animateTail = isNear || isMid; // 遠距離では尾アニメを停止してGPU負荷削減
 
-    // LOD判定の最適化
-    let useHigh;
-    if (shouldUpdateLod) {
-      const distSq = camPos.distanceToSquared(dummy.position);
-      useHigh = distSq < 4;
-      boidLodStates[i] = useHigh;
+    const baseQuat = i * 4;
+    const qx = orientations[baseQuat];
+    const qy = orientations[baseQuat + 1];
+    const qz = orientations[baseQuat + 2];
+    const qw = orientations[baseQuat + 3];
+
+    // 捕食者は専用メッシュで描画し、インスタンシングからは除外
+    const isPredator = i >= predatorStartIndex && predatorCount > 0;
+    if (isPredator) {
+      const meshIndex = i - predatorStartIndex;
+      const predatorMesh = predatorMeshes[meshIndex];
+      if (predatorMesh) {
+        predatorMesh.visible = true;
+        predatorMesh.position.set(px, py, pz);
+        predatorMesh.quaternion.set(qx, qy, qz, qw);
+      }
+
+      highPosArray[basePos] = hiddenPos;
+      highPosArray[basePos + 1] = hiddenPos;
+      highPosArray[basePos + 2] = hiddenPos;
+      highQuatArray[baseQuat] = identityX;
+      highQuatArray[baseQuat + 1] = identityY;
+      highQuatArray[baseQuat + 2] = identityZ;
+      highQuatArray[baseQuat + 3] = identityW;
+
+      lowPosArray[basePos] = hiddenPos;
+      lowPosArray[basePos + 1] = hiddenPos;
+      lowPosArray[basePos + 2] = hiddenPos;
+      lowQuatArray[baseQuat] = identityX;
+      lowQuatArray[baseQuat + 1] = identityY;
+      lowQuatArray[baseQuat + 2] = identityZ;
+      lowQuatArray[baseQuat + 3] = identityW;
+      highTailSpeedArray[i] = 0;
+      lowTailSpeedArray[i] = 0;
+      highTailTurnArray[i] = 0;
+      lowTailTurnArray[i] = 0;
+      highTailDriveArray[i] = 0;
+      lowTailDriveArray[i] = 0;
+      if (previousVelocities) {
+        previousVelocities[basePos] = 0;
+        previousVelocities[basePos + 1] = 0;
+        previousVelocities[basePos + 2] = 0;
+      }
+      continue;
+    }
+
+    // 尾アニメーション用の速度と旋回量を計算
+    const speed = Math.hypot(vx, vy, vz);
+    const prevVx = previousVelocities ? previousVelocities[basePos] : 0;
+    const prevVy = previousVelocities ? previousVelocities[basePos + 1] : 0;
+    const prevVz = previousVelocities ? previousVelocities[basePos + 2] : 0;
+    const prevLen = Math.hypot(prevVx, prevVy, prevVz);
+    let turnAmount = 0;
+    if (prevLen > 1e-5 && speed > 1e-5) {
+      const crossY = prevVz * vx - prevVx * vz;
+      const dot = prevVx * vx + prevVy * vy + prevVz * vz;
+      turnAmount = Math.atan2(crossY, dot);
+    }
+    const tailSpeed = speed;
+    const tailTurn = turnAmount;
+
+    // LOD制御: 近距離ならハイポリ、中距離以降はLODモデル
+    if (isNear) {
+      highPosArray[basePos] = px;
+      highPosArray[basePos + 1] = py;
+      highPosArray[basePos + 2] = pz;
+      highQuatArray[baseQuat] = qx;
+      highQuatArray[baseQuat + 1] = qy;
+      highQuatArray[baseQuat + 2] = qz;
+      highQuatArray[baseQuat + 3] = qw;
+
+      lowPosArray[basePos] = hiddenPos;
+      lowPosArray[basePos + 1] = hiddenPos;
+      lowPosArray[basePos + 2] = hiddenPos;
+      lowQuatArray[baseQuat] = identityX;
+      lowQuatArray[baseQuat + 1] = identityY;
+      lowQuatArray[baseQuat + 2] = identityZ;
+      lowQuatArray[baseQuat + 3] = identityW;
     } else {
-      useHigh = boidLodStates[i];
+      lowPosArray[basePos] = px;
+      lowPosArray[basePos + 1] = py;
+      lowPosArray[basePos + 2] = pz;
+      lowQuatArray[baseQuat] = qx;
+      lowQuatArray[baseQuat + 1] = qy;
+      lowQuatArray[baseQuat + 2] = qz;
+      lowQuatArray[baseQuat + 3] = qw;
+
+      highPosArray[basePos] = hiddenPos;
+      highPosArray[basePos + 1] = hiddenPos;
+      highPosArray[basePos + 2] = hiddenPos;
+      highQuatArray[baseQuat] = identityX;
+      highQuatArray[baseQuat + 1] = identityY;
+      highQuatArray[baseQuat + 2] = identityZ;
+      highQuatArray[baseQuat + 3] = identityW;
     }
 
-    // マトリクスを設定
-    if (useHigh) {
-      activeMeshHigh.setMatrixAt(i, dummy.matrix);
-      activeMeshLow.setMatrixAt(i, hiddenInstanceMatrix);
+    // 尾アニメのパラメータ設定（遠距離ではdrive=0でシェーダ側で計算をスキップ）
+    const tailSpeedValue = animateTail ? tailSpeed : 0;
+    const tailTurnValue = animateTail ? tailTurn : 0;
+    const driveValue = animateTail ? 1 : 0; // シェーダ側で尾アニメON/OFFを制御
+    if (isNear) {
+      // 近距離: ハイポリモデルにアニメ適用
+      highTailSpeedArray[i] = tailSpeedValue;
+      highTailTurnArray[i] = tailTurnValue;
+      lowTailSpeedArray[i] = 0;
+      lowTailTurnArray[i] = 0;
+      highTailDriveArray[i] = driveValue;
+      lowTailDriveArray[i] = 0;
     } else {
-      activeMeshHigh.setMatrixAt(i, hiddenInstanceMatrix);
-      activeMeshLow.setMatrixAt(i, dummy.matrix);
+      // 中距離/遠距離: LODモデルに切替、遠距離ではdriveValue=0で静止
+      highTailSpeedArray[i] = 0;
+      highTailTurnArray[i] = 0;
+      lowTailSpeedArray[i] = tailSpeedValue;
+      lowTailTurnArray[i] = tailTurnValue;
+      highTailDriveArray[i] = 0;
+      lowTailDriveArray[i] = driveValue;
     }
 
-    // 捕食者の特別表示（最適化：事前計算されたルックアップを使用）
-    const speciesIndex = speciesIndexLookup[i];
-
-    // 捕食者の場合、対応するマーカーを更新
-    if (speciesIndex >= 0 && settings[speciesIndex].isPredator && predatorIndex < predatorMarkers.length) {
-      const marker = predatorMarkers[predatorIndex];
-      marker.position.copy(dummy.position);
-      marker.quaternion.copy(dummy.quaternion);
-      predatorIndex++;
+    if (previousVelocities) {
+      previousVelocities[basePos] = vx;
+      previousVelocities[basePos + 1] = vy;
+      previousVelocities[basePos + 2] = vz;
     }
+  }
+  // インスタンシングメッシュの表示個体数を設定（捕食者を除く）
+  const visibleCount = predatorCount > 0 ? Math.max(0, count - predatorCount) : count;
+  instancedMeshHigh.count = visibleCount;
+  instancedMeshLow.count = visibleCount;
 
-    // 現在フレームの速度ベクトルを取得
-    const vBase = i * 3;
-    const vx = velocities[vBase];
-    const vy = velocities[vBase + 1];
-    const vz = velocities[vBase + 2];
-    
-    // 前フレームの速度ベクトルを取得（旋回量計算用）
-    const hasPrevVelocityBuffer = tailArraysAvailable && !!prevVelocities;
-    let prevVx = 0;
-    let prevVy = 0;
-    let prevVz = 0;
-    if (hasPrevVelocityBuffer) {
-      prevVx = prevVelocities[vBase];
-      prevVy = prevVelocities[vBase + 1];
-      prevVz = prevVelocities[vBase + 2];
-    }
+  applyBufferSet(instancedMeshHigh, bufferSetHigh, currentIndex);
+  applyBufferSet(instancedMeshLow, bufferSetLow, currentIndex);
+  // トリプルバッファの更新フラグを立てる
+  highPosAttr.needsUpdate = true;
+  highQuatAttr.needsUpdate = true;
+  lowPosAttr.needsUpdate = true;
+  lowQuatAttr.needsUpdate = true;
+  highTailSpeedAttr.needsUpdate = true;
+  highTailTurnAttr.needsUpdate = true;
+  highTailDriveAttr.needsUpdate = true;
+  lowTailSpeedAttr.needsUpdate = true;
+  lowTailTurnAttr.needsUpdate = true;
+  lowTailDriveAttr.needsUpdate = true;
 
-    // 尾のアニメーションに参加するかを判定（高品質またはLOD適用時）
-    const participatesInTail = tailArraysAvailable && (useHigh || tailAnimation.applyToLod);
-    if (participatesInTail && tailUpdateEnabled) {
-      // 現在の速度を計算
-      const rawSpeed = Math.sqrt(vx * vx + vy * vy + vz * vz);
-      
-      // 旋回量を計算（前フレームとの向きの変化から角速度を求める）
-      let turnValue = 0;
-      if (hasPrevVelocityBuffer) {
-        const prevLen = Math.hypot(prevVx, prevVz); // 前フレームの水平速度
-        const currLen = Math.hypot(vx, vz);         // 現在フレームの水平速度
-        if (currLen > 1e-4 && prevLen > 1e-4) {
-          // 正規化された速度ベクトルで角度差を計算
-          const prevX = prevVx / prevLen;
-          const prevZ = prevVz / prevLen;
-          const currX = vx / currLen;
-          const currZ = vz / currLen;
-          const det = prevX * currZ - prevZ * currX; // 外積のY成分（回転方向）
-          const dot = THREE.MathUtils.clamp(prevX * currX + prevZ * currZ, -1, 1); // 内積
-          const angle = Math.atan2(det, dot);        // 角度差
-          const dt = Math.max(deltaTime, 1e-3);      // フレーム間時間
-          turnValue = THREE.MathUtils.clamp(angle / dt, -2.5, 2.5); // 角速度に変換
-        }
-      }
+  bufferCursor = nextIndex;
 
-      // スムージング処理（カクつきを抑えるため前フレームとの線形補間）
-      const previousSpeed = smoothedSpeedBuffer ? smoothedSpeedBuffer[i] : rawSpeed;
-      const previousTurn = smoothedTurnBuffer ? smoothedTurnBuffer[i] : turnValue;
-      const smoothedSpeed = THREE.MathUtils.lerp(previousSpeed, rawSpeed, speedSmoothing);
-      const smoothedTurn = THREE.MathUtils.lerp(previousTurn, turnValue, turnSmoothing);
-
-      // スムージング用バッファを更新
-      if (smoothedSpeedBuffer) smoothedSpeedBuffer[i] = smoothedSpeed;
-      if (smoothedTurnBuffer) smoothedTurnBuffer[i] = smoothedTurn;
-
-      // インスタンス属性に反映し、変化があればGPU更新フラグを立てる
-      const prevSpeedAttr = tailSpeedArray[i];
-      const prevTurnAttr = tailTurnArray[i];
-      tailSpeedArray[i] = smoothedSpeed;
-      tailTurnArray[i] = smoothedTurn;
-      if (!tailDataDirty && (Math.abs(prevSpeedAttr - smoothedSpeed) > 1e-4 || Math.abs(prevTurnAttr - smoothedTurn) > 1e-4)) {
-        tailDataDirty = true;
-      }
-
-      // 次フレーム用に現在の速度を保存
-      if (hasPrevVelocityBuffer) {
-        prevVelocities[vBase] = vx;
-        prevVelocities[vBase + 1] = vy;
-        prevVelocities[vBase + 2] = vz;
-      }
-    } else if (participatesInTail && hasPrevVelocityBuffer && !tailUpdateEnabled) {
-      // 停止中でも速度バッファを更新（再生時の初期値として使用）
-      prevVelocities[vBase] = vx;
-      prevVelocities[vBase + 1] = vy;
-      prevVelocities[vBase + 2] = vz;
-      if (smoothedSpeedBuffer) smoothedSpeedBuffer[i] = Math.sqrt(vx * vx + vy * vy + vz * vz);
-      if (smoothedTurnBuffer) smoothedTurnBuffer[i] = 0;
-    }
-  }// 頂点カラーの更新（最適化：10フレームに1回のみ）
-  if (showUnitColors.value && (frameCounter - lastColorUpdateFrame >= COLOR_UPDATE_INTERVAL)) {
+  // 頂点カラーの更新（デバッグ用のUnit色分け表示）
+  if (showUnitColors.value) {
     const mappingPtrValue = boidUnitMappingPtr();
     const heapI32 = wasmModule.HEAP32.buffer;
     const unitMappings = new Int32Array(heapI32, mappingPtrValue, count * 2);
 
-    for (let i = 0; i < count; i++) {
+    for (let i = 0; i < visibleCount; i++) {
       let unitId = -1;
       for (let j = 0; j < unitMappings.length; j += 2) {
         if (unitMappings[j] === i) {
@@ -1597,78 +1311,85 @@ function animate() {
     }
     instancedMeshHigh.instanceColor.needsUpdate = true;
     instancedMeshLow.instanceColor.needsUpdate = true;
-    lastColorUpdateFrame = frameCounter;
-  } else if (lastShowUnitColors && !showUnitColors.value) {
+  } else if (lastShowUnitColors) {
     // Unit色分けOFF: ON→OFFになった時のみ頂点カラーを白にリセット
     const whiteColor = new THREE.Color(1, 1, 1);
-    for (let i = 0; i < count; i++) {
+    for (let i = 0; i < visibleCount; i++) {
       instancedMeshHigh.setColorAt(i, whiteColor);
       instancedMeshLow.setColorAt(i, whiteColor);
     }
     instancedMeshHigh.instanceColor.needsUpdate = true;
     instancedMeshLow.instanceColor.needsUpdate = true;
     console.log('✓ Reset vertex colors to white (OFF mode)');
-  }  // 前回の状態を保存
-  lastShowUnitColors = showUnitColors.value;
-
-  // マトリクスの更新
-  activeMeshHigh.instanceMatrix.needsUpdate = true;
-  activeMeshLow.instanceMatrix.needsUpdate = true;
-
-  // 尾のアニメーションバッファが更新されたらGPUに送信
-  if (tailDataDirty) {
-    tailAnimation.speedAttribute.needsUpdate = true;
-    tailAnimation.turnAttribute.needsUpdate = true;
   }
 
-  controls?.update();
+  // 前回の状態を保存
+  lastShowUnitColors = showUnitColors.value;// マトリクスの更新
 
-  // ポストプロセシングかダイレクトレンダリング
-  if (composer) {
-    composer.render(scene, camera);
-  } else {
-    renderer.render(scene, camera);
-  }
-  stats?.end();
+  controls.update();
 
-  scheduleNextFrame();
-}
+  const renderTarget = isMobileDevice() ? renderer : composer;
+  renderTarget.render(scene, camera);
 
-// ツリー描画用の命名関数（匿名関数を避けてパフォーマンス改善）
-function drawTreeNode(node, parentPosition = null) {
-  const position = new THREE.Vector3(
-    node.center[0],
-    node.center[1],
-    node.center[2]
-  );
-
-  if (parentPosition) {
-    const geometry = new THREE.BufferGeometry().setFromPoints([
-      parentPosition,
-      position,
-    ]);
-    const material = new THREE.LineBasicMaterial({ color: 0xffffff });
-    const line = new THREE.Line(geometry, material);
-    scene.add(line);
+  if (gpuTimerExt && glContext && gpuQueryInFlight) {
+    glContext.endQuery(gpuTimerExt.TIME_ELAPSED_EXT);
+    gpuPendingQuery = gpuQueryInFlight;
+    gpuQueryInFlight = null;
   }
 
-  if (node.children) {
-    for (let i = 0; i < node.children.length; i++) {
-      drawTreeNode(node.children[i], position);
+  if (gpuTimerExt && glContext && gpuPendingQuery) {
+    const available = glContext.getQueryParameter(gpuPendingQuery, glContext.QUERY_RESULT_AVAILABLE);
+    const disjoint = glContext.getParameter(gpuTimerExt.GPU_DISJOINT_EXT);
+    if (available) {
+      if (!disjoint) {
+        const nanoseconds = glContext.getQueryParameter(gpuPendingQuery, glContext.QUERY_RESULT);
+        lastGpuTimeMs = nanoseconds / 1e6;
+        if (!gpuStatsPanel && stats && typeof Stats.Panel === 'function') {
+          gpuStatsPanel = stats.addPanel(new Stats.Panel('GPU (ms)', '#ff8', '#221'));
+          stats.showPanel(0);
+        }
+        gpuStatsPanel?.update(lastGpuTimeMs, 33);
+      }
+      glContext.deleteQuery(gpuPendingQuery);
+      gpuPendingQuery = null;
     }
   }
+
+  stats?.end();
+
+  animationTimer = setTimeout(animate, FRAME_INTERVAL);
 }
 
 function drawTreeStructure(treeData) {
-  for (let i = 0; i < treeData.length; i++) {
-    drawTreeNode(treeData[i]);
-  }
+  const drawNode = (node, parentPosition = null) => {
+    const position = new THREE.Vector3(
+      node.center[0],
+      node.center[1],
+      node.center[2]
+    );
+
+    if (parentPosition) {
+      const geometry = new THREE.BufferGeometry().setFromPoints([
+        parentPosition,
+        position,
+      ]);
+      const material = new THREE.LineBasicMaterial({ color: 0xffffff });
+      const line = new THREE.Line(geometry, material);
+      scene.add(line);
+    }
+
+    if (node.children) {
+      node.children.forEach((child) => drawNode(child, position));
+    }
+  };
+
+  treeData.forEach((rootNode) => drawNode(rootNode));
 }
-// 設定からWASMパラメータを作成する命名関数（匿名関数を避けてパフォーマンス改善）
-function createSpeciesParamsVector(settingsArray) {
+function startSimulation() {
+  // WebAssembly モジュール用に SpeciesParams を初期化
   const vector = new wasmModule.VectorSpeciesParams();
-  for (let i = 0; i < settingsArray.length; i++) {
-    const s = settingsArray[i];
+  settings.forEach((s) => {
+    const tau = typeof s.tau === 'number' ? s.tau : 0.0;
     vector.push_back({
       species: s.species || "default",
       count: s.count || 0,
@@ -1676,68 +1397,34 @@ function createSpeciesParamsVector(settingsArray) {
       separation: s.separation || 0.0,
       alignment: s.alignment || 0.0,
       maxSpeed: s.maxSpeed || 1.0,
-      minSpeed: s.minSpeed || 0.0,
+      minSpeed: s.minSpeed || 0.0, // デフォルト値を補完
       maxTurnAngle: s.maxTurnAngle || 0.0,
       separationRange: s.separationRange || 0.0,
       alignmentRange: s.alignmentRange || 0.0,
       cohesionRange: s.cohesionRange || 0.0,
       maxNeighbors: s.maxNeighbors || 0,
+      lambda: s.lambda || 0.0,
       horizontalTorque: s.horizontalTorque || 0.0,
+      velocityEpsilon: s.velocityEpsilon || 0.0,
       torqueStrength: s.torqueStrength || 0.0,
-      lambda: s.lambda ?? 0.05,
-      tau: s.tau ?? 0.2,
+      tau,
       isPredator: s.isPredator || false,
     });
-  }
-  return vector;
-}
-
-// 設定数を計算する命名関数
-function calculateTotalBoidCount(settingsArray) {
-  let sum = 0;
-  for (let i = 0; i < settingsArray.length; i++) {
-    sum += settingsArray[i].count;
-  }
-  return sum;
-}
-
-// シミュレーション開始をキューに登録（非同期初期化対応）
-function queueSimulationStart(resetSimulation = true) {
-  pendingSimulationReset = resetSimulation;
-  simulationPending = true;
-  simulationInitialized = false;
-  tryStartSimulation();
-}
-
-// 条件が整った時点でシミュレーションを開始
-function tryStartSimulation() {
-  if (!simulationPending) return;
-  if (!renderer || !scene || !camera) return;
-  if (!boidModel || !boidModelLod) return;
-  simulationPending = false;
-  simulationInitialized = true;
-  const shouldReset = pendingSimulationReset;
-  pendingSimulationReset = true;
-  startSimulation(shouldReset);
-}
-
-function startSimulation(resetSimulation = true) {
-  // WebAssembly モジュール用に SpeciesParams を初期化
-  if (resetSimulation) {
-    const vector = createSpeciesParamsVector(settings);
-    wasmModule.callInitBoids(vector, 1, 3, 0.25);
-  }
+  });
+  // callInitBoids に渡す（この vector は C++ 側で vector<SpeciesParams> になる）
+  wasmModule.callInitBoids(vector, 1, 6, 0.25);
   build(16, 0);
-  initInstancedBoids(calculateTotalBoidCount(settings));
-  // 既存のループを停止してから新しいループを開始
-  stopAnimationLoop();
-  lastTime = performance.now();
+  const total = getTotalBoidCount();
+  if (setFlockSize) {
+    setFlockSize(total, 40, 0.25);
+  }
+  cachedTotalBoidCount = total;
+  initInstancedBoids(total);
   animate();
 }
 
-// 初期化時のコールバック（頻度が低いため匿名関数でも問題なし）
 onMounted(() => {
-  initThreeJS({ rebuildScene: true });
+  initThreeJS();
   loadBoidModel(() => {
     console.log('Boid model loaded successfully.');
     // stats.jsの初期化とDOM追加
@@ -1750,382 +1437,101 @@ onMounted(() => {
     stats.dom.style.top = '0px';
     stats.dom.style.left = 'auto';
     stats.dom.style.zIndex = 1000;
+    if (gpuTimerExt && typeof Stats.Panel === 'function' && !gpuStatsPanel) {
+      gpuStatsPanel = stats.addPanel(new Stats.Panel('GPU (ms)', '#ff8', '#221'));
+      stats.showPanel(0);
+    }
 
-    queueSimulationStart();
-    
-    // メモリ監視を開始
-    startMemoryMonitoring();
+    startSimulation();
   });
-  window.addEventListener('keydown', handleKeydown);
-});
 
-onBeforeUnmount(() => {
-  window.removeEventListener('keydown', handleKeydown);
-  disposeThreeResources();
-  if (stats?.dom?.parentNode) {
-    stats.dom.parentNode.removeChild(stats.dom);
-  }
-  stats = null;
-  stopMemoryMonitoring();
+
+  window.addEventListener('keydown', handleKeydown);
+
 });
 
 function isMobileDevice() {
   return /Mobi|Android/i.test(navigator.userAgent);
 }
-
-// スマホ向けのより詳細なデバイス性能チェック
-function getDevicePerformanceLevel() {
-  const userAgent = navigator.userAgent;
-  const hardwareConcurrency = navigator.hardwareConcurrency || 4;
-  const deviceMemory = navigator.deviceMemory || 4; // GB
-  
-  // 低性能デバイスの検出
-  const isLowEnd = deviceMemory <= 2 || hardwareConcurrency <= 2;
-  const isTablet = /iPad|Android.*(?!.*Mobile)/i.test(userAgent);
-  
-  return {
-    isLowEnd,
-    isTablet,
-    cores: hardwareConcurrency,
-    memory: deviceMemory,
-    suggestedBoidCount: isLowEnd ? 1500 : (isTablet ? 5000 : 3000)
-  };
-}
-
-// スマホタップでの停止/再開機能（ドラッグとタップを区別）
-let touchStartTime = 0;
-let touchStartPos = { x: 0, y: 0 };
-let hasMoved = false;
-
-function handleTouchStart(event) {
-  if (isMobileDevice()) {
-    touchStartTime = Date.now();
-    const touch = event.touches[0];
-    touchStartPos = { x: touch.clientX, y: touch.clientY };
-    hasMoved = false;
-  }
-}
-
-function handleTouchMove(event) {
-  if (isMobileDevice() && touchStartTime > 0) {
-    const touch = event.touches[0];
-    const moveDistance = Math.sqrt(
-      Math.pow(touch.clientX - touchStartPos.x, 2) +
-      Math.pow(touch.clientY - touchStartPos.y, 2)
-    );
-
-    // 5px以上動いたらドラッグと判定
-    if (moveDistance > 5) {
-      hasMoved = true;
-    }
-  }
-}
-
-function handleTouchEnd(event) {
-  if (isMobileDevice() && touchStartTime > 0) {
-    const touchDuration = Date.now() - touchStartTime;
-
-    // 短時間（500ms以下）で、動いていない場合のみタップと判定
-    if (touchDuration < 500 && !hasMoved) {
-      const isThreeContainer = event.target === threeContainer.value;
-      const isCanvas = event.target.tagName === 'CANVAS';
-      const isInThreeContainer = threeContainer.value && threeContainer.value.contains(event.target);
-
-      if (isThreeContainer || isCanvas || isInThreeContainer) {
-        paused.value = !paused.value;
-      }
-    }
-
-    // リセット
-    touchStartTime = 0;
-    hasMoved = false;
-  }
-}
-// 設定監視用のハンドラ関数（匿名関数を避けてパフォーマンス改善）
-function handleSettingsChange(val) {
-  if (wasmModule && wasmModule.setGlobalSpeciesParamsFromJS) {
-    const vector = createSpeciesParamsVector(settings);
-    wasmModule.setGlobalSpeciesParamsFromJS(vector, 1);
-    try {
-      localStorage.setItem('boids_settings', JSON.stringify(toRaw(settings)));
-    } catch (error) {
-      console.error('Failed to save settings to localStorage:', error);
-    }
-  }
-}
-
 // settingsの変更をwasmModuleに反映
 watch(
   settings,
-  handleSettingsChange,
+  () => {
+    if (wasmModule && wasmModule.setGlobalSpeciesParamsFromJS) {
+      const vector = new wasmModule.VectorSpeciesParams();
+
+      settings.forEach((s) => {
+        const tau = typeof s.tau === 'number' ? s.tau : 0.0;
+        vector.push_back({
+          species: s.species || "default",
+          count: s.count || 0,
+          cohesion: s.cohesion || 0.0,
+          separation: s.separation || 0.0,
+          alignment: s.alignment || 0.0,
+          maxSpeed: s.maxSpeed || 1.0,
+          minSpeed: s.minSpeed || 0.0, // デフォルト値を補完
+          maxTurnAngle: s.maxTurnAngle || 0.0,
+          separationRange: s.separationRange || 0.0,
+          alignmentRange: s.alignmentRange || 0.0,
+          cohesionRange: s.cohesionRange || 0.0,
+          maxNeighbors: s.maxNeighbors || 0,
+          lambda: s.lambda || 0.0,
+          horizontalTorque: s.horizontalTorque || 0.0,
+          velocityEpsilon: s.velocityEpsilon || 0.0,
+          torqueStrength: s.torqueStrength || 0.0,
+          tau,
+          isPredator: s.isPredator || false,
+        });
+      });
+      wasmModule.setGlobalSpeciesParamsFromJS(vector, 1);
+      try {
+        const plainSettings = settings.map((s) => ({ ...toRaw(s) }));
+        localStorage.setItem('boids_settings', JSON.stringify(plainSettings));
+      } catch (error) {
+        console.error('Failed to save settings to localStorage:', error);
+      }
+    }
+
+    const total = getTotalBoidCount();
+    if (total !== cachedTotalBoidCount) {
+      cachedTotalBoidCount = total;
+      if (setFlockSize) {
+        setFlockSize(total, 40, 0.25);
+      }
+      initInstancedBoids(total);
+    }
+
+    const predators = getPredatorCount();
+    if (ensurePredatorMeshes(predators)) {
+      predatorMeshCountCache = predators;
+    }
+    for (const mesh of predatorMeshes) mesh.visible = false;
+  },
   { deep: true } // 深い変更も監視
 );
 
-watch(enableTailAnimation, () => {
-  updateTailAnimationMaterials();
-}, { immediate: true });
-
-watch(enableTailOnLod, (value) => {
-  tailAnimation.applyToLod = value;
-  updateTailAnimationMaterials();
-}, { immediate: true });
-
-// flockSize変更のハンドラ関数（匿名関数を避けてパフォーマンス改善）
-function handleFlockSizeChange(newSize) {
-  if (setFlockSize) {
-    // flockSize変更時
-    setFlockSize(newSize, 40, 0.25);
-    // Three.js 側の初期化
-    initInstancedBoids(newSize);
-  }
-}
-
-// flockSizeの変更を監視
-watch(
-  () => settings.flockSize,
-  handleFlockSizeChange
-);
-
-// 設定リセット用の命名関数（forEach を for ループに置き換え）
 function resetSettings() {
-  const defaultSettings = getDefaultSettings();
   settings.length = 0;
-  for (let i = 0; i < defaultSettings.length; i++) {
-    settings.push({ ...defaultSettings[i] });
-  }
-  // 設定変更時に種族インデックスルックアップを再構築
-  speciesIndexLookup.length = 0;
+  DEFAULT_SETTINGS.forEach(s => settings.push({ ...s }));
 }
 
-// Unit可視化変更のハンドラ関数（匿名関数を避けてパフォーマンス改善）
-function handleUnitsVisibilityChange(newValue) {
+// Unit可視化の変更を監視
+watch(showUnits, (newValue) => {
   console.log('showUnits changed to:', newValue);
   if (!newValue) {
     // Unit可視化をオフにした場合、既存の可視化要素をクリア
     clearUnitVisuals();
   }
-}
+});
 
-// Unit表示モード変更のハンドラ関数（匿名関数を避けてパフォーマンス改善）
-function handleUnitDisplayModeChange([newSpheres, newLines]) {
+// Unit表示モードの変更を監視
+watch([showUnitSpheres, showUnitLines], ([newSpheres, newLines]) => {
   console.log('Unit display mode changed - Spheres:', newSpheres, 'Lines:', newLines);
   // 表示モードが変更されたら既存の表示をクリアして再描画
   if (showUnits.value) {
     clearUnitVisuals();
   }
-}
-
-// Unit可視化の変更を監視
-watch(showUnits, handleUnitsVisibilityChange);
-
-// Unit表示モードの変更を監視
-watch([showUnitSpheres, showUnitLines], handleUnitDisplayModeChange);
-
-// 海中色彩テーマ定数（調整しやすくするため統一管理）
-// VS Codeのカラーピッカーで色を確認・調整できます
-const OCEAN_COLORS = {
-  // 背景とフォグ系
-  SKY_HIGHLIGHT: '#4fbaff',      // 明るい海中ブルー（上層）
-  SKY_BLUE: '#15a1ff',      // 明るい海中ブルー（上層）
-  DEEP_BLUE: '#002968',     // 深い海中ブルー（中層）- より暗く調整
-  SEAFLOOR: '#777465',      // 海底色（下層）
-  FOG: '#153a6c',           // フォグ色（中層）- より暗く調整
-
-
-  // ライティング系
-  AMBIENT_LIGHT: '#2c9aff', // 環境光
-  SUN_LIGHT: '#5389b7',     // 太陽光
-  SIDE_LIGHT1: '#6ba3d0',   // 補助光1
-  SIDE_LIGHT2: '#2d5f7a',   // 補助光2
-  BOTTOM_LIGHT: '#0f2635',  // 底部反射光
-};
-
-// 色を16進数に変換する関数
-const toHex = (colorStr) => parseInt(colorStr.replace('#', '0x'), 16);
-// 単一sphereにグラデーションを適用した海中環境を作成
-function createOceanSphere() {
-  // グラデーションテクスチャを作成
-  const canvas = document.createElement('canvas');
-  const context = canvas.getContext('2d');
-  canvas.width = 512;
-  canvas.height = 512;
-
-  // 縦方向のグラデーション（上から下へ）
-  const gradient = context.createLinearGradient(0, 0, 0, canvas.height);
-  gradient.addColorStop(0, OCEAN_COLORS.SKY_HIGHLIGHT);    // 上部：明るい海中ブルー
-  gradient.addColorStop(0.2, OCEAN_COLORS.SKY_BLUE);   // 上部：明るい海中ブルー
-  gradient.addColorStop(0.6, OCEAN_COLORS.DEEP_BLUE); // 中央：深い海中ブルー
-  gradient.addColorStop(1, OCEAN_COLORS.DEEP_BLUE);                // 底部：最も暗い
-
-  context.fillStyle = gradient;
-  context.fillRect(0, 0, canvas.width, canvas.height);
-  // テクスチャとして作成
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.generateMipmaps = false; // 色の精度を保つため
-  texture.minFilter = THREE.LinearFilter;
-  texture.magFilter = THREE.LinearFilter;
-
-  const sphereGeo = new THREE.SphereGeometry(300, 32, 32);
-  // フォグの影響を受けるマテリアル（補助的な役割）
-  const sphereMat = new THREE.MeshBasicMaterial({
-    map: texture,
-    side: THREE.BackSide, // 内側から見えるように
-    fog: false // フォグの影響を受ける
-  });
-
-  const oceanSphere = new THREE.Mesh(sphereGeo, sphereMat);
-  oceanSphere.position.set(0, 0, 0);
-  scene.add(oceanSphere);
-
-  return oceanSphere;
-}
-
-// 端がフェードアウトする地面マテリアルを作成
-function createFadeOutGroundMaterial() {
-  // 外部のアルファテクスチャを使用
-  const textureLoader = new THREE.TextureLoader();
-  const alphaMap = textureLoader.load('./models/groundAlfa.png');
-
-  // テクスチャ設定
-  alphaMap.minFilter = THREE.LinearFilter;
-  alphaMap.magFilter = THREE.LinearFilter;
-  alphaMap.wrapS = THREE.ClampToEdgeWrapping;
-  alphaMap.wrapT = THREE.ClampToEdgeWrapping;
-
-  const material = new THREE.MeshStandardMaterial({
-    color: toHex(OCEAN_COLORS.SEAFLOOR),
-    transparent: true,
-    alphaMap: alphaMap,
-    depthWrite: false // デプスバッファへの書き込み可否
-  });
-
-  return material;
-}
-
-// Three.jsリソースを安全に破棄（メモリリーク防止）
-function disposeThreeResources() {
-  stopCameraFollow();
-  stopAnimationLoop();
-  if (composer) {
-    composer.renderTarget1?.dispose?.();
-    composer.renderTarget2?.dispose?.();
-    composer = null;
-  }
-  if (controls) {
-    controls.removeEventListener('start', handleControlsInteractionStart);
-    controls.removeEventListener('end', handleControlsInteractionEnd);
-    controls.dispose();
-    controls = null;
-  }
-  if (renderer) {
-    const canvas = renderer.domElement;
-    canvas.removeEventListener('click', handleCanvasClick);
-    canvas.removeEventListener('webglcontextlost', handleWebGLContextLost);
-    canvas.removeEventListener('webglcontextrestored', handleWebGLContextRestored);
-    if (canvas.parentNode) {
-      canvas.parentNode.removeChild(canvas);
-    }
-    renderer.dispose();
-    renderer = null;
-  }
-  window.removeEventListener('resize', onWindowResize);
-  lastRendererCanvas = null;
-  scene = null;
-  camera = null;
-  unitSpheres = [];
-  unitLines = [];
-  instancedMeshHigh = null;
-  instancedMeshLow = null;
-  predatorMarkers = [];
-  boidLodStates = [];
-  speciesIndexLookup = [];
-  if (rendererRetryTimer) {
-    clearTimeout(rendererRetryTimer);
-    rendererRetryTimer = null;
-  }
-}
-
-// 遅延してレンダラー復旧を試行（モバイル考慮）
-function scheduleRendererRetry() {
-  if (rendererRetryTimer) {
-    return;
-  }
-  const delay = isMobileDevice() ? 1500 : 800;
-  rendererRetryTimer = setTimeout(() => {
-    rendererRetryTimer = null;
-    initThreeJS({ rebuildScene: true });
-  }, delay);
-}
-
-// WebGLコンテキストロス時の自動復旧処理
-function handleWebGLContextLost(event) {
-  console.warn('WebGLコンテキストが失われました。自動復旧を試みます。');
-  event.preventDefault();
-  rendererInitAttempt = Math.min(rendererInitAttempt + 1, rendererConfigs.length - 1);
-  disposeThreeResources();
-  queueSimulationStart(true);
-  scheduleRendererRetry();
-}
-
-function handleWebGLContextRestored() {
-  console.info('WebGLコンテキストが復旧しました。');
-}
-
-// メモリ不足時の復旧処理（ページリロードの代替）
-function handleLowMemoryRecovery() {
-  console.warn('WebGLメモリ使用量が高いため、レンダラーの再初期化を試みます。');
-  rendererInitAttempt = Math.min(rendererInitAttempt + 1, rendererConfigs.length - 1);
-  disposeThreeResources();
-  queueSimulationStart(true);
-  scheduleRendererRetry();
-}
-
-// WebGLコンテキストロス・復旧イベントの設定
-function setupWebGLContextLossHandling() {
-  if (!renderer) return;
-
-  const canvas = renderer.domElement;
-  canvas.removeEventListener('webglcontextlost', handleWebGLContextLost);
-  canvas.removeEventListener('webglcontextrestored', handleWebGLContextRestored);
-  canvas.addEventListener('webglcontextlost', handleWebGLContextLost, false);
-  canvas.addEventListener('webglcontextrestored', handleWebGLContextRestored, false);
-}
-
-
-
-// 軽量メモリ監視（モバイル向け）
-// WebGLメモリ監視（モバイル向け軽量版）
-function monitorWebGLMemory() {
-  if (!renderer || !renderer.info || !isMobileDevice()) return;
-  
-  const info = renderer.info;
-  const memoryInfo = info.memory || {};
-  const renderInfo = info.render || {};
-  
-  const geometries = memoryInfo.geometries || 0;
-  const textures = memoryInfo.textures || 0;
-  
-  // メモリ使用量が非常に高い場合のみ復旧を試みる
-  if (geometries > 100 || textures > 50) {
-    handleLowMemoryRecovery();
-  }
-}
-
-// メモリ監視を軽量化
-let memoryMonitorInterval;
-function startMemoryMonitoring() {
-  if (isMobileDevice()) {
-    memoryMonitorInterval = setInterval(monitorWebGLMemory, 10000); // 10秒ごと
-  }
-}
-
-function stopMemoryMonitoring() {
-  if (memoryMonitorInterval) {
-    clearInterval(memoryMonitorInterval);
-    memoryMonitorInterval = null;
-  }
-}
+});
 </script>
 
 <style>
@@ -2145,28 +1551,6 @@ function stopMemoryMonitoring() {
   margin-top: 20px;
 }
 
-.follow-controls {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.follow-controls button {
-  align-self: flex-start;
-}
-
-.follow-orientation {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.9rem;
-}
-
-.follow-status {
-  font-size: 0.9rem;
-  color: #ffd28f;
-}
-
 .three-container {
   position: fixed;
   left: 0;
@@ -2178,9 +1562,6 @@ function stopMemoryMonitoring() {
   border: none;
   overflow: hidden;
   background: #0a1e3a;
-  touch-action: manipulation;
-  user-select: none;
-  -webkit-touch-callout: none;
 }
 
 .ui-overlay {
@@ -2193,22 +1574,6 @@ function stopMemoryMonitoring() {
   color: #fff;
   z-index: 2;
   pointer-events: none;
-}
-
-.ui-panel {
-  pointer-events: auto;
-  display: inline-flex;
-  flex-direction: column;
-  gap: 1rem;
-  max-width: min(90vw, 420px);
-  user-select: none;
-}
-
-.ui-panel input,
-.ui-panel button,
-.ui-panel select,
-.ui-panel textarea {
-  user-select: text;
 }
 
 .ui-overlay * {

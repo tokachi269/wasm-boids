@@ -1,6 +1,7 @@
 #include "entry.h"
 #include "boids_tree.h"
 #include "scale_utils.h"
+#include <cstdint>
 #include <iostream>
 
 #ifndef __EMSCRIPTEN__
@@ -18,6 +19,38 @@ void Entry::run() {
 }
 
 extern "C" {
+struct SimulationStepState {
+  uintptr_t positions;
+  uintptr_t velocities;
+  uintptr_t orientations;
+  int count;
+};
+
+static SimulationStepState gStepState{};
+
+float debugFirstBoidX() {
+  if (gStepState.count <= 0) {
+    return 0.0f;
+  }
+  auto ptr = reinterpret_cast<const float *>(gStepState.positions);
+  return ptr ? ptr[0] : 0.0f;
+}
+
+uintptr_t stepSimulation(float dt) {
+  if (dt > 0.0f) {
+    BoidTree::instance().update(dt);
+  }
+
+  gStepState.positions = BoidTree::instance().getPositionsPtr();
+  gStepState.velocities = BoidTree::instance().getVelocitiesPtr();
+  gStepState.orientations = BoidTree::instance().getOrientationsPtr();
+  gStepState.count = BoidTree::instance().getBoidCount();
+
+  return reinterpret_cast<uintptr_t>(&gStepState);
+}
+
+float currentFirstBoidX() { return debugFirstBoidX(); }
+
 void build(int maxPerUnit = 16, int level = 0) {
   BoidTree::instance().build(maxPerUnit, level);
 }

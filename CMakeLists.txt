@@ -8,6 +8,11 @@ project(wasm_boids LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# WASM成果物の出力先ディレクトリ（dev/prod切替可能）
+set(WASM_RUNTIME_OUTPUT_DIR "${CMAKE_SOURCE_DIR}/src/wasm/build" CACHE PATH "Output directory for generated WebAssembly artifacts")
+get_filename_component(WASM_RUNTIME_OUTPUT_DIR "${WASM_RUNTIME_OUTPUT_DIR}" ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
+file(MAKE_DIRECTORY "${WASM_RUNTIME_OUTPUT_DIR}")
+
 # ビルドタイプを設定
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Debug)
@@ -38,10 +43,10 @@ set(EMCC_LINK_FLAGS
     "-sEXPORT_ES6=1"
     "-sMODULARIZE=1"
     "-sEXPORT_NAME=createBoidsModule"
-    "-sENVIRONMENT=web,worker"
+    "-sENVIRONMENT=web,worker,node"
     "-sALLOW_MEMORY_GROWTH=1"
-    "-sEXPORTED_FUNCTIONS=['_main','_boidUnitMappingPtr','_oriPtr','_setSpeciesParams','_setFlockSize','_update','_build','_posPtr','_velPtr','_boidCount','_malloc','_free']"
-    "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAPF32','HEAP32']"
+    "-sEXPORTED_FUNCTIONS=['_main','_boidUnitMappingPtr','_oriPtr','_setSpeciesParams','_setFlockSize','_update','_build','_posPtr','_velPtr','_boidCount','_stepSimulation','_currentFirstBoidX','_malloc','_free']"
+    "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAPF32','HEAP32','HEAPU8']"
     "--bind"
     "-pthread" # スレッドを有効化
     "-sUSE_PTHREADS=1" # POSIXスレッドを有効化
@@ -68,10 +73,10 @@ set(EMCC_LINK_FLAGS_RELEASE
     "-sEXPORT_ES6=1"
     "-sMODULARIZE=1"
     "-sEXPORT_NAME=createBoidsModule"
-    "-sENVIRONMENT=web,worker"
+    "-sENVIRONMENT=web,worker,node"
     "-sALLOW_MEMORY_GROWTH=1"
-    "-sEXPORTED_FUNCTIONS=['_main','_boidUnitMappingPtr','_oriPtr','_setSpeciesParams','_setFlockSize','_update','_build','_posPtr','_velPtr','_boidCount','_malloc','_free']"
-    "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAPF32','HEAP32']"
+    "-sEXPORTED_FUNCTIONS=['_main','_boidUnitMappingPtr','_oriPtr','_setSpeciesParams','_setFlockSize','_update','_build','_posPtr','_velPtr','_boidCount','_stepSimulation','_currentFirstBoidX','_malloc','_free']"
+    "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAPF32','HEAP32','HEAPU8']"
     "--bind"
     "-pthread"
     "-sUSE_PTHREADS=1"
@@ -112,13 +117,15 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     set_target_properties(wasm_boids PROPERTIES
         OUTPUT_NAME "wasm_boids"
         SUFFIX ".js"
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/src/wasm/build"
+        RUNTIME_OUTPUT_DIRECTORY "${WASM_RUNTIME_OUTPUT_DIR}"
     )
 
     target_compile_options(wasm_boids PRIVATE
         $<$<CONFIG:Debug>:${EMCC_COMPILE_FLAGS}>
         $<$<CONFIG:Release>:${EMCC_COMPILE_FLAGS_RELEASE}>
     )
+
+    # Thread pooling handled in source; no compile-time toggle required
 
     target_link_options(wasm_boids PRIVATE
         $<$<CONFIG:Debug>:${EMCC_LINK_FLAGS}>

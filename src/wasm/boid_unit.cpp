@@ -9,6 +9,7 @@
 #include <glm/gtx/rotate_vector.hpp>
 #include <glm/gtx/string_cast.hpp>
 #include <stack>
+#include <utility>
 #include <vector>
 
 bool BoidUnit::isBoidUnit() const { return children.empty(); }
@@ -174,11 +175,12 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
     float finalSpeed =
         glm::clamp(speed, globalSpeciesParams[sid].minSpeed, maxSpeed);
 
-    unit->buf->velocities[gIdx] = newDir * finalSpeed;
-    unit->buf->positions[gIdx] += unit->buf->velocities[gIdx] * dt;
+    const glm::vec3 newVelocity = newDir * finalSpeed;
+    unit->buf->velocitiesWrite[gIdx] = newVelocity;
+    unit->buf->positionsWrite[gIdx] = position + newVelocity * dt;
     unit->buf->accelerations[gIdx] = glm::vec3(0.0f);
     unit->buf->predatorInfluences[gIdx] *= 0.5f; // 50%保持で逃走を継続
-    unit->buf->orientations[gIdx] = BoidUnit::dirToQuatRollZero(newDir);
+    unit->buf->orientationsWrite[gIdx] = BoidUnit::dirToQuatRollZero(newDir);
     if (unit->buf->stresses[gIdx] > 0.0f) {
       float decayRate = 1.0f;
       unit->buf->stresses[gIdx] -= BoidUnit::easeOut(dt * decayRate);
@@ -456,8 +458,21 @@ void BoidUnit::updateRecursive(float dt) {
   std::stack<BoidUnit *, std::vector<BoidUnit *>> stack;
   stack.push(this);
   static std::vector<std::future<void>> asyncTasks;
+  asyncTasks.clear();
   asyncTasks.reserve(64);       // 任意。再確保を抑える
+  // スレッドプールで並列タスクをスケジュール（常時有効）
   auto &pool = getThreadPool(); // シングルトン取得
+  auto scheduleTask = [&](auto &&task) {
+    asyncTasks.emplace_back(
+        pool.enqueue(std::forward<decltype(task)>(task)));
+  };
+  auto waitScheduledTasks = [&]() {
+    for (auto &f : asyncTasks)
+      f.get();
+    asyncTasks.clear();
+    asyncTasks.reserve(64);
+  };
+
   // 第一段階: acceleration をすべて計算
   int firstStageOperations = 0;
   while (!stack.empty() && firstStageOperations < 10000) {
@@ -470,8 +485,7 @@ void BoidUnit::updateRecursive(float dt) {
 
     // Leaf は並列実行
     if (current->isBoidUnit()) {
-      asyncTasks.emplace_back(
-          pool.enqueue([current, dt] { current->computeBoidInteraction(dt); }));
+      scheduleTask([current, dt] { current->computeBoidInteraction(dt); });
     } else {
       // パフォーマンス最適化: インデックスアクセスで begin() 呼び出しを削減
       for (size_t i = 0; i < childrenSize; ++i) {
@@ -480,7 +494,7 @@ void BoidUnit::updateRecursive(float dt) {
 
       // 子ユニット間の相互作用をサブツリー単位で非同期処理
       if (childrenSize > 1) {
-        asyncTasks.emplace_back(pool.enqueue([childrenData, childrenSize] {
+        scheduleTask([childrenData, childrenSize] {
           // パフォーマンス最適化: 直接ポインタアクセスで operator[]
           // 呼び出しを削減
           for (size_t a = 0; a < childrenSize; ++a) {
@@ -488,16 +502,14 @@ void BoidUnit::updateRecursive(float dt) {
               childrenData[a]->applyInterUnitInfluence(childrenData[b]);
             }
           }
-        }));
+        });
       }
 
       current->computeBoundingSphere();
     }
   }
 
-  for (auto &f : asyncTasks)
-    f.get();
-  asyncTasks.clear();
+  waitScheduledTasks();
   // 第二段階: 位置と速度を更新
   stack.push(this);
   int stackOperations = 0; // スタック操作回数をカウント
@@ -509,8 +521,7 @@ void BoidUnit::updateRecursive(float dt) {
 
     if (current->isBoidUnit()) {
       BoidUnit *unit = current;
-      asyncTasks.emplace_back(
-          pool.enqueue([unit, dt] { updateLeafKinematics(unit, dt); }));
+      scheduleTask([unit, dt] { updateLeafKinematics(unit, dt); });
     } else {
       // パフォーマンス最適化: children の直接ポインタアクセス
       const size_t childrenSize = current->children.size();
@@ -521,9 +532,7 @@ void BoidUnit::updateRecursive(float dt) {
     }
   }
 
-  for (auto &f : asyncTasks)
-    f.get();
-  asyncTasks.clear();
+  waitScheduledTasks();
 
   // 関数終了時にカウンターをリセット
   callCount--;
@@ -615,53 +624,53 @@ void BoidUnit::computeBoidInteraction(float dt) {
     if (globalSpeciesParams[sid].isPredator) {
       int &tgtIdx = buf->predatorTargetIndices[gIdx];
       float &tgtTime = buf->predatorTargetTimers[gIdx];
+      // 毎フレームクールダウンを減算（ターゲット消失時も進行）
+      tgtTime -= dt;
       // console.call<void>(
       //     "log", "1Predator " + std::to_string(gIdx) +
       //                " checking target index: " + std::to_string(tgtIdx) +
       //                ", time left: " + std::to_string(tgtTime) +
       //                ", dt: " + std::to_string(dt));      //
       //                追跡ターゲットが切れたら新規取得
-      if (tgtTime <= 0.0f || tgtIdx < 0 ||
-          globalSpeciesParams[buf->speciesIds[tgtIdx]].isPredator) {
-        if (tgtTime <= -globalSpeciesParams[sid].tau) {
-          // console.call<void>(
-          //     "log", "Predator " + std::to_string(gIdx) +
-          //                " checking target index: " + std::to_string(tgtIdx)
-          //                +
-          //                ", time left: " + std::to_string(tgtTime));
+      bool targetInvalid = (tgtIdx < 0) ||
+                           (tgtTime <= 0.0f) ||
+                           globalSpeciesParams[buf->speciesIds[tgtIdx]].isPredator;
+      if (targetInvalid) {
+        tgtIdx = -1;
 
-          // 親ユニットの子ノードから近いユニットを探索
-          std::vector<BoidUnit *> candidateUnits;
-          if (parent) {
-            for (BoidUnit *unit : parent->children) {
-              if (unit == this)
-                continue;
-              float d2 = glm::length2(unit->center - center);
-              if (d2 < 100.0f) {
-                candidateUnits.push_back(unit);
-              }
-            }
-          }
-
-          // 候補ユニット内の Boid をランダムに選択
-          if (!candidateUnits.empty()) {
-            int unitIndex = rand_range(static_cast<int>(candidateUnits.size()));
-            BoidUnit *selectedUnit = candidateUnits[unitIndex];
-
-            if (!selectedUnit->indices.empty()) {
-              int boidIndex =
-                  rand_range(static_cast<int>(selectedUnit->indices.size()));
-              tgtIdx = selectedUnit->indices[boidIndex];
-              tgtTime = globalSpeciesParams[sid].tau;
-            } else {
-              tgtIdx = -1;
-              tgtTime = 0.0f;
+        // 親ユニットの子ノードから近いユニットを探索
+        std::vector<BoidUnit *> candidateUnits;
+        if (parent) {
+          for (BoidUnit *unit : parent->children) {
+            if (unit == this)
+              continue;
+            float d2 = glm::length2(unit->center - center);
+            if (d2 < 100.0f) {
+              candidateUnits.push_back(unit);
             }
           }
         }
+
+        // 候補ユニット内の Boid をランダムに選択
+        if (!candidateUnits.empty()) {
+          int unitIndex = rand_range(static_cast<int>(candidateUnits.size()));
+          BoidUnit *selectedUnit = candidateUnits[unitIndex];
+
+          if (!selectedUnit->indices.empty()) {
+            int boidIndex =
+                rand_range(static_cast<int>(selectedUnit->indices.size()));
+            tgtIdx = selectedUnit->indices[boidIndex];
+            tgtTime = globalSpeciesParams[sid].tau;
+          } else {
+            tgtIdx = -1;
+            tgtTime = 0.0f;
+          }
+        } else {
+          // ターゲット候補がいない場合は即再試行できるようリセット
+          tgtTime = 0.0f;
+        }
       }
       if (tgtIdx >= 0) {
-        tgtTime -= dt;
         glm::vec3 diff = buf->positions[tgtIdx] - pos;
         float d2 = glm::dot(diff, diff);
         if (d2 > EPS) {

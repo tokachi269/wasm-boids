@@ -12,7 +12,7 @@
         </div>
         <div class="setting-row">
           <label>群れの数(要更新)<br>(Count):</label>
-          <input type="range" v-model.number="settings.count" min="0" max="20000" step="1" />
+          <input type="range" v-model.number="settings.count" min="0" max="50000" step="1" />
           <span 
             v-if="!editingCount" 
             class="editable-value" 

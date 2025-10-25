@@ -1,6 +1,7 @@
 #pragma once
-#include <vector>
 #include <stack>
+#include <vector>
+#include <cstdint>
 #include "boid_unit.h"
 #include "boid.h"
 #include "species_params.h"
@@ -55,6 +56,15 @@ public:
 
 private:
     void returnNodeToPool(BoidUnit* node);
+    // レンダリング用ポインタを読み取りバッファに設定（描画時に使用）
+    void setRenderPointersToReadBuffers();
+    // レンダリング用ポインタを書き込みバッファに設定（デバッグ用）
+    void setRenderPointersToWriteBuffers();
+
+    // JavaScriptに公開するレンダリング用ポインタ（常に安定した読み取りバッファを指す）
+    uintptr_t renderPositionsPtr_ = 0;
+    uintptr_t renderVelocitiesPtr_ = 0;
+    uintptr_t renderOrientationsPtr_ = 0;
 };
 
 extern std::vector<SpeciesParams> globalSpeciesParams;

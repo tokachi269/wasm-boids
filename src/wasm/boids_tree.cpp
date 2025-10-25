@@ -10,7 +10,6 @@
 #include <glm/gtx/rotate_vector.hpp>
 #include <glm/gtx/string_cast.hpp>
 #include <iostream>
-#include <mutex>
 #include <numeric>
 #include <random>
 #include <vector>
@@ -30,8 +29,6 @@ SpeciesParams BoidTree::getGlobalSpeciesParams(const std::string species) {
 }
 
 void BoidTree::setGlobalSpeciesParams(const SpeciesParams &params) {
-  logger::log(std::string(params.species));
-
   auto it = std::find_if(globalSpeciesParams.begin(), globalSpeciesParams.end(),
                          [&params](const SpeciesParams &p) {
                            return p.species == params.species;
@@ -44,15 +41,6 @@ void BoidTree::setGlobalSpeciesParams(const SpeciesParams &params) {
 
   // パラメータ変更後、per-Boid メモリリストを再構築
   initializeBoidMemories(globalSpeciesParams);
-
-  // 全種をログに出す
-  logger::log("Updated species parameters:");
-
-  for (const auto &sp : globalSpeciesParams) {
-    logger::log(std::string("species: ") + sp.species + ", isPredator: (" +
-                (sp.isPredator ? "true" : "false") +
-                "), maxSpeed: " + std::to_string(sp.maxSpeed));
-  }
 }
 
 BoidTree::BoidTree()
@@ -130,6 +118,38 @@ void BoidTree::clearPool() {
   }
 }
 
+// ダブルバッファのRead側をレンダリング用ポインタに設定
+void BoidTree::setRenderPointersToReadBuffers() {
+  renderPositionsPtr_ = buf.positions.empty()
+                            ? 0
+                            : reinterpret_cast<uintptr_t>(
+                                  buf.positions.data());
+  renderVelocitiesPtr_ = buf.velocities.empty()
+                             ? 0
+                             : reinterpret_cast<uintptr_t>(
+                                   buf.velocities.data());
+  renderOrientationsPtr_ = buf.orientations.empty()
+                               ? 0
+                               : reinterpret_cast<uintptr_t>(
+                                     buf.orientations.data());
+}
+
+// ダブルバッファのWrite側をレンダリング用ポインタに設定
+void BoidTree::setRenderPointersToWriteBuffers() {
+  renderPositionsPtr_ = buf.positionsWrite.empty()
+                            ? 0
+                            : reinterpret_cast<uintptr_t>(
+                                  buf.positionsWrite.data());
+  renderVelocitiesPtr_ = buf.velocitiesWrite.empty()
+                             ? 0
+                             : reinterpret_cast<uintptr_t>(
+                                   buf.velocitiesWrite.data());
+  renderOrientationsPtr_ = buf.orientationsWrite.empty()
+                               ? 0
+                               : reinterpret_cast<uintptr_t>(
+                                     buf.orientationsWrite.data());
+}
+
 // ---- ツリー可視化 ----
 void printTree(const BoidUnit *node, int depth) {
   if (!node)
@@ -169,6 +189,7 @@ void BoidTree::build(int maxPerUnit, int level) {
 
   buildRecursive(root, indices, maxPerUnit, level);
   // printTree(root, 0);
+  setRenderPointersToReadBuffers();
 }
 // void BoidTree::build(int maxPerUnit, int level) {
 //   // rootが存在する場合は再利用して再構築
@@ -287,6 +308,16 @@ void BoidTree::buildRecursive(BoidUnit *node, const std::vector<int> &indices,
 
   // 既存の children をクリア
   node->children.clear();
+
+  // 個体が存在しない場合は安全に早期リターン（メモリアクセス違反を防止）
+  if (indices.empty()) {
+    node->indices.clear();
+    node->speciesId = -1;
+    node->center = glm::vec3(0.0f);
+    node->averageVelocity = glm::vec3(0.0f);
+    node->radius = 0.0f;
+    return;
+  }
 
   // 末端ノード（葉）の処理
   if ((int)indices.size() <= maxPerUnit) {
@@ -450,12 +481,20 @@ void BoidTree::update(float dt) {
   // 木構造全体を再帰的に更新
   if (root) {
     try {
+      setRenderPointersToReadBuffers();
       root->updateRecursive(glm::clamp(dt, 0.0f, 0.1f) * 5);
+      if (dt > 0.0f) {
+        setRenderPointersToWriteBuffers();
+        buf.swapReadWrite();
+        setRenderPointersToReadBuffers();
+      }
     } catch (const std::exception &e) {
       std::cerr << "Exception caught: " << e.what() << std::endl;
     } catch (...) {
       std::cerr << "Unknown exception caught" << std::endl;
     }
+  } else {
+    setRenderPointersToReadBuffers();
   }
 
   frameCount++;
@@ -481,8 +520,6 @@ void BoidTree::update(float dt) {
     // 分割
     for (int i = 0; i < 12 && splitIndex < (int)leafCache.size();
          ++i, ++splitIndex) {
-      logger::log("分割");
-
       BoidUnit *u = leafCache[splitIndex];
       if (u && u->needsSplit(40.0f, 0.5f, maxBoidsPerUnit)) {
         u->splitInPlace(maxBoidsPerUnit);
@@ -494,8 +531,6 @@ void BoidTree::update(float dt) {
     // 結合
     for (int i = 0; i < 12 && mergeIndex < (int)leafCache.size();
          ++i, ++mergeIndex) {
-      logger::log("結合");
-
       for (int j = mergeIndex + 1; j < (int)leafCache.size(); ++j) {
         BoidUnit *a = leafCache[mergeIndex];
         BoidUnit *b = leafCache[j];
@@ -522,18 +557,9 @@ void BoidTree::trySplitRecursive(BoidUnit *node) {
   for (auto *c : node->children)
     trySplitRecursive(c);
 }
-std::mutex coutMutex;
-
 void BoidTree::initializeBoids(
     const std::vector<SpeciesParams> &speciesParamsList, float posRange,
     float velRange) {
-  logger::log(std::string("speciesParamsList size: ") +
-              std::to_string(speciesParamsList.size()));
-  for (const auto &species : speciesParamsList) {
-    logger::log(std::string("Species: ") + species.species +
-                ", Count: " + std::to_string(species.count));
-  }
-
   // globalSpeciesParams を更新
   try {
     globalSpeciesParams = speciesParamsList; // コピー操作
@@ -549,14 +575,17 @@ void BoidTree::initializeBoids(
     totalCount += species.count;
   }
 
-  // バッファを確保
+  // バッファを確保（読み／書きの両方をゼロ初期化）
   buf.reserveAll(totalCount);
-  buf.positions.resize(totalCount);
-  buf.velocities.resize(totalCount);
-  buf.accelerations.assign(totalCount, glm::vec3(0.0f));
-  buf.speciesIds.resize(totalCount);
-  buf.predatorTargetIndices.resize(totalCount);
-  buf.predatorTargetTimers.resize(totalCount);
+  buf.resizeAll(totalCount);
+  std::fill(buf.accelerations.begin(), buf.accelerations.end(), glm::vec3(0.0f));
+  std::fill(buf.predatorInfluences.begin(), buf.predatorInfluences.end(), glm::vec3(0.0f));
+  std::fill(buf.stresses.begin(), buf.stresses.end(), 0.0f);
+  std::fill(buf.predatorTargetIndices.begin(), buf.predatorTargetIndices.end(), -1);
+  std::fill(buf.predatorTargetTimers.begin(), buf.predatorTargetTimers.end(), 0.0f);
+  std::fill(buf.velocitiesWrite.begin(), buf.velocitiesWrite.end(), glm::vec3(0.0f));
+  std::fill(buf.positionsWrite.begin(), buf.positionsWrite.end(), glm::vec3(0.0f));
+  std::fill(buf.orientationsWrite.begin(), buf.orientationsWrite.end(), glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
 
   // 各種族の個体を生成
   int offset = 0;
@@ -573,10 +602,14 @@ void BoidTree::initializeBoids(
           glm::vec3(posDist(gen), posDist(gen), posDist(gen));
       buf.velocities[offset] =
           glm::vec3(velDist(gen), velDist(gen), velDist(gen));
+      buf.ids[offset] = offset;
       buf.speciesIds[offset] = speciesId;
       ++offset;
     }
   }
+
+  buf.syncWriteFromRead();
+  setRenderPointersToReadBuffers();
 
   // 木構造を再構築
   if (root)
@@ -599,11 +632,15 @@ void BoidTree::setFlockSize(int newSize, float posRange, float velRange) {
   // 個体を減らす
   if (newSize < current) {
     buf.positions.resize(newSize);
+    buf.positionsWrite.resize(newSize);
     buf.velocities.resize(newSize);
+    buf.velocitiesWrite.resize(newSize);
     buf.accelerations.resize(newSize);
     buf.ids.resize(newSize);
     buf.stresses.resize(newSize);
     buf.speciesIds.resize(newSize);
+    buf.orientations.resize(newSize);
+    buf.orientationsWrite.resize(newSize);
     buf.predatorTargetIndices.resize(newSize, -1);
     buf.predatorTargetTimers.resize(newSize, 0.0f);
     buf.boidCohesionMemories.resize(newSize);
@@ -626,14 +663,20 @@ void BoidTree::setFlockSize(int newSize, float posRange, float velRange) {
 
     for (int k = 0; k < addN; ++k) {
       int i = current + k;
-      buf.positions.push_back(
-          glm::vec3(posDist(gen), posDist(gen), posDist(gen)));
-      buf.velocities.push_back(
-          glm::vec3(velDist(gen), velDist(gen), velDist(gen)));
+      const glm::vec3 pos =
+          glm::vec3(posDist(gen), posDist(gen), posDist(gen));
+      const glm::vec3 vel =
+          glm::vec3(velDist(gen), velDist(gen), velDist(gen));
+      buf.positions.push_back(pos);
+      buf.positionsWrite.push_back(pos);
+      buf.velocities.push_back(vel);
+      buf.velocitiesWrite.push_back(vel);
       buf.accelerations.push_back(glm::vec3(0.0f));
       buf.ids.push_back(i);
       buf.stresses.push_back(0.0f);
       buf.speciesIds.push_back(0);
+      buf.orientations.push_back(glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+      buf.orientationsWrite.push_back(glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
       buf.cohesionMemories[i] = std::unordered_map<int, float>();
       buf.predatorTargetIndices.push_back(-1);
       buf.predatorTargetTimers.push_back(0.0f);
@@ -665,6 +708,9 @@ void BoidTree::setFlockSize(int newSize, float posRange, float velRange) {
   if (!globalSpeciesParams.empty()) {
     initializeBoidMemories(globalSpeciesParams);
   }
+
+  buf.syncWriteFromRead();
+  setRenderPointersToReadBuffers();
 }
 
 void BoidTree::collectLeaves(const BoidUnit *node,
@@ -708,14 +754,23 @@ std::unordered_map<int, int> BoidTree::collectBoidUnitMapping() {
 }
 
 uintptr_t BoidTree::getPositionsPtr() {
-  return reinterpret_cast<uintptr_t>(&buf.positions[0]);
+  if (!renderPositionsPtr_ && !buf.positions.empty()) {
+    setRenderPointersToReadBuffers();
+  }
+  return renderPositionsPtr_;
 }
 
 uintptr_t BoidTree::getVelocitiesPtr() {
-  return reinterpret_cast<uintptr_t>(&buf.velocities[0]);
+  if (!renderVelocitiesPtr_ && !buf.velocities.empty()) {
+    setRenderPointersToReadBuffers();
+  }
+  return renderVelocitiesPtr_;
 }
 uintptr_t BoidTree::getOrientationsPtr() {
-  return reinterpret_cast<uintptr_t>(&buf.orientations[0]);
+  if (!renderOrientationsPtr_ && !buf.orientations.empty()) {
+    setRenderPointersToReadBuffers();
+  }
+  return renderOrientationsPtr_;
 }
 int BoidTree::getBoidCount() const {
   return static_cast<int>(buf.positions.size());

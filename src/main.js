@@ -1,24 +1,31 @@
 import { createApp } from 'vue';
 import App from './App.vue';
-import * as BoidsModule from './wasm/build/wasm_boids.js';
-import wasmUrl from './wasm/build/wasm_boids.wasm';
 
-let wasmModule = null;
-console.log("wasmUrl:", wasmUrl); // ここで URL を確認
+// COI対応によりSharedArrayBuffer等を利用する関係で、WASMファイルは固定パスにコピーしている
+const publicBase = (process.env.BASE_URL || '/').replace(/\/*$/, '/');
+const wasmPublicBase = `${publicBase}static/js`;
+const wasmJsUrl = `${wasmPublicBase}/wasm_boids.js`;
+const wasmBinaryUrl = `${wasmPublicBase}/wasm_boids.wasm`;
 
-BoidsModule.default({
-    locateFile: (path) => {
-        if (path.endsWith('.wasm')) {
-            return wasmUrl; // ハッシュ付きの正しいURLを返す
+import(/* webpackIgnore: true */ wasmJsUrl)
+    .then((BoidsModule) => {
+        if (!BoidsModule?.default) {
+            throw new Error('WASM module loader not found at: ' + wasmJsUrl);
         }
-        return path;
-    },
-}).then(Module => {
-    wasmModule = Module;
-    console.log('Wasm module initialized:', Module);
-
-    // Vue アプリケーションに WebAssembly モジュールを渡す
-    const app = createApp(App);
-    app.provide('wasmModule', Module);
-    app.mount('#app');
-});
+            return BoidsModule.default({
+                locateFile: (path) => (path.endsWith('.wasm') ? wasmBinaryUrl : path),
+            });
+    })
+    .then((Module) => {
+        // デバッグ確認用にグローバルへ公開しつつ初期化ログを出力
+        if (typeof window !== 'undefined') {
+            window.wasmModule = Module;
+        }
+        console.log('Wasm module initialized:', Module);
+        const app = createApp(App);
+        app.provide('wasmModule', Module);
+        app.mount('#app');
+    })
+    .catch((error) => {
+        console.error('Failed to initialise WASM module:', error);
+    });

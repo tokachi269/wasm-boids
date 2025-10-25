@@ -1,6 +1,9 @@
 const { defineConfig } = require('@vue/cli-service')
 const CopyWebpackPlugin = require('copy-webpack-plugin');
 const path = require('path');
+// 環境変数からWASMビルドディレクトリを取得（serve時はdev、build時はprod）
+const wasmBuildDir = process.env.WASM_BUILD_DIR || 'prod';
+const wasmOutputDir = path.resolve(__dirname, 'src/wasm/build', wasmBuildDir);
 
 module.exports = defineConfig({
     filenameHashing: true,
@@ -20,6 +23,10 @@ module.exports = defineConfig({
         experiments: {
             asyncWebAssembly: true, // wasmのasync importを有効化
         },
+        // Workerをmoduleスクリプトとして読み込むため、importScriptsを使わないローダーに切り替える
+        output: {
+            workerChunkLoading: 'import',
+        },
         module: {
             rules: [
                 {
@@ -33,16 +40,19 @@ module.exports = defineConfig({
             new CopyWebpackPlugin({
                 patterns: [
                     {
-                        from: path.resolve(__dirname, 'src/wasm/build/wasm_boids.wasm'),
-                        to: 'static/js/[name].[contenthash:8][ext]',
+                        from: path.resolve(wasmOutputDir, 'wasm_boids.wasm'),
+                        to: 'static/js/wasm_boids.wasm',
+                        noErrorOnMissing: true,
                     },
                     {
-                        from: path.resolve(__dirname, 'src/wasm/build/wasm_boids.js'),
-                        to: 'static/js/[name].[contenthash:8][ext]',
+                        from: path.resolve(wasmOutputDir, 'wasm_boids.js'),
+                        to: 'static/js/wasm_boids.js', // pthread workerが固定パスを期待するためハッシュを付与しない
+                        noErrorOnMissing: true,
                     },
                     {
-                        from: path.resolve(__dirname, 'src/wasm/build/wasm_boids.wasm.map'),
+                        from: path.resolve(wasmOutputDir, 'wasm_boids.wasm.map'),
                         to: 'static/js/wasm_boids.wasm.map',
+                        noErrorOnMissing: true,
                     },
                 ],
             }),
@@ -54,6 +64,8 @@ module.exports = defineConfig({
                 crypto: require.resolve("crypto-browserify"),
                 stream: require.resolve("stream-browserify"),
                 vm: require.resolve("vm-browserify"),
+                module: false,
+                worker_threads: false,
             },
         },
     },
@@ -61,6 +73,22 @@ module.exports = defineConfig({
         config.output
             .filename('static/js/[name].[contenthash:8].js')
             .chunkFilename('static/js/[name].[contenthash:8].js');
+
+        config.optimization
+            .minimizer('terser')
+            .tap((args) => {
+                const options = args[0] || {};
+                const existingExclude = options.exclude || [];
+                options.exclude = Array.isArray(existingExclude)
+                    ? existingExclude
+                    : [existingExclude];
+                options.exclude.push(/wasm_boids\..*\.js$/i);
+                options.terserOptions = options.terserOptions || {};
+                options.terserOptions.ecma = options.terserOptions.ecma || 2020;
+                options.terserOptions.module = true;
+                args[0] = options;
+                return args;
+            });
     },
     pages: {
         index: {
