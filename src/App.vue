@@ -510,6 +510,31 @@ function patchQuaternionInstancing(material) {
   instancingMaterials.add(material);
 }
 
+// シャドウレンダリングでもインスタンス属性を適用する深度マテリアル
+function createInstancedDepthMaterial(sourceMaterial) {
+  const depthMaterial = new THREE.MeshDepthMaterial({
+    depthPacking: THREE.RGBADepthPacking,
+    alphaTest: sourceMaterial.alphaTest ?? 0,
+  });
+  depthMaterial.map = sourceMaterial.map ?? null;
+  depthMaterial.alphaMap = sourceMaterial.alphaMap ?? null;
+  depthMaterial.transparent = sourceMaterial.transparent ?? false;
+  patchQuaternionInstancing(depthMaterial);
+  return depthMaterial;
+}
+
+// ポイントライト用の距離マテリアルもインスタンス挙動に合わせる
+function createInstancedDistanceMaterial(sourceMaterial) {
+  const distanceMaterial = new THREE.MeshDistanceMaterial({
+    alphaTest: sourceMaterial.alphaTest ?? 0,
+  });
+  distanceMaterial.map = sourceMaterial.map ?? null;
+  distanceMaterial.alphaMap = sourceMaterial.alphaMap ?? null;
+  distanceMaterial.transparent = sourceMaterial.transparent ?? false;
+  patchQuaternionInstancing(distanceMaterial);
+  return distanceMaterial;
+}
+
 function stepSimulationAndUpdateState(deltaTime) {
   const statePtr = stepSimulation(deltaTime);
   if (!statePtr) {
@@ -767,6 +792,9 @@ function initInstancedBoids(count) {
   );
   instancedMeshHigh.castShadow = true;
   instancedMeshHigh.receiveShadow = true;
+  instancedMeshHigh.frustumCulled = false;
+  instancedMeshHigh.customDepthMaterial = createInstancedDepthMaterial(highMaterial);
+  instancedMeshHigh.customDistanceMaterial = createInstancedDistanceMaterial(highMaterial);
 
   instancedMeshLow = new THREE.InstancedMesh(
     lowGeometry,
@@ -775,6 +803,9 @@ function initInstancedBoids(count) {
   );
   instancedMeshLow.castShadow = true;
   instancedMeshLow.receiveShadow = true;
+  instancedMeshLow.frustumCulled = false;
+  instancedMeshLow.customDepthMaterial = createInstancedDepthMaterial(lowMaterial);
+  instancedMeshLow.customDistanceMaterial = createInstancedDistanceMaterial(lowMaterial);
 
   // インスタンスカラーを白で初期化
   const whiteColor = new THREE.Color(1, 1, 1);
