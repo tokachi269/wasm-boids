@@ -3,7 +3,13 @@
   <div class="settings">
     <details class="species-section" :open="false">
       <summary class="species-header">
-        {{ settings.species }} ({{ settings.count }}匹)
+        <span class="species-title">{{ settings.species }} ({{ settings.count }}匹)</span>
+        <button
+          v-if="canRemove"
+          class="species-remove"
+          type="button"
+          @click.stop="emitRemove"
+        >削除</button>
       </summary>
       <div class="species-content">
         <div class="setting-row">
@@ -12,7 +18,14 @@
         </div>
         <div class="setting-row">
           <label>群れの数(要更新)<br>(Count):</label>
-          <input type="range" v-model.number="settings.count" min="0" max="50000" step="1" />
+          <input
+            type="range"
+            v-model.number="countDraft"
+            min="0"
+            max="50000"
+            step="1"
+            @change="commitCountFromSlider"
+          />
           <span 
             v-if="!editingCount" 
             class="editable-value" 
@@ -22,12 +35,12 @@
           <input 
             v-if="editingCount"
             type="number" 
-            v-model.number="settings.count" 
+            v-model.number="countDraft" 
             min="0" 
             max="20000"
             class="value-input"
-            @blur="stopEditCount"
-            @keyup.enter="stopEditCount"
+            @blur="cancelCountEdit"
+            @keyup.enter="commitCountFromInput"
             ref="countInput"
           />
         </div><div class="setting-row">
@@ -325,14 +338,22 @@
 </template>
 
 <script setup>
-import { ref, nextTick } from 'vue';
+import { ref, nextTick, watch } from 'vue';
 
-defineProps({
+const emit = defineEmits(['remove']);
+
+const props = defineProps({
   settings: {
     type: Object,
     required: true
+  },
+  canRemove: {
+    type: Boolean,
+    default: false
   }
 });
+
+const settings = props.settings;
 
 // 編集状態のref
 const editingCount = ref(false);
@@ -366,14 +387,51 @@ const torqueStrengthInput = ref(null);
 const lambdaInput = ref(null);
 const tauInput = ref(null);
 
+const countDraft = ref(settings.count ?? 0);
+
+watch(
+  () => settings.count,
+  (value) => {
+    if (!editingCount.value) {
+      countDraft.value = value ?? 0;
+    }
+  }
+);
+
 // 編集開始関数
 async function startEditCount() {
   editingCount.value = true;
+  countDraft.value = settings.count ?? 0;
   await nextTick();
   if (countInput.value) {
     countInput.value.focus();
     countInput.value.select();
   }
+}
+
+function cancelCountEdit() {
+  editingCount.value = false;
+  countDraft.value = settings.count ?? 0;
+}
+
+function applyCountDraft() {
+  const nextValue = Math.max(0, Math.round(Number.isFinite(countDraft.value) ? countDraft.value : 0));
+  if (settings.count !== nextValue) {
+    settings.count = nextValue;
+  }
+}
+
+function commitCountFromSlider() {
+  applyCountDraft();
+}
+
+function commitCountFromInput() {
+  applyCountDraft();
+  cancelCountEdit();
+}
+
+function emitRemove() {
+  emit('remove');
 }
 
 async function startEditCohesion() {
@@ -491,11 +549,6 @@ async function startEditTau() {
     tauInput.value.focus();
     tauInput.value.select();
   }
-}
-
-// 編集終了関数
-function stopEditCount() {
-  editingCount.value = false;
 }
 
 function stopEditCohesion() {
@@ -643,6 +696,29 @@ function stopEditTau() {
   max-width: 100%;
   width: 100%;
   box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.species-title {
+  flex: 1;
+}
+
+.species-remove {
+  pointer-events: auto;
+  background: #d9534f;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.species-remove:hover {
+  background: #c9302c;
 }
 
 .species-header:hover {

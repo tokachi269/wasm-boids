@@ -26,6 +26,7 @@ void callInitBoids(const std::vector<SpeciesParams>& speciesParamsList, float sp
     }
     BoidTree::instance().initializeBoids(scaledList, posRange, velRange);
 }
+
 EMSCRIPTEN_BINDINGS(my_module)
 {
     value_object<glm::vec3>("Vec3")

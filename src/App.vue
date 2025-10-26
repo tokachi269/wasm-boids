@@ -5,8 +5,13 @@
       <details>
         <summary>Settings</summary>
         <div v-for="(s, i) in settings" :key="i">
-          <Settings :settings="s" />
+          <Settings
+            :settings="s"
+            :can-remove="settings.length > 1"
+            @remove="removeSpecies(i)"
+          />
         </div>
+        <button class="add-species-button" @click="addSpecies">種族を追加</button>
         <button @click="resetSettings" style="margin-bottom:1em;">リセット</button>
         <div>
           <label>
@@ -16,7 +21,8 @@
           <label style="margin-left:1em;">
             <input type="checkbox" v-model="showUnitSpheres" />
             スフィアのみ表示
-          </label> <label style="margin-left:1em;">
+          </label>
+          <label style="margin-left:1em;">
             <input type="checkbox" v-model="showUnitLines" />
             線のみ表示
           </label>
@@ -48,6 +54,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { SSAOPass } from 'three/examples/jsm/postprocessing/SSAOPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
 
 const wasmModule = inject('wasmModule');
@@ -57,13 +64,20 @@ if (!wasmModule) {
 
 const stepSimulation = wasmModule.cwrap('stepSimulation', 'number', ['number'])
 const build = wasmModule.cwrap('build', 'void', ['number', 'number'])
-const setFlockSize = wasmModule.cwrap('setFlockSize', 'void', ['number', 'number', 'number'])
 const exportTreeStructure = wasmModule.cwrap('exportTreeStructure', 'object', [])
 const boidUnitMappingPtr = wasmModule.cwrap('boidUnitMappingPtr', 'number', []);
 const currentFirstBoidX = wasmModule.cwrap('currentFirstBoidX', 'number', []);
+const speciesIdsPtr = wasmModule.cwrap('speciesIdsPtr', 'number', []);
+const syncReadToWriteBuffers = wasmModule.cwrap('syncReadToWriteBuffers', 'void', []);
 // const getUnitCount = wasmModule.cwrap('getUnitCount', 'number', []);
-// const getUnitCentersPtr = wasmModule.cwrap('getUnitCentersPtr', 'number', []);
 // const getUnitParentIndicesPtr = wasmModule.cwrap('getUnitParentIndicesPtr', 'number', []);
+
+function isMobileDevice() {
+  if (typeof navigator === 'undefined') {
+    return false;
+  }
+  return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+}
 
 function fetchTreeStructure() {
   const treeData = exportTreeStructure();
@@ -122,13 +136,78 @@ function loadSettings() {
   return DEFAULT_SETTINGS; // デフォルト値を返す
 }
 
-const settings = reactive(loadSettings());
+function snapshotSettingsList(list) {
+  return list.map((item) => JSON.parse(JSON.stringify(toRaw(item))));
+}
 
-let cachedTotalBoidCount = getTotalBoidCount();
+let cachedTotalBoidCount = 0;
+let lastSpeciesSignature = '';
 const totalBoids = computed(() => getTotalBoidCount());
+
+const settings = reactive(loadSettings());
+cachedTotalBoidCount = getTotalBoidCount();
+lastSpeciesSignature = getSpeciesSignature(settings);
+let previousSettingsSnapshot = snapshotSettingsList(settings);
+let pendingStateForReinitialize = null;
+let pendingSettingsSnapshot = null;
+
+function generateUniqueSpeciesName(baseName) {
+  const taken = new Set(settings.map((s) => s.species));
+  if (!baseName) {
+    baseName = 'Species';
+  }
+  if (!taken.has(baseName)) {
+    return baseName;
+  }
+  let index = 2;
+  let candidate = `${baseName} ${index}`;
+  while (taken.has(candidate)) {
+    index += 1;
+    candidate = `${baseName} ${index}`;
+  }
+  return candidate;
+}
+
+function cloneSpeciesTemplate(template) {
+  return JSON.parse(JSON.stringify(template));
+}
+
+function addSpecies() {
+  const template = DEFAULT_SETTINGS[0] ? cloneSpeciesTemplate(DEFAULT_SETTINGS[0]) : {
+    species: 'Species',
+    count: 0,
+    cohesion: 20,
+    cohesionRange: 30,
+    separation: 5,
+    separationRange: 1,
+    alignment: 10,
+    alignmentRange: 6,
+    maxSpeed: 0.3,
+    maxTurnAngle: 0.2,
+    maxNeighbors: 6,
+    horizontalTorque: 0.02,
+    torqueStrength: 5,
+    lambda: 0.5,
+    tau: 1.5,
+  };
+  const next = cloneSpeciesTemplate(template);
+  next.isPredator = false;
+  next.species = generateUniqueSpeciesName(next.species);
+  next.count = 0;
+  settings.push(next);
+}
+
+function removeSpecies(index) {
+  if (index < 0 || index >= settings.length) {
+    return;
+  }
+  settings.splice(index, 1);
+}
 
 const threeContainer = ref(null);
 let scene, camera, renderer, controls, composer;
+let heightFogPass = null;
+let heightFogRenderTarget = null;
 
 const paused = ref(false);
 
@@ -158,9 +237,11 @@ let latestOrientationsPtr = 0;
 let latestBoidCountFromWasm = 0;
 let frameCounter = 0;
 let debugTimer = 0;
+let flockReinitTimer = null;
 
 let animationTimer = null;
 const FRAME_INTERVAL = 1000 / 1000;//1000 / 60; // 60FPS
+const COUNT_REINIT_DELAY_MS = 400;
 
 // ツリーの最大深さを計算
 function calcMaxDepth(unit, depth = 0) {
@@ -187,11 +268,10 @@ function initThreeJS() {
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color(OCEAN_COLORS.DEEP_BLUE);
-  scene.fog = new THREE.Fog(toHex(OCEAN_COLORS.FOG), 0, 28);
   createOceanSphere();
 
   camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
-  camera.position.set(4, 7, 7);
+  camera.position.set(3, -5,3);
   camera.lookAt(0, 0, 0);
 
   renderer = new THREE.WebGLRenderer({
@@ -224,7 +304,7 @@ function initThreeJS() {
   controls.dampingFactor = 0.1;
 
   // 地面メッシュ追加
-  const groundGeo = new THREE.PlaneGeometry(1000, 1000);
+  const groundGeo = new THREE.PlaneGeometry(300, 300);
   const groundMat = createFadeOutGroundMaterial();
   groundMat.depthTest = true;
   const ground = new THREE.Mesh(groundGeo, groundMat);
@@ -234,11 +314,11 @@ function initThreeJS() {
   scene.add(ground);
 
   // ライト
-  const ambientLight = new THREE.AmbientLight(toHex(OCEAN_COLORS.AMBIENT_LIGHT), 1);
+  const ambientLight = new THREE.AmbientLight(toHex(OCEAN_COLORS.AMBIENT_LIGHT), 0.9);
   scene.add(ambientLight);
 
   // 太陽光（やや暖色のDirectionalLight）
-  const dirLight = new THREE.DirectionalLight(toHex(OCEAN_COLORS.SUN_LIGHT), 15); // 暖色＆強め
+  const dirLight = new THREE.DirectionalLight(toHex(OCEAN_COLORS.SUN_LIGHT), 20); // 暖色＆強め
   dirLight.position.set(300, 500, 200); // 高い位置から照らす
   dirLight.castShadow = true;
 
@@ -250,16 +330,26 @@ function initThreeJS() {
   dirLight.shadow.camera.near = 1;
   dirLight.shadow.camera.far = 1000;
 
-  dirLight.shadow.mapSize.width = 2048;
-  dirLight.shadow.mapSize.height = 2048;
-  dirLight.shadow.bias = -0.001;
+  dirLight.shadow.mapSize.width = 1024;
+  dirLight.shadow.mapSize.height = 1024;
+  dirLight.shadow.bias = -0.01;
   dirLight.shadow.normalBias = 0.01;
 
   scene.add(dirLight);
   // EffectComposer の初期化（スマホ以外の場合のみ）
   if (!isMobileDevice()) {
+    const renderTargetOptions = {
+      depthBuffer: true,
+      stencilBuffer: false,
+    };
+    heightFogRenderTarget = new THREE.WebGLRenderTarget(width, height, renderTargetOptions);
+    heightFogRenderTarget.depthTexture = new THREE.DepthTexture(width, height, THREE.FloatType);
+    heightFogRenderTarget.depthTexture.format = THREE.DepthFormat;
+    heightFogRenderTarget.depthTexture.type = THREE.FloatType;
+    heightFogRenderTarget.depthTexture.needsUpdate = true;
+
     // EffectComposer の初期化
-    composer = new EffectComposer(renderer);
+    composer = new EffectComposer(renderer, heightFogRenderTarget);
 
     // RenderPass を追加
     const renderPass = new RenderPass(scene, camera);
@@ -267,13 +357,37 @@ function initThreeJS() {
 
     const ssaoPass = new SSAOPass(scene, camera, width, height);
     ssaoPass.kernelRadius = 8; // サンプル半径（大きくすると効果が広がる）
-    ssaoPass.minDistance = 0.001; // 最小距離（小さくすると近距離の効果が強調される）
+    ssaoPass.minDistance = 0.01; // 最小距離（小さくすると近距離の効果が強調される）
     ssaoPass.maxDistance = 0.01; // 最大距離（大きくすると遠距離の効果が強調される）
     composer.addPass(ssaoPass);
-
+    
     // UnrealBloomPass を追加（任意）
     const bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 1.5, 0.4, 0.85);
     composer.addPass(bloomPass);
+
+    heightFogPass = new ShaderPass(HeightFogShader);
+    heightFogPass.uniforms.tDepth.value = heightFogRenderTarget.depthTexture;
+    heightFogPass.uniforms.fogColor.value.copy(heightFogConfig.color);
+    heightFogPass.uniforms.distanceStart.value = heightFogConfig.distanceStart;
+    heightFogPass.uniforms.distanceEnd.value = heightFogConfig.distanceEnd;
+    heightFogPass.uniforms.distanceExponent.value = heightFogConfig.distanceExponent;
+    heightFogPass.uniforms.distanceControlPoint1.value.copy(heightFogConfig.distanceControlPoint1);
+    heightFogPass.uniforms.distanceControlPoint2.value.copy(heightFogConfig.distanceControlPoint2);
+    heightFogPass.uniforms.surfaceLevel.value = heightFogConfig.surfaceLevel;
+    heightFogPass.uniforms.heightFalloff.value = heightFogConfig.heightFalloff;
+    heightFogPass.uniforms.heightExponent.value = heightFogConfig.heightExponent;
+    heightFogPass.uniforms.maxOpacity.value = heightFogConfig.maxOpacity;
+
+    heightFogPass.material.depthTest = false;
+    heightFogPass.material.depthWrite = false;
+    heightFogPass.material.transparent = false;
+    heightFogPass.material.blending = THREE.NoBlending;
+    heightFogPass.material.toneMapped = true;
+    heightFogPass.material.needsUpdate = true;
+    heightFogPass.renderToScreen = true;
+    composer.addPass(heightFogPass);
+
+
   }
   // ウィンドウリサイズ対応
   window.addEventListener('resize', onWindowResize);
@@ -285,6 +399,12 @@ function onWindowResize() {
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
   renderer.setSize(width, height);
+  if (composer) {
+    composer.setSize(width, height);
+  }
+  if (heightFogRenderTarget) {
+    heightFogRenderTarget.setSize(width, height);
+  }
 }
 
 // 一時的に従来方式に戻す - instancedMeshを単一で使用
@@ -330,6 +450,141 @@ const OCEAN_COLORS = {
 
 // '#rrggbb' 形式の色を three.js の整数表現に変換
 const toHex = (colorStr) => parseInt(colorStr.replace('#', '0x'), 16);
+
+// 距離と深度で濃さが変わる海中フォグ設定
+const heightFogConfig = {
+  color: new THREE.Color(OCEAN_COLORS.DEEP_BLUE),       // 遠景で溶け込む深海色
+  distanceStart: 4.0,                      // カメラからこの距離まではフォグゼロ
+  distanceEnd: 60.0,                       // この距離でフォグが最大になる
+  distanceExponent: 0.4,                   // 距離カーブの滑らかさ
+  distanceControlPoint1: new THREE.Vector2(0.2, 0.8),
+  distanceControlPoint2: new THREE.Vector2(0.75, 0.95),
+  surfaceLevel: 100.0,                       // 水面の高さ。ここから下がるほど暗くなる
+  heightFalloff: 0.01,                       // 深度による減衰率
+  heightExponent: 1,                          // 深度カーブの強さ
+  maxOpacity: 1.2,                            // 最大フォグ率
+};
+
+// カメラ位置からの距離と高さでブレンドするフォグシェーダー
+const HeightFogShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    tDepth: { value: null },
+    cameraNear: { value: 0.1 },
+    cameraFar: { value: 1000 },
+    projectionMatrixInverse: { value: new THREE.Matrix4() },
+    cameraMatrixWorld: { value: new THREE.Matrix4() },
+    fogColor: { value: heightFogConfig.color.clone() },
+    distanceStart: { value: heightFogConfig.distanceStart },
+    distanceEnd: { value: heightFogConfig.distanceEnd },
+    distanceExponent: { value: heightFogConfig.distanceExponent },
+    distanceControlPoint1: { value: heightFogConfig.distanceControlPoint1.clone() },
+    distanceControlPoint2: { value: heightFogConfig.distanceControlPoint2.clone() },
+    surfaceLevel: { value: heightFogConfig.surfaceLevel },
+    heightFalloff: { value: heightFogConfig.heightFalloff },
+    heightExponent: { value: heightFogConfig.heightExponent },
+    maxOpacity: { value: heightFogConfig.maxOpacity },
+  },
+  vertexShader: /* glsl */`
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = vec4(position.xy, 0.0, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */`
+    precision highp float;
+    varying vec2 vUv;
+
+    uniform sampler2D tDiffuse;
+    uniform sampler2D tDepth;
+    uniform float cameraNear;
+    uniform float cameraFar;
+    uniform vec3 fogColor;
+    uniform float distanceStart;
+    uniform float distanceEnd;
+    uniform float distanceExponent;
+    uniform vec2 distanceControlPoint1;
+    uniform vec2 distanceControlPoint2;
+    uniform float surfaceLevel;
+    uniform float heightFalloff;
+    uniform float heightExponent;
+    uniform float maxOpacity;
+    uniform mat4 projectionMatrixInverse;
+    uniform mat4 cameraMatrixWorld;
+
+    float cubicBezier1D(float t, float p0, float p1, float p2, float p3) {
+      float u = 1.0 - t;
+      float uu = u * u;
+      float tt = t * t;
+      return u * uu * p0 + 3.0 * uu * t * p1 + 3.0 * u * tt * p2 + tt * t * p3;
+    }
+
+    float cubicBezierDerivative1D(float t, float p0, float p1, float p2, float p3) {
+      float u = 1.0 - t;
+      return 3.0 * u * u * (p1 - p0)
+           + 6.0 * u * t * (p2 - p1)
+           + 3.0 * t * t * (p3 - p2);
+    }
+
+    float cubicBezierInverse(float x, vec2 c1, vec2 c2) {
+      float t = clamp(x, 0.0, 1.0);
+      for (int i = 0; i < 5; i++) {
+        float current = cubicBezier1D(t, 0.0, c1.x, c2.x, 1.0) - x;
+        float slope = cubicBezierDerivative1D(t, 0.0, c1.x, c2.x, 1.0);
+        if (abs(slope) < 1e-5) {
+          break;
+        }
+        t -= current / slope;
+        t = clamp(t, 0.0, 1.0);
+      }
+      return t;
+    }
+
+    float sampleDistanceCurve(float x, vec2 c1, vec2 c2) {
+      float t = cubicBezierInverse(x, c1, c2);
+      return cubicBezier1D(t, 0.0, c1.y, c2.y, 1.0);
+    }
+
+    void main() {
+      vec4 baseColor = texture2D(tDiffuse, vUv);
+      float depth = texture2D(tDepth, vUv).x;
+
+      if (depth >= 1.0) {
+        gl_FragColor = baseColor;
+        return;
+      }
+
+      vec2 ndc = vUv * 2.0 - 1.0;
+      float ndcZ = depth * 2.0 - 1.0;
+      vec4 clipPos = vec4(ndc, ndcZ, 1.0);
+      vec4 viewPos = projectionMatrixInverse * clipPos;
+      viewPos /= max(viewPos.w, 1e-5);
+      vec4 worldPos = cameraMatrixWorld * viewPos;
+
+      float viewDistance = length(viewPos.xyz);
+      float distanceFogNorm = clamp(
+        (viewDistance - distanceStart) / max(distanceEnd - distanceStart, 1e-5),
+        0.0,
+        1.0
+      );
+      float distanceFog = sampleDistanceCurve(distanceFogNorm, distanceControlPoint1, distanceControlPoint2);
+      distanceFog = pow(distanceFog, distanceExponent);
+
+      float depthBelowSurface = max(surfaceLevel - worldPos.y, 0.0);
+      float heightFactor = 1.0 - exp(-depthBelowSurface * heightFalloff);
+      heightFactor = clamp(pow(heightFactor, heightExponent), 0.0, 1.0);
+
+      float fogFactor = clamp(distanceFog * heightFactor, 0.0, 1.0);
+      fogFactor = mix(0.0, maxOpacity, fogFactor);
+
+      vec3 fogged = mix(baseColor.rgb, fogColor, fogFactor);
+      gl_FragColor = vec4(fogged, baseColor.a);
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+    }
+  `,
+};
 
 function createOceanSphere() {
   if (!scene) return null;
@@ -380,7 +635,7 @@ function createFadeOutGroundMaterial() {
     color: toHex(OCEAN_COLORS.SEAFLOOR),
     transparent: true,
     alphaMap,
-    depthWrite: false,
+    depthWrite: true,
   });
 
   material.roughness = 0.85;
@@ -408,6 +663,10 @@ let cachedVelocitiesView = null;
 let cachedVelocitiesCount = 0;
 let tailPhaseSeeds = null;
 let previousVelocities = null;
+let cachedSpeciesIdsView = null;
+let cachedSpeciesIdsPtr = 0;
+let cachedSpeciesIdsCount = 0;
+let cachedSpeciesIdsBuffer = null;
 function createAttributeSet(count, itemSize) {
   const length = count * itemSize;
   const attributes = [];
@@ -489,7 +748,7 @@ function patchQuaternionInstancing(material) {
       .replace('#include <instancing_vertex>', `#ifdef USE_INSTANCING\n#endif`)
       .replace(
         '#include <begin_vertex>',
-  `#include <begin_vertex>\nif (uTailEnable > 0.5) {\n  float driveRaw = instanceTailDrive;\n  if (driveRaw > 0.01) {\n    float drive = clamp(driveRaw, 0.0, 1.0);\n    vec3 originalPos = transformed;\n    vec3 right = normalize(uTailRight);\n    vec3 forward = normalize(uTailForward);\n    vec3 up = normalize(uTailUp);\n\n    float localX = dot(originalPos, right);\n    float localY = dot(originalPos, forward);\n    float localZ = dot(originalPos, up);\n\n    float bodyCoord = clamp(aBodyCoord, 0.0, 1.0);\n    float tailWeight = smoothstep(0.0, 0.35, bodyCoord);\n    float speedFactor = clamp(instanceTailSpeed * uTailSpeedScale, 0.0, 2.0);\n\n    float phase = instanceTailPhase + uTailTime * uTailFrequency;\n    float wavePhase = phase + bodyCoord * uTailPhaseStride;\n    float wag = sin(wavePhase) * uTailAmplitude * drive;\n    float turnOffset = instanceTailTurn * uTailTurnStrength * drive;\n    float motion = wag * (0.4 + 0.6 * speedFactor) + turnOffset;\n\n    float tipDamping = 1.0 - smoothstep(0.7, 1.0, bodyCoord) * 0.3;\n    float bendStrength = mix(0.02, 1.0, tailWeight) * tipDamping;\n\n    float bendAngle = motion * bendStrength;\n    float s = sin(bendAngle);\n    float c = cos(bendAngle);\n    float rotX = localX * c - localY * s;\n    float rotY = localX * s + localY * c;\n\n    float sway = motion * 0.4 * tipDamping;\n    rotX += sway * (0.05 + 0.95 * bodyCoord);\n\n    vec3 rotated = right * rotX + forward * rotY + up * localZ;\n    transformed = rotated;\n  }\n}\ntransformed = quatTransform(transformed, instanceQuat) + instancePos;`
+        `#include <begin_vertex>\nif (uTailEnable > 0.5) {\n  float driveRaw = instanceTailDrive;\n  if (driveRaw > 0.01) {\n    float drive = clamp(driveRaw, 0.0, 1.0);\n    vec3 originalPos = transformed;\n    vec3 right = normalize(uTailRight);\n    vec3 forward = normalize(uTailForward);\n    vec3 up = normalize(uTailUp);\n\n    float localX = dot(originalPos, right);\n    float localY = dot(originalPos, forward);\n    float localZ = dot(originalPos, up);\n\n    float bodyCoord = clamp(aBodyCoord, 0.0, 1.0);\n    float tailWeight = smoothstep(0.0, 0.35, bodyCoord);\n    float speedFactor = clamp(instanceTailSpeed * uTailSpeedScale, 0.0, 2.0);\n\n    float phase = instanceTailPhase + uTailTime * uTailFrequency;\n    float wavePhase = phase + bodyCoord * uTailPhaseStride;\n    float wag = sin(wavePhase) * uTailAmplitude * drive;\n    float turnOffset = instanceTailTurn * uTailTurnStrength * drive;\n    float motion = wag * (0.4 + 0.6 * speedFactor) + turnOffset;\n\n    float tipDamping = 1.0 - smoothstep(0.7, 1.0, bodyCoord) * 0.3;\n    float bendStrength = mix(0.02, 1.0, tailWeight) * tipDamping;\n\n    float bendAngle = motion * bendStrength;\n    float s = sin(bendAngle);\n    float c = cos(bendAngle);\n    float rotX = localX * c - localY * s;\n    float rotY = localX * s + localY * c;\n\n    float sway = motion * 0.4 * tipDamping;\n    rotX += sway * (0.05 + 0.95 * bodyCoord);\n\n    vec3 rotated = right * rotX + forward * rotY + up * localZ;\n    transformed = rotated;\n  }\n}\ntransformed = quatTransform(transformed, instanceQuat) + instancePos;`
       )
       .replace(
         '#include <beginnormal_vertex>',
@@ -626,6 +885,134 @@ function getWasmViews(count) {
   };
 }
 
+function getSpeciesIdView(count) {
+  const ptr = speciesIdsPtr ? speciesIdsPtr() : 0;
+  if (!ptr || count <= 0) {
+    return cachedSpeciesIdsView ?? new Int32Array(0);
+  }
+
+  const heapBuffer32 = wasmModule.HEAP32.buffer;
+  if (
+    cachedSpeciesIdsView === null ||
+    cachedSpeciesIdsPtr !== ptr ||
+    cachedSpeciesIdsCount !== count ||
+    cachedSpeciesIdsBuffer !== heapBuffer32
+  ) {
+    cachedSpeciesIdsPtr = ptr;
+    cachedSpeciesIdsCount = count;
+    cachedSpeciesIdsBuffer = heapBuffer32;
+    cachedSpeciesIdsView = new Int32Array(heapBuffer32, ptr, count);
+  }
+
+  return cachedSpeciesIdsView;
+}
+
+function buildSpeciesRanges(list = []) {
+  const ranges = [];
+  let offset = 0;
+  for (const item of list) {
+    if (!item) continue;
+    const count = Math.max(0, Number(item.count) || 0);
+    ranges.push({
+      name: item.species || '',
+      start: offset,
+      count,
+    });
+    offset += count;
+  }
+  return ranges;
+}
+
+function captureFlockState() {
+  if (!wasmModule) return null;
+  const currentCount = stepSimulationAndUpdateState(0);
+  if (!currentCount || currentCount <= 0) {
+    return { count: 0 };
+  }
+
+  const { positions, velocities, orientations } = getWasmViews(currentCount);
+  const speciesIdsView = getSpeciesIdView(currentCount);
+
+  return {
+    count: currentCount,
+    positions: positions ? new Float32Array(positions) : null,
+    velocities: velocities ? new Float32Array(velocities) : null,
+    orientations: orientations ? new Float32Array(orientations) : null,
+    speciesIds: speciesIdsView ? new Int32Array(speciesIdsView) : null,
+  };
+}
+
+function restoreFlockState(previousState, oldSettings, newSettings) {
+  if (!previousState || previousState.count <= 0) {
+    return;
+  }
+
+  const currentCount = stepSimulationAndUpdateState(0);
+  if (!currentCount || currentCount <= 0) {
+    return;
+  }
+
+  const { positions, velocities, orientations } = getWasmViews(currentCount);
+  if (!positions || !velocities || !orientations) {
+    return;
+  }
+
+  const prevPositions = previousState.positions;
+  const prevVelocities = previousState.velocities;
+  const prevOrientations = previousState.orientations;
+
+  const oldRanges = buildSpeciesRanges(oldSettings);
+  const newRanges = buildSpeciesRanges(newSettings);
+  const oldRangeMap = new Map(oldRanges.map((info) => [info.name, info]));
+
+  let restored = 0;
+
+  for (const newInfo of newRanges) {
+    if (!newInfo.count) continue;
+    const oldInfo = oldRangeMap.get(newInfo.name);
+    if (!oldInfo || !oldInfo.count) continue;
+
+    const transferable = Math.min(oldInfo.count, newInfo.count);
+    for (let i = 0; i < transferable; i += 1) {
+      const srcIndex = oldInfo.start + i;
+      const dstIndex = newInfo.start + i;
+      if (srcIndex >= previousState.count || dstIndex >= currentCount) {
+        break;
+      }
+
+      if (prevPositions) {
+        const srcPosBase = srcIndex * 3;
+        const dstPosBase = dstIndex * 3;
+        positions[dstPosBase] = prevPositions[srcPosBase];
+        positions[dstPosBase + 1] = prevPositions[srcPosBase + 1];
+        positions[dstPosBase + 2] = prevPositions[srcPosBase + 2];
+      }
+
+      if (prevVelocities) {
+        const srcVelBase = srcIndex * 3;
+        const dstVelBase = dstIndex * 3;
+        velocities[dstVelBase] = prevVelocities[srcVelBase];
+        velocities[dstVelBase + 1] = prevVelocities[srcVelBase + 1];
+        velocities[dstVelBase + 2] = prevVelocities[srcVelBase + 2];
+      }
+
+      if (prevOrientations) {
+        const srcOriBase = srcIndex * 4;
+        const dstOriBase = dstIndex * 4;
+        orientations[dstOriBase] = prevOrientations[srcOriBase];
+        orientations[dstOriBase + 1] = prevOrientations[srcOriBase + 1];
+        orientations[dstOriBase + 2] = prevOrientations[srcOriBase + 2];
+        orientations[dstOriBase + 3] = prevOrientations[srcOriBase + 3];
+      }
+      restored += 1;
+    }
+  }
+
+  if (restored > 0 && typeof syncReadToWriteBuffers === 'function') {
+    syncReadToWriteBuffers();
+  }
+}
+
 // LOD用ジオメトリ・マテリアルを使い回す
 const boidGeometryHigh = new THREE.SphereGeometry(1, 8, 8);
 const boidGeometryLow = new THREE.SphereGeometry(1, 3, 2);
@@ -754,6 +1141,89 @@ function getTotalBoidCount() {
   return settings.reduce((sum, s) => sum + (s.count || 0), 0);
 }
 
+function getSpeciesSignature(specList = settings) {
+  if (!Array.isArray(specList)) {
+    return '';
+  }
+  return specList
+    .map((s, index) => `${index}:${(s && s.count) || 0}:${s && s.isPredator ? 1 : 0}`)
+    .join('|');
+}
+
+function createSpeciesParamsVector() {
+  const vector = new wasmModule.VectorSpeciesParams();
+  settings.forEach((s, index) => {
+    const tau = typeof s.tau === 'number' ? s.tau : 0.0;
+    vector.push_back({
+      species: s.species || `Species ${index + 1}`,
+      count: s.count || 0,
+      speciesId: index,
+      cohesion: s.cohesion || 0.0,
+      separation: s.separation || 0.0,
+      alignment: s.alignment || 0.0,
+      maxSpeed: s.maxSpeed || 1.0,
+      minSpeed: s.minSpeed || 0.0,
+      maxTurnAngle: s.maxTurnAngle || 0.0,
+      separationRange: s.separationRange || 0.0,
+      alignmentRange: s.alignmentRange || 0.0,
+      cohesionRange: s.cohesionRange || 0.0,
+      maxNeighbors: s.maxNeighbors || 0,
+      lambda: s.lambda || 0.0,
+      horizontalTorque: s.horizontalTorque || 0.0,
+      velocityEpsilon: s.velocityEpsilon || 0.0,
+      torqueStrength: s.torqueStrength || 0.0,
+      tau,
+      isPredator: s.isPredator || false,
+    });
+  });
+  return vector;
+}
+
+function reinitializeFlockNow() {
+  if (!wasmModule) return;
+
+  const pendingState = pendingStateForReinitialize?.state || null;
+  const oldSettingsRef = pendingStateForReinitialize?.oldSettings || previousSettingsSnapshot;
+  const newSettingsRef = pendingSettingsSnapshot || snapshotSettingsList(settings);
+  const targetSignature = getSpeciesSignature(newSettingsRef);
+
+  const vector = createSpeciesParamsVector();
+  wasmModule.callInitBoids(vector, 1, 6, 0.25);
+  build(16, 0);
+  const total = getTotalBoidCount();
+  cachedTotalBoidCount = total;
+  initInstancedBoids(total);
+
+  if (pendingState?.count > 0) {
+    restoreFlockState(pendingState, oldSettingsRef, newSettingsRef);
+  }
+
+  lastSpeciesSignature = targetSignature;
+  previousSettingsSnapshot = newSettingsRef;
+  pendingStateForReinitialize = null;
+  pendingSettingsSnapshot = null;
+}
+
+function scheduleFlockReinitialize() {
+  if (flockReinitTimer) {
+    clearTimeout(flockReinitTimer);
+  }
+
+  if (!pendingStateForReinitialize) {
+    pendingStateForReinitialize = {
+      state: captureFlockState(),
+      oldSettings: previousSettingsSnapshot,
+    };
+  }
+
+  pendingSettingsSnapshot = snapshotSettingsList(settings);
+
+  flockReinitTimer = setTimeout(() => {
+    flockReinitTimer = null;
+    reinitializeFlockNow();
+  }, COUNT_REINIT_DELAY_MS);
+}
+
 function initInstancedBoids(count) {
   if (!boidModel.children || !boidModel.children[0]) {
     console.error('Boid model does not have valid children.');
@@ -847,6 +1317,10 @@ function initInstancedBoids(count) {
   cachedVelocitiesPtr = 0;
   previousVelocities = null;
   shaderTime = 0;
+  cachedSpeciesIdsView = null;
+  cachedSpeciesIdsPtr = 0;
+  cachedSpeciesIdsCount = 0;
+  cachedSpeciesIdsBuffer = null;
   ensureTailRuntimeBuffers(count);
 
   const predators = getPredatorCount();
@@ -914,7 +1388,7 @@ function loadBoidModel(callback) {
   let boidMaterial = new THREE.MeshStandardMaterial({
     color: 0xffffff, // 白色
     roughness: 0.5,
-    metalness: 0,
+    metalness: 0.2,
     transparent: false, // 半透明を有効化
     alphaTest: 0.5,    // アルファテストを設定
     map: texture,      // テクスチャを設定
@@ -925,7 +1399,7 @@ function loadBoidModel(callback) {
   let boidLodMaterial = new THREE.MeshStandardMaterial({
     color: 0xffffff, // 白色
     roughness: 0.5,
-    metalness: 0,
+    metalness: 0.2,
     transparent: false, // 半透明を有効化
     alphaTest: 0.5,    // アルファテストを設定
     map: textureLod,      // テクスチャを設定
@@ -1167,11 +1641,11 @@ function animate() {
     const dx = px - camX;
     const dy = py - camY;
     const dz = pz - camZ;
-  const distSq = dx * dx + dy * dy + dz * dz;
-  // 3段階LOD: 近距離/中距離/遠距離を距離の平方で判定
-  const isNear = distSq < LOD_NEAR_DISTANCE_SQ;
-  const isMid = !isNear && distSq < LOD_MID_DISTANCE_SQ;
-  const animateTail = isNear || isMid; // 遠距離では尾アニメを停止してGPU負荷削減
+    const distSq = dx * dx + dy * dy + dz * dz;
+    // 3段階LOD: 近距離/中距離/遠距離を距離の平方で判定
+    const isNear = distSq < LOD_NEAR_DISTANCE_SQ;
+    const isMid = !isNear && distSq < LOD_MID_DISTANCE_SQ;
+    const animateTail = isNear || isMid; // 遠距離では尾アニメを停止してGPU負荷削減
 
     const baseQuat = i * 4;
     const qx = orientations[baseQuat];
@@ -1359,8 +1833,21 @@ function animate() {
 
   controls.update();
 
-  const renderTarget = isMobileDevice() ? renderer : composer;
-  renderTarget.render(scene, camera);
+  if (heightFogPass) {
+    heightFogPass.uniforms.cameraNear.value = camera.near;
+    heightFogPass.uniforms.cameraFar.value = camera.far;
+    heightFogPass.uniforms.projectionMatrixInverse.value.copy(camera.projectionMatrixInverse);
+    heightFogPass.uniforms.cameraMatrixWorld.value.copy(camera.matrixWorld);
+    if (heightFogRenderTarget?.depthTexture) {
+      heightFogPass.uniforms.tDepth.value = heightFogRenderTarget.depthTexture;
+    }
+  }
+
+  if (isMobileDevice() || !composer) {
+    renderer.render(scene, camera);
+  } else {
+    composer.render();
+  }
 
   if (gpuTimerExt && glContext && gpuQueryInFlight) {
     glContext.endQuery(gpuTimerExt.TIME_ELAPSED_EXT);
@@ -1417,40 +1904,7 @@ function drawTreeStructure(treeData) {
   treeData.forEach((rootNode) => drawNode(rootNode));
 }
 function startSimulation() {
-  // WebAssembly モジュール用に SpeciesParams を初期化
-  const vector = new wasmModule.VectorSpeciesParams();
-  settings.forEach((s) => {
-    const tau = typeof s.tau === 'number' ? s.tau : 0.0;
-    vector.push_back({
-      species: s.species || "default",
-      count: s.count || 0,
-      cohesion: s.cohesion || 0.0,
-      separation: s.separation || 0.0,
-      alignment: s.alignment || 0.0,
-      maxSpeed: s.maxSpeed || 1.0,
-      minSpeed: s.minSpeed || 0.0, // デフォルト値を補完
-      maxTurnAngle: s.maxTurnAngle || 0.0,
-      separationRange: s.separationRange || 0.0,
-      alignmentRange: s.alignmentRange || 0.0,
-      cohesionRange: s.cohesionRange || 0.0,
-      maxNeighbors: s.maxNeighbors || 0,
-      lambda: s.lambda || 0.0,
-      horizontalTorque: s.horizontalTorque || 0.0,
-      velocityEpsilon: s.velocityEpsilon || 0.0,
-      torqueStrength: s.torqueStrength || 0.0,
-      tau,
-      isPredator: s.isPredator || false,
-    });
-  });
-  // callInitBoids に渡す（この vector は C++ 側で vector<SpeciesParams> になる）
-  wasmModule.callInitBoids(vector, 1, 6, 0.25);
-  build(16, 0);
-  const total = getTotalBoidCount();
-  if (setFlockSize) {
-    setFlockSize(total, 40, 0.25);
-  }
-  cachedTotalBoidCount = total;
-  initInstancedBoids(total);
+  reinitializeFlockNow();
   animate();
 }
 
@@ -1476,45 +1930,14 @@ onMounted(() => {
     startSimulation();
   });
 
-
   window.addEventListener('keydown', handleKeydown);
-
 });
 
-function isMobileDevice() {
-  return /Mobi|Android/i.test(navigator.userAgent);
-}
-// settingsの変更をwasmModuleに反映
 watch(
   settings,
   () => {
     if (wasmModule && wasmModule.setGlobalSpeciesParamsFromJS) {
-      const vector = new wasmModule.VectorSpeciesParams();
-
-      settings.forEach((s) => {
-        const tau = typeof s.tau === 'number' ? s.tau : 0.0;
-        vector.push_back({
-          species: s.species || "default",
-          count: s.count || 0,
-          cohesion: s.cohesion || 0.0,
-          separation: s.separation || 0.0,
-          alignment: s.alignment || 0.0,
-          maxSpeed: s.maxSpeed || 1.0,
-          minSpeed: s.minSpeed || 0.0, // デフォルト値を補完
-          maxTurnAngle: s.maxTurnAngle || 0.0,
-          separationRange: s.separationRange || 0.0,
-          alignmentRange: s.alignmentRange || 0.0,
-          cohesionRange: s.cohesionRange || 0.0,
-          maxNeighbors: s.maxNeighbors || 0,
-          lambda: s.lambda || 0.0,
-          horizontalTorque: s.horizontalTorque || 0.0,
-          velocityEpsilon: s.velocityEpsilon || 0.0,
-          torqueStrength: s.torqueStrength || 0.0,
-          tau,
-          isPredator: s.isPredator || false,
-        });
-      });
-      wasmModule.setGlobalSpeciesParamsFromJS(vector, 1);
+      wasmModule.setGlobalSpeciesParamsFromJS(createSpeciesParamsVector(), 1);
       try {
         const plainSettings = settings.map((s) => ({ ...toRaw(s) }));
         localStorage.setItem('boids_settings', JSON.stringify(plainSettings));
@@ -1523,13 +1946,17 @@ watch(
       }
     }
 
-    const total = getTotalBoidCount();
-    if (total !== cachedTotalBoidCount) {
-      cachedTotalBoidCount = total;
-      if (setFlockSize) {
-        setFlockSize(total, 40, 0.25);
+    const signature = getSpeciesSignature(settings);
+    if (signature !== lastSpeciesSignature) {
+      scheduleFlockReinitialize();
+    } else {
+      if (flockReinitTimer) {
+        clearTimeout(flockReinitTimer);
+        flockReinitTimer = null;
       }
-      initInstancedBoids(total);
+      pendingStateForReinitialize = null;
+      pendingSettingsSnapshot = null;
+      previousSettingsSnapshot = snapshotSettingsList(settings);
     }
 
     const predators = getPredatorCount();
@@ -1538,7 +1965,7 @@ watch(
     }
     for (const mesh of predatorMeshes) mesh.visible = false;
   },
-  { deep: true } // 深い変更も監視
+  { deep: true }
 );
 
 function resetSettings() {
@@ -1609,5 +2036,10 @@ watch([showUnitSpheres, showUnitLines], ([newSpheres, newLines]) => {
 
 .ui-overlay * {
   pointer-events: auto;
+}
+
+.add-species-button {
+  margin-top: 10px;
+  margin-bottom: 10px;
 }
 </style>

@@ -78,4 +78,16 @@ uintptr_t boidUnitMappingPtr() {
   }
   return reinterpret_cast<uintptr_t>(boidUnitMappingVec.data());
 }
+
+uintptr_t speciesIdsPtr() {
+  const auto &ids = BoidTree::instance().buf.speciesIds;
+  if (ids.empty()) {
+    return 0;
+  }
+  return reinterpret_cast<uintptr_t>(ids.data());
+}
+
+void syncReadToWriteBuffers() {
+  BoidTree::instance().buf.syncWriteFromRead();
+}
 }
