@@ -5,11 +5,7 @@
       <details>
         <summary>Settings</summary>
         <div v-for="(s, i) in settings" :key="i">
-          <Settings
-            :settings="s"
-            :can-remove="settings.length > 1"
-            @remove="removeSpecies(i)"
-          />
+          <Settings :settings="s" :can-remove="settings.length > 1" @remove="removeSpecies(i)" />
         </div>
         <button class="add-species-button" @click="addSpecies">種族を追加</button>
         <button @click="resetSettings" style="margin-bottom:1em;">リセット</button>
@@ -49,7 +45,7 @@ import { computed, inject, onMounted, reactive, ref, watch, toRaw } from 'vue';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import Settings from './components/Settings.vue';
-import Stats from 'three/examples/jsm/libs/stats.module'
+import StatsGl from 'stats-gl';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { SSAOPass } from 'three/examples/jsm/postprocessing/SSAOPass.js';
@@ -222,12 +218,7 @@ let unitLines = [];
 
 let maxDepth = 1;
 let stats = null;
-let gpuStatsPanel = null;
 let glContext = null;
-let gpuTimerExt = null;
-let gpuQueryInFlight = null;
-let gpuPendingQuery = null;
-let lastGpuTimeMs = 0;
 let latestStatePtr = 0;
 let latestStateHeaderPtr = 0;
 let latestStateHeaderView = null;
@@ -242,6 +233,21 @@ let flockReinitTimer = null;
 let animationTimer = null;
 const FRAME_INTERVAL = 1000 / 1000;//1000 / 60; // 60FPS
 const COUNT_REINIT_DELAY_MS = 400;
+
+function positionStatsOverlay(element) {
+  if (!element) return;
+  element.style.position = 'fixed';
+  element.style.padding = '80px';
+  element.style.pointerEvents = 'none';
+  element.style.display = 'flex';
+  element.style.flexDirection = 'column';
+  element.style.alignItems = 'flex-end';
+  element.style.gap = '6px';
+  element.style.maxWidth = '200px';
+  element.style.width = 'auto';
+  element.style.boxSizing = 'border-box';
+  element.style.zIndex = 1000;
+}
 
 // ツリーの最大深さを計算
 function calcMaxDepth(unit, depth = 0) {
@@ -271,7 +277,7 @@ function initThreeJS() {
   createOceanSphere();
 
   camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
-  camera.position.set(3, -5,3);
+  camera.position.set(3, -5, 3);
   camera.lookAt(0, 0, 0);
 
   renderer = new THREE.WebGLRenderer({
@@ -285,14 +291,6 @@ function initThreeJS() {
   renderer.shadowMap.type = THREE.PCFSoftShadowMap; // 影を柔らかく
 
   glContext = renderer.getContext();
-  if (typeof WebGL2RenderingContext !== 'undefined' && glContext instanceof WebGL2RenderingContext) {
-    gpuTimerExt = glContext.getExtension('EXT_disjoint_timer_query_webgl2');
-    if (!gpuTimerExt) {
-      console.warn('EXT_disjoint_timer_query_webgl2 is not available; GPU timing disabled.');
-    }
-  } else {
-    gpuTimerExt = null;
-  }
 
   threeContainer.value.appendChild(renderer.domElement);
 
@@ -356,11 +354,11 @@ function initThreeJS() {
     composer.addPass(renderPass);
 
     const ssaoPass = new SSAOPass(scene, camera, width, height);
-    ssaoPass.kernelRadius = 8; // サンプル半径（大きくすると効果が広がる）
+    ssaoPass.kernelRadius = 5; // サンプル半径（大きくすると効果が広がる）
     ssaoPass.minDistance = 0.01; // 最小距離（小さくすると近距離の効果が強調される）
-    ssaoPass.maxDistance = 0.01; // 最大距離（大きくすると遠距離の効果が強調される）
+    ssaoPass.maxDistance = 0.3; // 最大距離（大きくすると遠距離の効果が強調される）
     composer.addPass(ssaoPass);
-    
+
     // UnrealBloomPass を追加（任意）
     const bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 1.5, 0.4, 0.85);
     composer.addPass(bloomPass);
@@ -1569,15 +1567,9 @@ function animate() {
     controls.update();
     (isMobileDevice() ? renderer : composer).render(scene, camera);
     stats?.end();
+    stats?.update();
     animationTimer = setTimeout(animate, FRAME_INTERVAL);
     return;
-  }
-  if (gpuTimerExt && glContext && !gpuQueryInFlight && !gpuPendingQuery) {
-    const query = glContext.createQuery();
-    if (query) {
-      glContext.beginQuery(gpuTimerExt.TIME_ELAPSED_EXT, query);
-      gpuQueryInFlight = query;
-    }
   }
   const { positions, orientations, velocities } = getWasmViews(count);
   if ((frameCounter++ & 63) === 0) {
@@ -1849,31 +1841,8 @@ function animate() {
     composer.render();
   }
 
-  if (gpuTimerExt && glContext && gpuQueryInFlight) {
-    glContext.endQuery(gpuTimerExt.TIME_ELAPSED_EXT);
-    gpuPendingQuery = gpuQueryInFlight;
-    gpuQueryInFlight = null;
-  }
-
-  if (gpuTimerExt && glContext && gpuPendingQuery) {
-    const available = glContext.getQueryParameter(gpuPendingQuery, glContext.QUERY_RESULT_AVAILABLE);
-    const disjoint = glContext.getParameter(gpuTimerExt.GPU_DISJOINT_EXT);
-    if (available) {
-      if (!disjoint) {
-        const nanoseconds = glContext.getQueryParameter(gpuPendingQuery, glContext.QUERY_RESULT);
-        lastGpuTimeMs = nanoseconds / 1e6;
-        if (!gpuStatsPanel && stats && typeof Stats.Panel === 'function') {
-          gpuStatsPanel = stats.addPanel(new Stats.Panel('GPU (ms)', '#ff8', '#221'));
-          stats.showPanel(0);
-        }
-        gpuStatsPanel?.update(lastGpuTimeMs, 33);
-      }
-      glContext.deleteQuery(gpuPendingQuery);
-      gpuPendingQuery = null;
-    }
-  }
-
   stats?.end();
+  stats?.update();
 
   animationTimer = setTimeout(animate, FRAME_INTERVAL);
 }
@@ -1912,20 +1881,56 @@ onMounted(() => {
   initThreeJS();
   loadBoidModel(() => {
     console.log('Boid model loaded successfully.');
-    // stats.jsの初期化とDOM追加
-    stats = new Stats();
-    stats.showPanel(0);
-    document.body.appendChild(stats.dom);
-    // 右上に移動させる
-    stats.dom.style.position = 'fixed';
-    stats.dom.style.right = '0px';
-    stats.dom.style.top = '0px';
-    stats.dom.style.left = 'auto';
-    stats.dom.style.zIndex = 1000;
-    if (gpuTimerExt && typeof Stats.Panel === 'function' && !gpuStatsPanel) {
-      gpuStatsPanel = stats.addPanel(new Stats.Panel('GPU (ms)', '#ff8', '#221'));
-      stats.showPanel(0);
-    }
+
+    stats = new StatsGl({
+      trackGPU: true,
+      trackHz: true,
+      trackCPT: true,
+      logsPerSecond: 4,
+      graphsPerSecond: 30,
+      samplesLog: 40,
+      samplesGraph: 10,
+      precision: 2,
+      horizontal: true,
+      minimal: false,
+      mode: 0,
+    });
+
+    const statsInitTarget = renderer?.domElement ?? document.body;
+
+    const ensureStatsOverlay = () => {
+      const statsElement =
+        (typeof stats?.domElement !== 'undefined' ? stats.domElement : null) ||
+        (typeof stats?.getDom === 'function' ? stats.getDom() : null) ||
+        stats?.dom ||
+        stats?.container ||
+        stats?.wrapper ||
+        null;
+
+      if (statsElement) {
+        if (!statsElement.parentElement) {
+          document.body.appendChild(statsElement);
+        }
+        positionStatsOverlay(statsElement);
+      }
+    };
+
+    const initPromise =
+      stats && typeof stats.init === 'function'
+        ? Promise.resolve(stats.init(statsInitTarget))
+        : Promise.resolve();
+
+    initPromise
+      .then(() => {
+        if (typeof stats?.patchThreeRenderer === 'function') {
+          stats.patchThreeRenderer(renderer);
+        }
+        ensureStatsOverlay();
+      })
+      .catch((error) => {
+        console.error('Failed to initialize stats-gl:', error);
+        ensureStatsOverlay();
+      });
 
     startSimulation();
   });
