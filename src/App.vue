@@ -37,6 +37,7 @@
       </div>
     </div>
     <div ref="threeContainer" class="three-container" />
+    <audio ref="backgroundAudio" src="/UnderWater.mp3" loop style="display:none" />
   </div>
 </template>
 
@@ -201,9 +202,12 @@ function removeSpecies(index) {
 }
 
 const threeContainer = ref(null);
+const backgroundAudio = ref(null);
 let scene, camera, renderer, controls, composer;
 let heightFogPass = null;
 let heightFogRenderTarget = null;
+let particlePoints = null;
+let particleMaterial = null;
 
 const paused = ref(false);
 
@@ -334,6 +338,7 @@ function initThreeJS() {
   dirLight.shadow.normalBias = 0.01;
 
   scene.add(dirLight);
+  initParticleSystem();
   // EffectComposer の初期化（スマホ以外の場合のみ）
   if (!isMobileDevice()) {
     const renderTargetOptions = {
@@ -364,6 +369,14 @@ function initThreeJS() {
     composer.addPass(bloomPass);
 
     heightFogPass = new ShaderPass(HeightFogShader);
+    const heightFogOriginalRender = heightFogPass.render.bind(heightFogPass);
+    heightFogPass.render = (renderer, writeBuffer, readBuffer, deltaTime, maskActive) => {
+      if (heightFogPass.uniforms.tDepth) {
+        heightFogPass.uniforms.tDepth.value = readBuffer?.depthTexture ?? heightFogPass.uniforms.tDepth.value;
+      }
+      heightFogOriginalRender(renderer, writeBuffer, readBuffer, deltaTime, maskActive);
+    };
+    heightFogPass.needsSwap = false;
     heightFogPass.uniforms.tDepth.value = heightFogRenderTarget.depthTexture;
     heightFogPass.uniforms.fogColor.value.copy(heightFogConfig.color);
     heightFogPass.uniforms.distanceStart.value = heightFogConfig.distanceStart;
@@ -410,9 +423,33 @@ let instancedMeshHigh = null; // 高ポリゴン用
 let instancedMeshLow = null;  // 低ポリゴン用
 const instancingMaterials = new Set();
 
+function createSinCosLutTexture(size) {
+  const data = new Uint8Array(size * 4);
+  for (let i = 0; i < size; i++) {
+    const angle = (i / size) * Math.PI * 2;
+    const sinValue = Math.sin(angle);
+    const cosValue = Math.cos(angle);
+    data[i * 4] = Math.round((sinValue * 0.5 + 0.5) * 255);
+    data[i * 4 + 1] = Math.round((cosValue * 0.5 + 0.5) * 255);
+    data[i * 4 + 2] = 0;
+    data[i * 4 + 3] = 255;
+  }
+  const texture = new THREE.DataTexture(data, size, 1, THREE.RGBAFormat);
+  texture.needsUpdate = true;
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.magFilter = THREE.LinearFilter;
+  texture.minFilter = THREE.LinearFilter;
+  texture.generateMipmaps = false;
+  texture.flipY = false;
+  return texture;
+}
+
 const TRIPLE_BUFFER_SIZE = 3;
 const HIDDEN_POSITION = 1e6;
 const IDENTITY_QUATERNION = [0, 0, 0, 1];
+const SIN_LUT_SIZE = 256;
+const sinCosLutTexture = createSinCosLutTexture(SIN_LUT_SIZE);
 // LOD距離閾値（平方距離）: 近距離はハイポリ、中距離はLOD+アニメ、遠距離はLOD静止
 const LOD_NEAR_DISTANCE_SQ = 4; // 2m以内はメインモデル
 const LOD_MID_DISTANCE_SQ = 25; // 5m以内はLODモデル＋アニメ
@@ -428,9 +465,20 @@ const tailAnimation = {
     uTailRight: { value: new THREE.Vector3(1, 0, 0) },     // 尾アニメの右方向ベクトル
     uTailForward: { value: new THREE.Vector3(0, 0, 1) },   // 尾アニメの進行方向ベクトル
     uTailUp: { value: new THREE.Vector3(0, 1, 0) },        // 尾アニメの上方向ベクトル
-    uTailEnable: { value: 1 }           // アニメーション有効/無効
+    uTailEnable: { value: 1 },          // アニメーション有効/無効
+    uSinLut: { value: sinCosLutTexture },
+    uLutSize: { value: SIN_LUT_SIZE },
   },
 };
+
+const PARTICLE_BASIS_TEMP_DIR = new THREE.Vector3();
+const PARTICLE_BASIS_TEMP_AXIS = new THREE.Vector3();
+const PARTICLE_BASIS_LAT1 = new THREE.Vector3();
+const PARTICLE_BASIS_LAT2 = new THREE.Vector3();
+const PARTICLE_BASE_SPREAD_DESKTOP = new THREE.Vector3(24, 12, 26);
+const PARTICLE_BASE_SPREAD_MOBILE = new THREE.Vector3(16, 9, 18);
+const PARTICLE_BASE_MAX_DISTANCE_DESKTOP = PARTICLE_BASE_SPREAD_DESKTOP.z * 1.2;
+const PARTICLE_BASE_MAX_DISTANCE_MOBILE = PARTICLE_BASE_SPREAD_MOBILE.z * 1.2;
 
 // 海中シーンの色味をまとめて管理する定数群
 const OCEAN_COLORS = {
@@ -643,6 +691,9 @@ function createFadeOutGroundMaterial() {
 
 function updateInstancingMaterialUniforms(time) {
   tailAnimation.uniforms.uTailTime.value = time;
+  if (particleMaterial?.uniforms?.uTime) {
+    particleMaterial.uniforms.uTime.value = time;
+  }
 }
 
 let bufferCursor = 0;
@@ -665,11 +716,285 @@ let cachedSpeciesIdsView = null;
 let cachedSpeciesIdsPtr = 0;
 let cachedSpeciesIdsCount = 0;
 let cachedSpeciesIdsBuffer = null;
-function createAttributeSet(count, itemSize) {
+let previousLodFlags = null;
+
+function getTailParamsArrayType() {
+  // TODO: Float16 を使う場合は Uint16Array へのエンコード処理が必要
+  return Float32Array;
+}
+
+// WebGL2専用の軽量パーティクルを初期化
+function initParticleSystem() {
+  if (!scene || !renderer?.capabilities?.isWebGL2) {
+    console.warn('Skipping particle system: WebGL2 required.');
+    return;
+  }
+
+  if (particlePoints) {
+    scene.remove(particlePoints);
+    particlePoints.geometry?.dispose();
+    particlePoints.material?.dispose();
+    particlePoints = null;
+    particleMaterial = null;
+  }
+
+  // 端末負荷を考慮した粒子数（モバイルは控えめ）
+  const count = isMobileDevice() ? 800 : 2000;
+  const positions = new Float32Array(count * 3);
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geometry.setDrawRange(0, count);
+
+  // カメラ周囲のランダム配置範囲（x,y:幅 / z:奥行）
+  const baseSpread = isMobileDevice()
+    ? PARTICLE_BASE_SPREAD_MOBILE
+    : PARTICLE_BASE_SPREAD_DESKTOP;
+  const initialSpread = baseSpread.clone();
+  const baseMaxDistance = isMobileDevice()
+    ? PARTICLE_BASE_MAX_DISTANCE_MOBILE
+    : PARTICLE_BASE_MAX_DISTANCE_DESKTOP;
+
+  particleMaterial = new THREE.ShaderMaterial({
+    glslVersion: THREE.GLSL3,
+    transparent: true,
+    depthWrite: false,
+    depthTest: true,
+    blending: THREE.AdditiveBlending,
+    uniforms: {
+      // 時間と空間配置
+      uTime: { value: 0 },
+      uOrigin: { value: new THREE.Vector3() },
+      uFlowDir: { value: new THREE.Vector3(1, 0, 0).normalize() },
+      uLat1: { value: new THREE.Vector3(0, 0, 1) },
+      uLat2: { value: new THREE.Vector3(0, 1, 0) },
+      uSpread: { value: initialSpread },
+      uMaxDistance: { value: baseMaxDistance },
+      // 振る舞いと描画
+      uBaseSpeed: { value: 0.6 },
+      uJitterAmp: { value: 0.22 },
+      uSizePx: { value: isMobileDevice() ? 18.0 : 28.0 },
+      uFadeNear: { value: 1.5 },
+      uFadeFar: { value: 14.0 },
+      uColorNear: { value: new THREE.Color(0x9fd6ff) },
+      uColorFar: { value: new THREE.Color(0x0a5270) },
+    },
+    vertexShader: `
+precision highp float;
+precision highp int;
+
+uniform float uTime;
+uniform vec3 uOrigin;
+uniform vec3 uFlowDir;
+uniform vec3 uLat1;
+uniform vec3 uLat2;
+uniform vec3 uSpread;
+uniform float uMaxDistance;
+uniform float uBaseSpeed;
+uniform float uJitterAmp;
+uniform float uSizePx;
+uniform float uFadeNear;
+uniform float uFadeFar;
+
+out float vFade;
+out float vColorMix;
+
+uint hashUint(uint n) {
+  n ^= (n << 13);
+  n ^= (n >> 17);
+  n ^= (n << 5);
+  return n * 0x27d4eb2du;
+}
+
+float hashFloat(uint n) {
+  return float(hashUint(n)) / 4294967296.0;
+}
+
+vec3 hashVec3(uint n) {
+  return vec3(
+    hashFloat(n),
+    hashFloat(n * 1664525u + 1013904223u),
+    hashFloat(n * 22695477u + 1u)
+  );
+}
+
+void main() {
+  uint id = uint(gl_VertexID);
+  vec3 randSeed = hashVec3(id) - 0.5;
+
+  // ワールド固定の粒子場を生成
+  vec3 flowDir = normalize(uFlowDir);
+  vec3 lateral = uLat1 * (randSeed.x * uSpread.x)
+    + uLat2 * (randSeed.y * uSpread.y);
+
+  float speedSeed = hashFloat(id * 747796405u);
+  float speed = uBaseSpeed * (0.7 + 0.6 * speedSeed);
+  float flowCycle = max(uSpread.z, 1e-3);
+  float flowParam = randSeed.z + (uTime * speed) / flowCycle;
+  float wrappedZ = fract(flowParam) - 0.5;
+  vec3 pos = uOrigin + lateral + flowDir * (wrappedZ * flowCycle);
+
+  float phase = hashFloat(id * 1664525u) * 6.28318530718;
+  float driftSeed = hashFloat(id * 22695477u);
+  float triangle = 1.0 - abs(fract((phase + uTime * (0.8 + 0.4 * driftSeed)) / 3.14159265) * 2.0 - 1.0);
+  // slow drift + ランダム揺らぎで単純な連続パターンを回避
+  vec3 jitter1 = normalize(uLat1);
+  vec3 jitter2 = normalize(uLat2);
+  pos += jitter1 * ((triangle - 0.5) * uJitterAmp);
+  pos += jitter2 * ((hashFloat(id * 1103515245u) - 0.5) * uJitterAmp * 0.6);
+
+  vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+  float dist = -mvPosition.z;
+  float forwardMask = step(0.0, dist);
+
+  vec4 clipPosition = projectionMatrix * mvPosition;
+  float invW = 1.0 / max(abs(clipPosition.w), 1e-3);
+  vec2 ndc = clipPosition.xy * invW;
+
+  float screenMask = 1.0 - smoothstep(0.96, 1.16, max(abs(ndc.x), abs(ndc.y)));
+  float rangeMask = 1.0 - smoothstep(uMaxDistance * 0.7, uMaxDistance, dist);
+
+  float fadeT = clamp((dist - uFadeNear) / max(uFadeFar - uFadeNear, 1e-3), 0.0, 1.0);
+  float fade = (1.0 - fadeT) * screenMask * rangeMask * forwardMask;
+  vFade = fade;
+  vColorMix = fade;
+
+  float sizeBase = uSizePx * projectionMatrix[1][1] / max(dist, 1e-3);
+  float attenuatedSize = sizeBase * fade;
+  gl_PointSize = max(attenuatedSize, 0.75) * step(0.001, fade);
+  gl_Position = clipPosition;
+}
+    `,
+    fragmentShader: `
+precision highp float;
+
+in float vFade;
+in float vColorMix;
+
+uniform vec3 uColorNear;
+uniform vec3 uColorFar;
+
+out vec4 fragColor;
+
+void main() {
+  vec2 coord = gl_PointCoord - vec2(0.5);
+  float falloff = exp(-8.0 * dot(coord, coord));
+  float alpha = vFade * falloff * 0.6;
+  if (alpha < 0.004) {
+    discard;
+  }
+  vec3 color = mix(uColorFar, uColorNear, vColorMix);
+  fragColor = vec4(color, alpha);
+}
+    `,
+  });
+
+  const baseTargetDistance = controls
+    ? camera.position.distanceTo(controls.target)
+    : camera.position.length();
+  particleMaterial.userData.baseSpread = baseSpread.clone();
+  particleMaterial.userData.baseMaxDistance = baseMaxDistance;
+  particleMaterial.userData.baseTargetDistance = Math.max(baseTargetDistance, 0.1);
+
+  setParticleWorldBasis(particleMaterial.uniforms.uFlowDir.value);
+
+  particlePoints = new THREE.Points(geometry, particleMaterial);
+  particlePoints.frustumCulled = false;
+  particlePoints.renderOrder = 2;
+  scene.add(particlePoints);
+
+  updateParticleUniforms();
+}
+
+// 粒子場の直交基底をワールド座標で構築
+function setParticleWorldBasis(flowDir) {
+  if (!particleMaterial || !flowDir) {
+    return;
+  }
+
+  const dir = PARTICLE_BASIS_TEMP_DIR.copy(flowDir).normalize();
+  const axis = Math.abs(dir.y) < 0.99
+    ? PARTICLE_BASIS_TEMP_AXIS.set(0, 1, 0)
+    : PARTICLE_BASIS_TEMP_AXIS.set(1, 0, 0);
+
+  const lat1 = PARTICLE_BASIS_LAT1;
+  lat1.crossVectors(dir, axis);
+  if (lat1.lengthSq() < 1e-6) {
+    lat1.set(0, 0, 1);
+    lat1.crossVectors(dir, lat1);
+  }
+  lat1.normalize();
+
+  const lat2 = PARTICLE_BASIS_LAT2;
+  lat2.crossVectors(dir, lat1).normalize();
+
+  const uniforms = particleMaterial.uniforms;
+  uniforms.uFlowDir.value.copy(dir);
+  uniforms.uLat1.value.copy(lat1);
+  uniforms.uLat2.value.copy(lat2);
+}
+
+// カメラ操作に応じて粒子ボリュームの中心とスケールを更新
+function updateParticleUniforms() {
+  if (!particleMaterial || !camera) {
+    return;
+  }
+
+  const uniforms = particleMaterial.uniforms;
+  const camPos = camera.position;
+  uniforms.uOrigin.value.copy(camPos);
+
+  const userData = particleMaterial.userData || {};
+  const baseSpread = userData.baseSpread;
+  const baseMaxDistance = userData.baseMaxDistance;
+  if (baseSpread && baseMaxDistance) {
+    const baseTargetDistance = userData.baseTargetDistance || 1;
+    const currentTargetDistance = controls
+      ? camera.position.distanceTo(controls.target)
+      : baseTargetDistance;
+    const scale = THREE.MathUtils.clamp(
+      currentTargetDistance / Math.max(baseTargetDistance, 1e-3),
+      0.6,
+      2.5
+    );
+    uniforms.uSpread.value.copy(baseSpread).multiplyScalar(scale);
+    uniforms.uMaxDistance.value = baseMaxDistance * scale;
+  }
+}
+
+function initBackgroundAudioPlayback() {
+  const audioEl = backgroundAudio.value;
+  if (!audioEl) {
+    return;
+  }
+
+  audioEl.volume = 0.1;
+  audioEl.loop = true;
+
+  const tryPlay = () => {
+    const playResult = audioEl.play();
+    if (playResult && typeof playResult.then === 'function') {
+      playResult.catch(() => {
+        const resume = () => {
+          document.removeEventListener('pointerdown', resume);
+          document.removeEventListener('keydown', resume);
+          audioEl.play().catch(() => {
+            /* ignored */
+          });
+        };
+        document.addEventListener('pointerdown', resume, { once: true });
+        document.addEventListener('keydown', resume, { once: true });
+      });
+    }
+  };
+
+  tryPlay();
+}
+
+function createAttributeSet(count, itemSize, ArrayType = Float32Array) {
   const length = count * itemSize;
   const attributes = [];
   for (let i = 0; i < TRIPLE_BUFFER_SIZE; i++) {
-    const attr = new THREE.InstancedBufferAttribute(new Float32Array(length), itemSize);
+    const attr = new THREE.InstancedBufferAttribute(new ArrayType(length), itemSize);
     attr.setUsage(STREAM_USAGE);
     attributes.push(attr);
   }
@@ -682,9 +1007,7 @@ function createBufferSet(count) {
     pos: createAttributeSet(count, 3),
     quat: createAttributeSet(count, 4),
     tailPhase: createAttributeSet(count, 1),
-    tailSpeed: createAttributeSet(count, 1),
-    tailTurn: createAttributeSet(count, 1),
-    tailDrive: createAttributeSet(count, 1), // 尾アニメの有効/無効制御（遠距離で0にして負荷削減）
+    tailParams: createAttributeSet(count, 3, getTailParamsArrayType()), // xyz = speed, turn, drive
   };
 }
 
@@ -709,13 +1032,7 @@ function resetBufferSetToHidden(bufferSet) {
   for (const attr of bufferSet.tailPhase) {
     attr.array.fill(0);
   }
-  for (const attr of bufferSet.tailSpeed) {
-    attr.array.fill(0);
-  }
-  for (const attr of bufferSet.tailTurn) {
-    attr.array.fill(0);
-  }
-  for (const attr of bufferSet.tailDrive) {
+  for (const attr of bufferSet.tailParams) {
     attr.array.fill(0);
   }
 }
@@ -725,13 +1042,11 @@ function applyBufferSet(mesh, bufferSet, index) {
   mesh.geometry.setAttribute('instancePos', bufferSet.pos[index]);
   mesh.geometry.setAttribute('instanceQuat', bufferSet.quat[index]);
   mesh.geometry.setAttribute('instanceTailPhase', bufferSet.tailPhase[index]);
-  mesh.geometry.setAttribute('instanceTailSpeed', bufferSet.tailSpeed[index]);
-  mesh.geometry.setAttribute('instanceTailTurn', bufferSet.tailTurn[index]);
-  mesh.geometry.setAttribute('instanceTailDrive', bufferSet.tailDrive[index]);
+  mesh.geometry.setAttribute('instanceTailParams', bufferSet.tailParams[index]);
 }
 
 function patchQuaternionInstancing(material) {
-  if (material.userData?.quaternionInstancingPatched) return;
+  if (material.userData?.instancingPatched) return;
 
   material.onBeforeCompile = (shader) => {
     Object.entries(tailAnimation.uniforms).forEach(([key, uniform]) => {
@@ -741,12 +1056,12 @@ function patchQuaternionInstancing(material) {
     shader.vertexShader = shader.vertexShader
       .replace(
         '#include <common>',
-        `#include <common>\nattribute vec3 instancePos;\nattribute vec4 instanceQuat;\nattribute float aBodyCoord;\nattribute float instanceTailPhase;\nattribute float instanceTailSpeed;\nattribute float instanceTailTurn;\nattribute float instanceTailDrive;\nuniform float uTailTime;\nuniform float uTailAmplitude;\nuniform float uTailFrequency;\nuniform float uTailPhaseStride;\nuniform float uTailTurnStrength;\nuniform float uTailSpeedScale;\nuniform vec3 uTailRight;\nuniform vec3 uTailForward;\nuniform vec3 uTailUp;\nuniform float uTailEnable;\nvec3 quatTransform(vec3 v, vec4 q) {\n  vec3 t = 2.0 * cross(q.xyz, v);\n  return v + q.w * t + cross(q.xyz, t);\n}`
+        `#include <common>\nattribute vec3 instancePos;\nattribute vec4 instanceQuat;\nattribute float aBodyCoord;\nattribute float instanceTailPhase;\nattribute vec3 instanceTailParams;\nuniform float uTailTime;\nuniform float uTailAmplitude;\nuniform float uTailFrequency;\nuniform float uTailPhaseStride;\nuniform float uTailTurnStrength;\nuniform float uTailSpeedScale;\nuniform vec3 uTailRight;\nuniform vec3 uTailForward;\nuniform vec3 uTailUp;\nuniform float uTailEnable;\nuniform sampler2D uSinLut;\nuniform float uLutSize;\nvec3 quatTransform(vec3 v, vec4 q) {\n  vec3 t = 2.0 * cross(q.xyz, v);\n  return v + q.w * t + cross(q.xyz, t);\n}\nvec2 sampleSinCos(float angle) {\n  float u = fract(angle * 0.15915494309189535);\n  u = u * (uLutSize - 1.0) + 0.5;\n  vec4 lutSample = texture(uSinLut, vec2(u / uLutSize, 0.5));\n  return lutSample.rg * 2.0 - 1.0;\n}`
       )
       .replace('#include <instancing_vertex>', `#ifdef USE_INSTANCING\n#endif`)
       .replace(
         '#include <begin_vertex>',
-        `#include <begin_vertex>\nif (uTailEnable > 0.5) {\n  float driveRaw = instanceTailDrive;\n  if (driveRaw > 0.01) {\n    float drive = clamp(driveRaw, 0.0, 1.0);\n    vec3 originalPos = transformed;\n    vec3 right = normalize(uTailRight);\n    vec3 forward = normalize(uTailForward);\n    vec3 up = normalize(uTailUp);\n\n    float localX = dot(originalPos, right);\n    float localY = dot(originalPos, forward);\n    float localZ = dot(originalPos, up);\n\n    float bodyCoord = clamp(aBodyCoord, 0.0, 1.0);\n    float tailWeight = smoothstep(0.0, 0.35, bodyCoord);\n    float speedFactor = clamp(instanceTailSpeed * uTailSpeedScale, 0.0, 2.0);\n\n    float phase = instanceTailPhase + uTailTime * uTailFrequency;\n    float wavePhase = phase + bodyCoord * uTailPhaseStride;\n    float wag = sin(wavePhase) * uTailAmplitude * drive;\n    float turnOffset = instanceTailTurn * uTailTurnStrength * drive;\n    float motion = wag * (0.4 + 0.6 * speedFactor) + turnOffset;\n\n    float tipDamping = 1.0 - smoothstep(0.7, 1.0, bodyCoord) * 0.3;\n    float bendStrength = mix(0.02, 1.0, tailWeight) * tipDamping;\n\n    float bendAngle = motion * bendStrength;\n    float s = sin(bendAngle);\n    float c = cos(bendAngle);\n    float rotX = localX * c - localY * s;\n    float rotY = localX * s + localY * c;\n\n    float sway = motion * 0.4 * tipDamping;\n    rotX += sway * (0.05 + 0.95 * bodyCoord);\n\n    vec3 rotated = right * rotX + forward * rotY + up * localZ;\n    transformed = rotated;\n  }\n}\ntransformed = quatTransform(transformed, instanceQuat) + instancePos;`
+        `#include <begin_vertex>\nvec3 tailParams = instanceTailParams;\nif (uTailEnable > 0.5) {\n  float driveRaw = tailParams.z;\n  if (driveRaw > 0.01) {\n    float drive = clamp(driveRaw, 0.0, 1.0);\n    vec3 originalPos = transformed;\n    vec3 right = normalize(uTailRight);\n    vec3 forward = normalize(uTailForward);\n    vec3 up = normalize(uTailUp);\n\n    float localX = dot(originalPos, right);\n    float localY = dot(originalPos, forward);\n    float localZ = dot(originalPos, up);\n\n    float bodyCoord = clamp(aBodyCoord, 0.0, 1.0);\n    float tailWeight = smoothstep(0.0, 0.35, bodyCoord);\n    float speedFactor = clamp(tailParams.x * uTailSpeedScale, 0.0, 2.0);\n\n    float phase = instanceTailPhase + uTailTime * uTailFrequency;\n    float wavePhase = phase + bodyCoord * uTailPhaseStride;\n    vec2 waveSC = sampleSinCos(wavePhase);\n    float wag = waveSC.x * uTailAmplitude * drive;\n    float turnOffset = tailParams.y * uTailTurnStrength * drive;\n    float motion = wag * (0.4 + 0.6 * speedFactor) + turnOffset;\n\n    float tipDamping = 1.0 - smoothstep(0.7, 1.0, bodyCoord) * 0.3;\n    float bendStrength = mix(0.02, 1.0, tailWeight) * tipDamping;\n\n    float bendAngle = motion * bendStrength;\n    vec2 bendSC = sampleSinCos(bendAngle);\n    float s = bendSC.x;\n    float c = bendSC.y;\n    float rotX = localX * c - localY * s;\n    float rotY = localX * s + localY * c;\n\n    float sway = motion * 0.4 * tipDamping;\n    rotX += sway * (0.05 + 0.95 * bodyCoord);\n\n    vec3 rotated = right * rotX + forward * rotY + up * localZ;\n    transformed = rotated;\n  }\n}\ntransformed = quatTransform(transformed, instanceQuat) + instancePos;`
       )
       .replace(
         '#include <beginnormal_vertex>',
@@ -754,12 +1069,12 @@ function patchQuaternionInstancing(material) {
       )
       .replace(
         '#include <project_vertex>',
-        `#include <project_vertex>\n#ifdef DEPTH_PACKING\nif (uTailEnable > 0.5) {\n  float driveRaw = instanceTailDrive;\n  if (driveRaw > 0.01) {\n    float drive = clamp(driveRaw, 0.0, 1.0);\n    vec3 viewPos = mvPosition.xyz;\n    mat3 normalMatrix3 = mat3(normalMatrix);\n    vec3 right = normalize(normalMatrix3 * uTailRight);\n    vec3 forward = normalize(normalMatrix3 * uTailForward);\n    vec3 up = normalize(normalMatrix3 * uTailUp);\n\n    float localX = dot(viewPos, right);\n    float localY = dot(viewPos, forward);\n    float localZ = dot(viewPos, up);\n\n    float bodyCoord = clamp(aBodyCoord, 0.0, 1.0);\n    float tailWeight = smoothstep(0.0, 0.35, bodyCoord);\n    float speedFactor = clamp(instanceTailSpeed * uTailSpeedScale, 0.0, 2.0);\n\n    float phase = instanceTailPhase + uTailTime * uTailFrequency;\n    float wavePhase = phase + bodyCoord * uTailPhaseStride;\n    float wag = sin(wavePhase) * uTailAmplitude * drive;\n    float turnOffset = instanceTailTurn * uTailTurnStrength * drive;\n    float motion = wag * (0.4 + 0.6 * speedFactor) + turnOffset;\n\n    float tipDamping = 1.0 - smoothstep(0.7, 1.0, bodyCoord) * 0.3;\n    float bendStrength = mix(0.02, 1.0, tailWeight) * tipDamping;\n\n    float bendAngle = motion * bendStrength;\n    float s = sin(bendAngle);\n    float c = cos(bendAngle);\n    float rotX = localX * c - localY * s;\n    float rotY = localX * s + localY * c;\n\n    float sway = motion * 0.4 * tipDamping;\n    rotX += sway * (0.05 + 0.95 * bodyCoord);\n\n    vec3 rotated = right * rotX + forward * rotY + up * localZ;\n    mvPosition.xyz = rotated;\n    gl_Position = projectionMatrix * mvPosition;\n  }\n}\n#endif`
+        `#include <project_vertex>\n#ifdef DEPTH_PACKING\nvec3 tailParams = instanceTailParams;\nif (uTailEnable > 0.5) {\n  float driveRaw = tailParams.z;\n  if (driveRaw > 0.01) {\n    float drive = clamp(driveRaw, 0.0, 1.0);\n    vec3 viewPos = mvPosition.xyz;\n    mat3 normalMatrix3 = mat3(normalMatrix);\n    vec3 right = normalize(normalMatrix3 * uTailRight);\n    vec3 forward = normalize(normalMatrix3 * uTailForward);\n    vec3 up = normalize(normalMatrix3 * uTailUp);\n\n    float localX = dot(viewPos, right);\n    float localY = dot(viewPos, forward);\n    float localZ = dot(viewPos, up);\n\n    float bodyCoord = clamp(aBodyCoord, 0.0, 1.0);\n    float tailWeight = smoothstep(0.0, 0.35, bodyCoord);\n    float speedFactor = clamp(tailParams.x * uTailSpeedScale, 0.0, 2.0);\n\n    float phase = instanceTailPhase + uTailTime * uTailFrequency;\n    float wavePhase = phase + bodyCoord * uTailPhaseStride;\n    vec2 waveSC = sampleSinCos(wavePhase);\n    float wag = waveSC.x * uTailAmplitude * drive;\n    float turnOffset = tailParams.y * uTailTurnStrength * drive;\n    float motion = wag * (0.4 + 0.6 * speedFactor) + turnOffset;\n\n    float tipDamping = 1.0 - smoothstep(0.7, 1.0, bodyCoord) * 0.3;\n    float bendStrength = mix(0.02, 1.0, tailWeight) * tipDamping;\n\n    float bendAngle = motion * bendStrength;\n    vec2 bendSC = sampleSinCos(bendAngle);\n    float s = bendSC.x;\n    float c = bendSC.y;\n    float rotX = localX * c - localY * s;\n    float rotY = localX * s + localY * c;\n\n    float sway = motion * 0.4 * tipDamping;\n    rotX += sway * (0.05 + 0.95 * bodyCoord);\n\n    vec3 rotated = right * rotX + forward * rotY + up * localZ;\n    mvPosition.xyz = rotated;\n    gl_Position = projectionMatrix * mvPosition;\n  }\n}\n#endif`
       );
 
     material.userData = {
       ...(material.userData || {}),
-      quaternionInstancingPatched: true,
+      instancingPatched: true,
     };
   };
 
@@ -1084,6 +1399,17 @@ function ensureTailRuntimeBuffers(count) {
   }
 }
 
+function ensureLodFlagBuffer(count) {
+  if (count <= 0) {
+    previousLodFlags = null;
+    return null;
+  }
+  if (!previousLodFlags || previousLodFlags.length !== count) {
+    previousLodFlags = new Uint8Array(count);
+  }
+  return previousLodFlags;
+}
+
 function ensureBodyCoordAttribute(geometry) {
   if (geometry.getAttribute('aBodyCoord')) return;
   const position = geometry.getAttribute('position');
@@ -1320,6 +1646,10 @@ function initInstancedBoids(count) {
   cachedSpeciesIdsCount = 0;
   cachedSpeciesIdsBuffer = null;
   ensureTailRuntimeBuffers(count);
+  const lodFlags = ensureLodFlagBuffer(count);
+  if (lodFlags) {
+    lodFlags.fill(0);
+  }
 
   const predators = getPredatorCount();
   if (ensurePredatorMeshes(predators)) {
@@ -1559,12 +1889,16 @@ function animate() {
 
   if (!paused.value) {
     shaderTime += deltaTime;
+    if (particleMaterial) {
+      particleMaterial.uniforms.uTime.value += deltaTime;
+    }
   }
   updateInstancingMaterialUniforms(shaderTime);
 
   const count = stepSimulationAndUpdateState(paused.value ? 0 : deltaTime);
   if (!instancedMeshHigh || !instancedMeshLow || !bufferSetHigh || !bufferSetLow) {
     controls.update();
+    updateParticleUniforms();
     (isMobileDevice() ? renderer : composer).render(scene, camera);
     stats?.end();
     stats?.update();
@@ -1583,24 +1917,20 @@ function animate() {
   const highQuatAttr = bufferSetHigh.quat[currentIndex];
   const lowPosAttr = bufferSetLow.pos[currentIndex];
   const lowQuatAttr = bufferSetLow.quat[currentIndex];
-  const highTailPhaseAttr = bufferSetHigh.tailPhase[currentIndex];
-  const highTailSpeedAttr = bufferSetHigh.tailSpeed[currentIndex];
-  const highTailTurnAttr = bufferSetHigh.tailTurn[currentIndex];
-  const highTailDriveAttr = bufferSetHigh.tailDrive[currentIndex];
-  const lowTailPhaseAttr = bufferSetLow.tailPhase[currentIndex];
-  const lowTailSpeedAttr = bufferSetLow.tailSpeed[currentIndex];
-  const lowTailTurnAttr = bufferSetLow.tailTurn[currentIndex];
-  const lowTailDriveAttr = bufferSetLow.tailDrive[currentIndex];
+  const highTailParamsAttr = bufferSetHigh.tailParams[currentIndex];
+  const lowTailParamsAttr = bufferSetLow.tailParams[currentIndex];
   const highPosArray = highPosAttr.array;
   const highQuatArray = highQuatAttr.array;
   const lowPosArray = lowPosAttr.array;
   const lowQuatArray = lowQuatAttr.array;
-  const highTailSpeedArray = highTailSpeedAttr.array;
-  const highTailTurnArray = highTailTurnAttr.array;
-  const highTailDriveArray = highTailDriveAttr.array;
-  const lowTailSpeedArray = lowTailSpeedAttr.array;
-  const lowTailTurnArray = lowTailTurnAttr.array;
-  const lowTailDriveArray = lowTailDriveAttr.array;
+  const highTailParamsArray = highTailParamsAttr.array;
+  const lowTailParamsArray = lowTailParamsAttr.array;
+  const lodFlags = ensureLodFlagBuffer(count);
+
+  let highTransformTouched = false;
+  let lowTransformTouched = false;
+  let highTailTouched = false;
+  let lowTailTouched = false;
 
   const camPos = camera.position;
   const camX = camPos.x;
@@ -1619,7 +1949,6 @@ function animate() {
   }
 
   const hiddenPos = HIDDEN_POSITION;
-  const [identityX, identityY, identityZ, identityW] = IDENTITY_QUATERNION;
 
   // 各Boidの位置と姿勢を更新
   for (let i = 0; i < count; ++i) {
@@ -1638,13 +1967,12 @@ function animate() {
     const isNear = distSq < LOD_NEAR_DISTANCE_SQ;
     const isMid = !isNear && distSq < LOD_MID_DISTANCE_SQ;
     const animateTail = isNear || isMid; // 遠距離では尾アニメを停止してGPU負荷削減
-
     const baseQuat = i * 4;
     const qx = orientations[baseQuat];
     const qy = orientations[baseQuat + 1];
     const qz = orientations[baseQuat + 2];
     const qw = orientations[baseQuat + 3];
-
+    const tailIndex = i * 3;
     // 捕食者は専用メッシュで描画し、インスタンシングからは除外
     const isPredator = i >= predatorStartIndex && predatorCount > 0;
     if (isPredator) {
@@ -1655,28 +1983,65 @@ function animate() {
         predatorMesh.position.set(px, py, pz);
         predatorMesh.quaternion.set(qx, qy, qz, qw);
       }
-
-      highPosArray[basePos] = hiddenPos;
-      highPosArray[basePos + 1] = hiddenPos;
-      highPosArray[basePos + 2] = hiddenPos;
-      highQuatArray[baseQuat] = identityX;
-      highQuatArray[baseQuat + 1] = identityY;
-      highQuatArray[baseQuat + 2] = identityZ;
-      highQuatArray[baseQuat + 3] = identityW;
-
-      lowPosArray[basePos] = hiddenPos;
-      lowPosArray[basePos + 1] = hiddenPos;
-      lowPosArray[basePos + 2] = hiddenPos;
-      lowQuatArray[baseQuat] = identityX;
-      lowQuatArray[baseQuat + 1] = identityY;
-      lowQuatArray[baseQuat + 2] = identityZ;
-      lowQuatArray[baseQuat + 3] = identityW;
-      highTailSpeedArray[i] = 0;
-      lowTailSpeedArray[i] = 0;
-      highTailTurnArray[i] = 0;
-      lowTailTurnArray[i] = 0;
-      highTailDriveArray[i] = 0;
-      lowTailDriveArray[i] = 0;
+      const highNeedsHide =
+        highPosArray[basePos] !== hiddenPos ||
+        highPosArray[basePos + 1] !== hiddenPos ||
+        highPosArray[basePos + 2] !== hiddenPos ||
+        highQuatArray[baseQuat] !== IDENTITY_QUATERNION[0] ||
+        highQuatArray[baseQuat + 1] !== IDENTITY_QUATERNION[1] ||
+        highQuatArray[baseQuat + 2] !== IDENTITY_QUATERNION[2] ||
+        highQuatArray[baseQuat + 3] !== IDENTITY_QUATERNION[3];
+      if (highNeedsHide) {
+        highPosArray[basePos] = hiddenPos;
+        highPosArray[basePos + 1] = hiddenPos;
+        highPosArray[basePos + 2] = hiddenPos;
+        highQuatArray[baseQuat] = IDENTITY_QUATERNION[0];
+        highQuatArray[baseQuat + 1] = IDENTITY_QUATERNION[1];
+        highQuatArray[baseQuat + 2] = IDENTITY_QUATERNION[2];
+        highQuatArray[baseQuat + 3] = IDENTITY_QUATERNION[3];
+        highTransformTouched = true;
+      }
+      const lowNeedsHide =
+        lowPosArray[basePos] !== hiddenPos ||
+        lowPosArray[basePos + 1] !== hiddenPos ||
+        lowPosArray[basePos + 2] !== hiddenPos ||
+        lowQuatArray[baseQuat] !== IDENTITY_QUATERNION[0] ||
+        lowQuatArray[baseQuat + 1] !== IDENTITY_QUATERNION[1] ||
+        lowQuatArray[baseQuat + 2] !== IDENTITY_QUATERNION[2] ||
+        lowQuatArray[baseQuat + 3] !== IDENTITY_QUATERNION[3];
+      if (lowNeedsHide) {
+        lowPosArray[basePos] = hiddenPos;
+        lowPosArray[basePos + 1] = hiddenPos;
+        lowPosArray[basePos + 2] = hiddenPos;
+        lowQuatArray[baseQuat] = IDENTITY_QUATERNION[0];
+        lowQuatArray[baseQuat + 1] = IDENTITY_QUATERNION[1];
+        lowQuatArray[baseQuat + 2] = IDENTITY_QUATERNION[2];
+        lowQuatArray[baseQuat + 3] = IDENTITY_QUATERNION[3];
+        lowTransformTouched = true;
+      }
+      const highTailNonZero =
+        highTailParamsArray[tailIndex] !== 0 ||
+        highTailParamsArray[tailIndex + 1] !== 0 ||
+        highTailParamsArray[tailIndex + 2] !== 0;
+      if (highTailNonZero) {
+        highTailParamsArray[tailIndex] = 0;
+        highTailParamsArray[tailIndex + 1] = 0;
+        highTailParamsArray[tailIndex + 2] = 0;
+        highTailTouched = true;
+      }
+      const lowTailNonZero =
+        lowTailParamsArray[tailIndex] !== 0 ||
+        lowTailParamsArray[tailIndex + 1] !== 0 ||
+        lowTailParamsArray[tailIndex + 2] !== 0;
+      if (lowTailNonZero) {
+        lowTailParamsArray[tailIndex] = 0;
+        lowTailParamsArray[tailIndex + 1] = 0;
+        lowTailParamsArray[tailIndex + 2] = 0;
+        lowTailTouched = true;
+      }
+      if (lodFlags) {
+        lodFlags[i] = 0;
+      }
       if (previousVelocities) {
         previousVelocities[basePos] = 0;
         previousVelocities[basePos + 1] = 0;
@@ -1709,14 +2074,36 @@ function animate() {
       highQuatArray[baseQuat + 1] = qy;
       highQuatArray[baseQuat + 2] = qz;
       highQuatArray[baseQuat + 3] = qw;
+      highTransformTouched = true;
 
-      lowPosArray[basePos] = hiddenPos;
-      lowPosArray[basePos + 1] = hiddenPos;
-      lowPosArray[basePos + 2] = hiddenPos;
-      lowQuatArray[baseQuat] = identityX;
-      lowQuatArray[baseQuat + 1] = identityY;
-      lowQuatArray[baseQuat + 2] = identityZ;
-      lowQuatArray[baseQuat + 3] = identityW;
+      const lowNeedsHide =
+        lowPosArray[basePos] !== hiddenPos ||
+        lowPosArray[basePos + 1] !== hiddenPos ||
+        lowPosArray[basePos + 2] !== hiddenPos ||
+        lowQuatArray[baseQuat] !== IDENTITY_QUATERNION[0] ||
+        lowQuatArray[baseQuat + 1] !== IDENTITY_QUATERNION[1] ||
+        lowQuatArray[baseQuat + 2] !== IDENTITY_QUATERNION[2] ||
+        lowQuatArray[baseQuat + 3] !== IDENTITY_QUATERNION[3];
+      if (lowNeedsHide) {
+        lowPosArray[basePos] = hiddenPos;
+        lowPosArray[basePos + 1] = hiddenPos;
+        lowPosArray[basePos + 2] = hiddenPos;
+        lowQuatArray[baseQuat] = IDENTITY_QUATERNION[0];
+        lowQuatArray[baseQuat + 1] = IDENTITY_QUATERNION[1];
+        lowQuatArray[baseQuat + 2] = IDENTITY_QUATERNION[2];
+        lowQuatArray[baseQuat + 3] = IDENTITY_QUATERNION[3];
+        lowTransformTouched = true;
+      }
+      const lowTailNonZero =
+        lowTailParamsArray[tailIndex] !== 0 ||
+        lowTailParamsArray[tailIndex + 1] !== 0 ||
+        lowTailParamsArray[tailIndex + 2] !== 0;
+      if (lowTailNonZero) {
+        lowTailParamsArray[tailIndex] = 0;
+        lowTailParamsArray[tailIndex + 1] = 0;
+        lowTailParamsArray[tailIndex + 2] = 0;
+        lowTailTouched = true;
+      }
     } else {
       lowPosArray[basePos] = px;
       lowPosArray[basePos + 1] = py;
@@ -1725,14 +2112,36 @@ function animate() {
       lowQuatArray[baseQuat + 1] = qy;
       lowQuatArray[baseQuat + 2] = qz;
       lowQuatArray[baseQuat + 3] = qw;
+      lowTransformTouched = true;
 
-      highPosArray[basePos] = hiddenPos;
-      highPosArray[basePos + 1] = hiddenPos;
-      highPosArray[basePos + 2] = hiddenPos;
-      highQuatArray[baseQuat] = identityX;
-      highQuatArray[baseQuat + 1] = identityY;
-      highQuatArray[baseQuat + 2] = identityZ;
-      highQuatArray[baseQuat + 3] = identityW;
+      const highNeedsHide =
+        highPosArray[basePos] !== hiddenPos ||
+        highPosArray[basePos + 1] !== hiddenPos ||
+        highPosArray[basePos + 2] !== hiddenPos ||
+        highQuatArray[baseQuat] !== IDENTITY_QUATERNION[0] ||
+        highQuatArray[baseQuat + 1] !== IDENTITY_QUATERNION[1] ||
+        highQuatArray[baseQuat + 2] !== IDENTITY_QUATERNION[2] ||
+        highQuatArray[baseQuat + 3] !== IDENTITY_QUATERNION[3];
+      if (highNeedsHide) {
+        highPosArray[basePos] = hiddenPos;
+        highPosArray[basePos + 1] = hiddenPos;
+        highPosArray[basePos + 2] = hiddenPos;
+        highQuatArray[baseQuat] = IDENTITY_QUATERNION[0];
+        highQuatArray[baseQuat + 1] = IDENTITY_QUATERNION[1];
+        highQuatArray[baseQuat + 2] = IDENTITY_QUATERNION[2];
+        highQuatArray[baseQuat + 3] = IDENTITY_QUATERNION[3];
+        highTransformTouched = true;
+      }
+      const highTailNonZero =
+        highTailParamsArray[tailIndex] !== 0 ||
+        highTailParamsArray[tailIndex + 1] !== 0 ||
+        highTailParamsArray[tailIndex + 2] !== 0;
+      if (highTailNonZero) {
+        highTailParamsArray[tailIndex] = 0;
+        highTailParamsArray[tailIndex + 1] = 0;
+        highTailParamsArray[tailIndex + 2] = 0;
+        highTailTouched = true;
+      }
     }
 
     // 尾アニメのパラメータ設定（遠距離ではdrive=0でシェーダ側で計算をスキップ）
@@ -1741,20 +2150,40 @@ function animate() {
     const driveValue = animateTail ? 1 : 0; // シェーダ側で尾アニメON/OFFを制御
     if (isNear) {
       // 近距離: ハイポリモデルにアニメ適用
-      highTailSpeedArray[i] = tailSpeedValue;
-      highTailTurnArray[i] = tailTurnValue;
-      lowTailSpeedArray[i] = 0;
-      lowTailTurnArray[i] = 0;
-      highTailDriveArray[i] = driveValue;
-      lowTailDriveArray[i] = 0;
+      highTailParamsArray[tailIndex] = tailSpeedValue;
+      highTailParamsArray[tailIndex + 1] = tailTurnValue;
+      highTailParamsArray[tailIndex + 2] = driveValue;
+      highTailTouched = true;
+      const lowTailNonZero =
+        lowTailParamsArray[tailIndex] !== 0 ||
+        lowTailParamsArray[tailIndex + 1] !== 0 ||
+        lowTailParamsArray[tailIndex + 2] !== 0;
+      if (lowTailNonZero) {
+        lowTailParamsArray[tailIndex] = 0;
+        lowTailParamsArray[tailIndex + 1] = 0;
+        lowTailParamsArray[tailIndex + 2] = 0;
+        lowTailTouched = true;
+      }
     } else {
       // 中距離/遠距離: LODモデルに切替、遠距離ではdriveValue=0で静止
-      highTailSpeedArray[i] = 0;
-      highTailTurnArray[i] = 0;
-      lowTailSpeedArray[i] = tailSpeedValue;
-      lowTailTurnArray[i] = tailTurnValue;
-      highTailDriveArray[i] = 0;
-      lowTailDriveArray[i] = driveValue;
+      lowTailParamsArray[tailIndex] = tailSpeedValue;
+      lowTailParamsArray[tailIndex + 1] = tailTurnValue;
+      lowTailParamsArray[tailIndex + 2] = driveValue;
+      lowTailTouched = true;
+      const highTailNonZero =
+        highTailParamsArray[tailIndex] !== 0 ||
+        highTailParamsArray[tailIndex + 1] !== 0 ||
+        highTailParamsArray[tailIndex + 2] !== 0;
+      if (highTailNonZero) {
+        highTailParamsArray[tailIndex] = 0;
+        highTailParamsArray[tailIndex + 1] = 0;
+        highTailParamsArray[tailIndex + 2] = 0;
+        highTailTouched = true;
+      }
+    }
+
+    if (lodFlags) {
+      lodFlags[i] = isNear ? 1 : 2;
     }
 
     if (previousVelocities) {
@@ -1771,16 +2200,12 @@ function animate() {
   applyBufferSet(instancedMeshHigh, bufferSetHigh, currentIndex);
   applyBufferSet(instancedMeshLow, bufferSetLow, currentIndex);
   // トリプルバッファの更新フラグを立てる
-  highPosAttr.needsUpdate = true;
-  highQuatAttr.needsUpdate = true;
-  lowPosAttr.needsUpdate = true;
-  lowQuatAttr.needsUpdate = true;
-  highTailSpeedAttr.needsUpdate = true;
-  highTailTurnAttr.needsUpdate = true;
-  highTailDriveAttr.needsUpdate = true;
-  lowTailSpeedAttr.needsUpdate = true;
-  lowTailTurnAttr.needsUpdate = true;
-  lowTailDriveAttr.needsUpdate = true;
+  highPosAttr.needsUpdate = highTransformTouched;
+  highQuatAttr.needsUpdate = highTransformTouched;
+  lowPosAttr.needsUpdate = lowTransformTouched;
+  lowQuatAttr.needsUpdate = lowTransformTouched;
+  highTailParamsAttr.needsUpdate = highTailTouched;
+  lowTailParamsAttr.needsUpdate = lowTailTouched;
 
   bufferCursor = nextIndex;
 
@@ -1824,6 +2249,7 @@ function animate() {
   lastShowUnitColors = showUnitColors.value;// マトリクスの更新
 
   controls.update();
+  updateParticleUniforms();
 
   if (heightFogPass) {
     heightFogPass.uniforms.cameraNear.value = camera.near;
@@ -1854,8 +2280,9 @@ function drawTreeStructure(treeData) {
       node.center[1],
       node.center[2]
     );
-
     if (parentPosition) {
+      controls.update();
+      updateParticleUniforms();
       const geometry = new THREE.BufferGeometry().setFromPoints([
         parentPosition,
         position,
@@ -1933,6 +2360,7 @@ onMounted(() => {
       });
 
     startSimulation();
+    initBackgroundAudioPlayback();
   });
 
   window.addEventListener('keydown', handleKeydown);
