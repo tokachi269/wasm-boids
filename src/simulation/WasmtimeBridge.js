@@ -83,6 +83,10 @@ export class WasmtimeBridge {
         horizontalTorque: toNumber(raw.horizontalTorque, 0),
         velocityEpsilon: toNumber(raw.velocityEpsilon, 0.0001),
         torqueStrength: toNumber(raw.torqueStrength, 0),
+        // 形状パラメータは省略された場合もデフォルト値で補完しておく。
+        bodyHeadLength: toNumber(raw.bodyHeadLength, -0.15),
+        bodyTailLength: toNumber(raw.bodyTailLength, 0.33),
+        bodyRadius: toNumber(raw.bodyRadius, 0.035),
         isPredator: Boolean(raw.isPredator),
       });
     });
@@ -236,7 +240,7 @@ export class WasmtimeBridge {
       return { count: 0 };
     }
 
-      const { positions, velocities, orientations, speciesIds } = this.getBuffers(currentCount);
+    const { positions, velocities, orientations, speciesIds } = this.getBuffers(currentCount);
 
     return {
       count: currentCount,
@@ -259,7 +263,7 @@ export class WasmtimeBridge {
       return;
     }
 
-      const { positions, velocities, orientations } = this.getBuffers(currentCount);
+    const { positions, velocities, orientations } = this.getBuffers(currentCount);
     if (!positions || !velocities || !orientations) {
       return;
     }

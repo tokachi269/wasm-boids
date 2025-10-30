@@ -51,6 +51,9 @@ value_object<SpeciesParams>("SpeciesParams")
     .field("tau", &SpeciesParams::tau)
     .field("horizontalTorque", &SpeciesParams::horizontalTorque)
     .field("torqueStrength", &SpeciesParams::torqueStrength)
+    .field("bodyHeadLength", &SpeciesParams::bodyHeadLength)
+    .field("bodyTailLength", &SpeciesParams::bodyTailLength)
+    .field("bodyRadius", &SpeciesParams::bodyRadius)
     .field("isPredator", &SpeciesParams::isPredator);
 
     class_<Boid>("Boid")

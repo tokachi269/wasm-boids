@@ -2,10 +2,12 @@
 #include "boids_tree.h"
 #include "pool_accessor.h"
 #include <algorithm>
+#include <cmath>
 #include <future>
 #include <glm/glm.hpp>
 #include <glm/gtc/random.hpp>
 #include <glm/gtx/norm.hpp>
+#include <glm/gtx/quaternion.hpp>
 #include <glm/gtx/rotate_vector.hpp>
 #include <glm/gtx/string_cast.hpp>
 #include <stack>
@@ -35,6 +37,89 @@ inline glm::vec3 approxRotate(const glm::vec3 &v, const glm::vec3 &axis,
   // 軸を正規化して回転を計算
   glm::vec3 normalizedAxis = axis * (1.0f / glm::sqrt(axisLength2));
   return v + angle * glm::cross(normalizedAxis, v);
+}
+
+// 魚体の衝突判定をカプセルで近似する際の端点情報。
+struct CapsuleSegment {
+  glm::vec3 a;  // 尾側端点
+  glm::vec3 b;  // 頭側端点
+  float radius; // 体の半径
+};
+
+// 姿勢クォータニオンから前方ベクトルを取り出す。数値が崩れた場合は Z+
+// にフォールバック。
+inline glm::vec3 forwardFromOrientation(const glm::quat &q) {
+  glm::vec3 forward = glm::rotate(q, glm::vec3(0.0f, 0.0f, 1.0f));
+  float len2 = glm::length2(forward);
+  if (len2 < 1e-10f) {
+    return glm::vec3(0.0f, 0.0f, 1.0f);
+  }
+  return forward * (1.0f / glm::sqrt(len2));
+}
+
+// 位置・姿勢・魚種パラメータからカプセルを生成する。
+inline CapsuleSegment makeCapsule(const glm::vec3 &pos, const glm::quat &ori,
+                                  const SpeciesParams &params) {
+  glm::vec3 forward = forwardFromOrientation(ori);
+  float headOffset = params.bodyHeadLength;
+  float tailOffset = params.bodyTailLength;
+  // headOffset
+  // は前方正負どちらの指定も許容し、魚種ごとの原点位置ズレを吸収する。
+  glm::vec3 head = pos + forward * headOffset;
+  glm::vec3 tail = pos - forward * tailOffset;
+  float radius = std::max(params.bodyRadius, 0.0f);
+  return {tail, head, radius};
+}
+
+// 2線分間の最接近点を求め、平方距離を返すワーク関数。
+inline float closestPointsOnSegments(const glm::vec3 &p1, const glm::vec3 &q1,
+                                     const glm::vec3 &p2, const glm::vec3 &q2,
+                                     glm::vec3 &c1, glm::vec3 &c2) {
+  constexpr float EPS = 1e-6f;
+  glm::vec3 d1 = q1 - p1;
+  glm::vec3 d2 = q2 - p2;
+  glm::vec3 r = p1 - p2;
+  float a = glm::dot(d1, d1);
+  float e = glm::dot(d2, d2);
+  float f = glm::dot(d2, r);
+  float s, t;
+
+  if (a <= EPS && e <= EPS) {
+    c1 = p1;
+    c2 = p2;
+    return glm::length2(c1 - c2);
+  }
+
+  if (a <= EPS) {
+    s = 0.0f;
+    t = glm::clamp(f / e, 0.0f, 1.0f);
+  } else {
+    float c = glm::dot(d1, r);
+    if (e <= EPS) {
+      t = 0.0f;
+      s = glm::clamp(-c / a, 0.0f, 1.0f);
+    } else {
+      float b = glm::dot(d1, d2);
+      float denom = a * e - b * b;
+      if (denom > EPS) {
+        s = glm::clamp((b * f - c * e) / denom, 0.0f, 1.0f);
+      } else {
+        s = 0.0f;
+      }
+      t = (b * s + f) / e;
+      if (t < 0.0f) {
+        t = 0.0f;
+        s = glm::clamp(-c / a, 0.0f, 1.0f);
+      } else if (t > 1.0f) {
+        t = 1.0f;
+        s = glm::clamp((b - c) / a, 0.0f, 1.0f);
+      }
+    }
+  }
+
+  c1 = p1 + d1 * s;
+  c2 = p2 + d2 * t;
+  return glm::length2(c1 - c2);
 }
 
 static void updateLeafKinematics(BoidUnit *unit, float dt) {
@@ -72,10 +157,9 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
 
       float escapeWeight = 0.8f; // 基本80%で逃走を優先
       if (currentStress > 0.7f || predatorInfluenceMagnitude > 2.0f) {
-        escapeWeight = 0.95f; // 高ストレス時は95%逃走優先
-      } else if (currentStress > 0.4f ||
-                 predatorInfluenceMagnitude > 1.0f) {
-        escapeWeight = 0.9f; // 中ストレス時は90%逃走優先
+        escapeWeight = 0.7f; // 高ストレス時は70%逃走優先
+      } else if (currentStress > 0.4f || predatorInfluenceMagnitude > 1.0f) {
+        escapeWeight = 0.5f; // 中ストレス時は50%逃走優先
       }
 
       glm::vec3 escapeForce = unit->buf->predatorInfluences[gIdx];
@@ -83,8 +167,8 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
         escapeForce = glm::normalize(escapeForce) * 10.0f; // 強い逃走力
       }
 
-      acceleration = acceleration * (1.0f - escapeWeight) +
-                     escapeForce * escapeWeight;
+      acceleration =
+          acceleration * (1.0f - escapeWeight) + escapeForce * escapeWeight;
     }
     float currentStress = unit->buf->stresses[gIdx];
     float stressFactor = 1.0f;
@@ -163,8 +247,8 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
       float axisLength2 = glm::length2(axis);
       if (flatAngle > 1e-4f && axisLength2 > 1e-8f) {
         axis /= glm::sqrt(axisLength2);
-        float rot = glm::min(flatAngle,
-                             globalSpeciesParams[sid].horizontalTorque * dt);
+        float rot =
+            glm::min(flatAngle, globalSpeciesParams[sid].horizontalTorque * dt);
         newDir = approxRotate(newDir, axis, rot);
       }
     }
@@ -179,7 +263,7 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
     unit->buf->velocitiesWrite[gIdx] = newVelocity;
     unit->buf->positionsWrite[gIdx] = position + newVelocity * dt;
     unit->buf->accelerations[gIdx] = glm::vec3(0.0f);
-    unit->buf->predatorInfluences[gIdx] *= 0.5f; // 50%保持で逃走を継続
+    unit->buf->predatorInfluences[gIdx] *= 0.5f; // 30%保持で逃走を継続
     unit->buf->orientationsWrite[gIdx] = BoidUnit::dirToQuatRollZero(newDir);
     if (unit->buf->stresses[gIdx] > 0.0f) {
       float decayRate = 1.0f;
@@ -403,8 +487,7 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
         buf->accelerations[idxA] +=
             (sumPos / float(cnt) - buf->positions[idxA]) *
             globalSpeciesParams[sidA].cohesion * cohesionMultiplier; // 凝集強化
-        buf->accelerations[idxA] +=
-            sep * (globalSpeciesParams[sidA].separation * 0.5f);
+        buf->accelerations[idxA] += sep * globalSpeciesParams[sidA].separation;
 
         // 再結集中の速度向上を後で適用するため、ストレス情報を保持
         buf->stresses[idxA] =
@@ -459,12 +542,11 @@ void BoidUnit::updateRecursive(float dt) {
   stack.push(this);
   static std::vector<std::future<void>> asyncTasks;
   asyncTasks.clear();
-  asyncTasks.reserve(64);       // 任意。再確保を抑える
+  asyncTasks.reserve(64); // 任意。再確保を抑える
   // スレッドプールで並列タスクをスケジュール（常時有効）
   auto &pool = getThreadPool(); // シングルトン取得
   auto scheduleTask = [&](auto &&task) {
-    asyncTasks.emplace_back(
-        pool.enqueue(std::forward<decltype(task)>(task)));
+    asyncTasks.emplace_back(pool.enqueue(std::forward<decltype(task)>(task)));
   };
   auto waitScheduledTasks = [&]() {
     for (auto &f : asyncTasks)
@@ -605,6 +687,14 @@ void BoidUnit::computeBoidInteraction(float dt) {
     gIdx = indices[index];
     pos = buf->positions[gIdx];
     vel = buf->velocities[gIdx];
+    const SpeciesParams &selfParams = globalSpeciesParams[sid];
+    glm::quat selfOrientation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+    if (static_cast<size_t>(gIdx) < buf->orientations.size()) {
+      selfOrientation = buf->orientations[gIdx];
+    }
+    // 自身の魚体をカプセルで近似し、後続の近接チェックに再利用する。
+    const CapsuleSegment selfCapsule =
+        makeCapsule(pos, selfOrientation, selfParams);
     const float viewRangeSq = globalSpeciesParams[sid].cohesionRange *
                               globalSpeciesParams[sid].cohesionRange;
     // console.call<void>("log", globalSpeciesParams[sid].species +
@@ -632,9 +722,9 @@ void BoidUnit::computeBoidInteraction(float dt) {
       //                ", time left: " + std::to_string(tgtTime) +
       //                ", dt: " + std::to_string(dt));      //
       //                追跡ターゲットが切れたら新規取得
-      bool targetInvalid = (tgtIdx < 0) ||
-                           (tgtTime <= 0.0f) ||
-                           globalSpeciesParams[buf->speciesIds[tgtIdx]].isPredator;
+      bool targetInvalid =
+          (tgtIdx < 0) || (tgtTime <= 0.0f) ||
+          globalSpeciesParams[buf->speciesIds[tgtIdx]].isPredator;
       if (targetInvalid) {
         tgtIdx = -1;
 
@@ -861,6 +951,14 @@ void BoidUnit::computeBoidInteraction(float dt) {
     }
 
     if (neighborCount > 0) {
+      // 近傍のストレスを集約し、逃走の波を伝搬させる。
+      float selfStress = buf->stresses[gIdx];
+      float stressGainSum = 0.0f;
+      float stressWeightSum = 0.0f;
+      const float propagationRadius =
+          glm::max(globalSpeciesParams[sid].cohesionRange, 1.0f);
+      const float propagationBlend = 0.9f; // dt を掛けて応答速度を調整
+
       glm::vec3 sumSep = glm::vec3(0.0f);
       glm::vec3 sumAlign = glm::vec3(0.0f);
       glm::vec3 sumCoh = glm::vec3(0.0f);
@@ -878,24 +976,128 @@ void BoidUnit::computeBoidInteraction(float dt) {
         int gNeighbor = indices[i];
         glm::vec3 diff = buf->positions[gNeighbor] - pos;
         float distSq = glm::dot(diff, diff);
+        int neighborSid = buf->speciesIds[gNeighbor];
+        const SpeciesParams &neighborParams = globalSpeciesParams[neighborSid];
+
+        // Blender 設定の符号そのまま受け取りつつ、実際の長さは絶対値で扱う。
+        float neighborHead = std::abs(neighborParams.bodyHeadLength);
+        float neighborTail = std::abs(neighborParams.bodyTailLength);
+        float selfHead = std::abs(selfParams.bodyHeadLength);
+        float selfTail = std::abs(selfParams.bodyTailLength);
+        float neighborRadius = std::max(neighborParams.bodyRadius, 0.0f);
+        float selfRadius = std::max(selfParams.bodyRadius, 0.0f);
+        float neighborSpan = neighborHead + neighborTail;
+        float selfSpan = selfHead + selfTail;
+        float closeCheckRange =
+            0.5f * (selfSpan + neighborSpan) + (selfRadius + neighborRadius);
+        closeCheckRange =
+            glm::max(closeCheckRange, selfRadius + neighborRadius);
+        float closeCheckRangeSq = closeCheckRange * closeCheckRange;
+
+        // カプセル同士が重なった場合は強い反発力を両個体に与える。
+        if (distSq <= closeCheckRangeSq + 1e-6f) {
+          glm::quat neighborOrientation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+          if (static_cast<size_t>(gNeighbor) < buf->orientations.size()) {
+            neighborOrientation = buf->orientations[gNeighbor];
+          }
+          const CapsuleSegment neighborCapsule = makeCapsule(
+              buf->positions[gNeighbor], neighborOrientation, neighborParams);
+          glm::vec3 closestSelf;
+          glm::vec3 closestNeighbor;
+          float capsuleDistSq = closestPointsOnSegments(
+              selfCapsule.a, selfCapsule.b, neighborCapsule.a,
+              neighborCapsule.b, closestSelf, closestNeighbor);
+          float clearance = selfCapsule.radius + neighborCapsule.radius;
+          float clearanceSq = clearance * clearance;
+          if (capsuleDistSq < clearanceSq) {
+            glm::vec3 normal = closestSelf - closestNeighbor;
+            float normalLenSq = glm::length2(normal);
+            if (normalLenSq < 1e-8f) {
+              normal = diff;
+              normalLenSq = glm::length2(normal);
+              if (normalLenSq < 1e-8f) {
+                normal = forwardFromOrientation(selfOrientation);
+                normalLenSq = glm::length2(normal);
+              }
+            }
+            if (normalLenSq > 1e-8f) {
+              float normalLen = glm::sqrt(normalLenSq);
+              normal /= normalLen;
+              float dist = glm::sqrt(glm::max(capsuleDistSq, 1e-12f));
+              float penetration = glm::max(clearance - dist, 0.0f);
+              float penetrationRatio = penetration / glm::max(clearance, 1e-5f);
+              // めり込み率を二乗した応答係数で狭いほど強く押し返す（10.0fは調整用係数）。
+              float response = penetrationRatio * penetrationRatio * 10.0f;
+              float selfImpulse = response *
+                                  glm::max(selfParams.separation, 0.02f) *
+                                  (1.0f + selfParams.maxSpeed);
+              float neighborImpulse =
+                  response * glm::max(neighborParams.separation, 0.02f) *
+                  (1.0f + neighborParams.maxSpeed);
+
+              // 自身を法線方向へ押し出し、相手には反対向きに同じだけ押し返す。
+              buf->accelerations[gIdx] += normal * selfImpulse;
+              if (static_cast<size_t>(gNeighbor) < buf->accelerations.size()) {
+                buf->accelerations[gNeighbor] -= normal * neighborImpulse;
+              }
+            }
+          }
+        }
+
         if (distSq <= 1e-4f)
           continue;
 
         float dist = glm::sqrt(distSq);
-        float wSep = 1.0f - (dist / globalSpeciesParams[sid].separationRange);
+        if (dist < propagationRadius) {
+          float neighborStress = buf->stresses[gNeighbor];
+          if (neighborStress > selfStress) {
+            float stressStrength =
+                glm::smoothstep(0.25f, 0.75f, neighborStress);
+            float distanceFactor =
+                glm::clamp(1.0f - dist / propagationRadius, 0.0f, 1.0f);
+            if (distanceFactor > 0.0f) {
+              float weight = stressStrength * distanceFactor;
+              stressGainSum += neighborStress * weight;
+              stressWeightSum += weight;
+            }
+          }
+        }
+        float separationRange = globalSpeciesParams[sid].separationRange;
+        if (separationRange <= 1e-4f) {
+          // separationRange が0近辺の場合は体長・体幅から最低限の距離を構成。
+          float bodyDiameter = std::max(selfRadius * 2.0f, 0.0f);
+          float bodyLength = selfHead + selfTail;
+          separationRange = glm::max(bodyDiameter, bodyLength);
+        }
+        float wSep = 0.0f;
+        if (separationRange > 1e-4f) {
+          wSep = 1.0f - (dist / separationRange);
+        }
         wSep = glm::clamp(wSep, 0.0f, 1.0f);
         sumSep += (diff * wSep) * (-1.0f);
 
         float wCoh = glm::clamp(dist / globalSpeciesParams[sid].cohesionRange,
                                 0.0f, 1.0f);
         // stress に応じて凝集強度を増加
-        float stressFactor = 1.0f + buf->stresses[gIdx] * 0.2f;
+        float stressFactor = 1.0f + selfStress * 0.2f;
         wCoh *= stressFactor;
 
         sumCoh += buf->positions[gNeighbor] * wCoh;
 
         sumAlign += buf->velocities[gNeighbor];
-      } // 分離の最終ベクトル
+      }
+      if (stressWeightSum > 0.0f) {
+        float propagatedStress = stressGainSum / stressWeightSum;
+        float delta = propagatedStress - selfStress;
+        if (delta > 0.0f) {
+          float blend = glm::clamp(propagationBlend * dt, 0.0f, 0.6f);
+          float updatedStress =
+              glm::clamp(selfStress + delta * blend, 0.0f, 1.0f);
+          buf->stresses[gIdx] = updatedStress;
+          selfStress = updatedStress;
+        }
+      }
+      // 分離の最終ベクトル
       glm::vec3 totalSeparation = glm::vec3(0.0f);
       float sepLen2 = glm::length2(sumSep);
       if (sepLen2 > EPS) {

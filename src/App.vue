@@ -79,11 +79,11 @@ const mobileBoidCount = isMobileDevice() ? 6000 : 10000;
 const DEFAULT_SETTINGS = [{
   species: 'Boids',         // 種族名
   count: mobileBoidCount,   // 群れの数（スマホなら6000、PCなら10000）
-  cohesion: 32,             // 凝集
+  cohesion: 38,             // 凝集
   cohesionRange: 30,        // 凝集範囲
   separation: 8,            // 分離
   separationRange: 0.6,     // 分離範囲
-  alignment: 17,            // 整列
+  alignment: 19,            // 整列
   alignmentRange: 6,        // 整列範囲
   maxSpeed: 0.26,           // 最大速度
   maxTurnAngle: 0.25,       // 最大旋回角
@@ -91,7 +91,7 @@ const DEFAULT_SETTINGS = [{
   horizontalTorque: 0.019,  // 水平化トルク
   torqueStrength: 10,       // 回転トルク強度
   lambda: 0.62,             // 速度調整係数
-  tau: 1.5                  // 記憶時間スケール
+  tau: 1.0                  // 記憶時間スケール
 }, {
   species: 'Predator',
   count: 1,

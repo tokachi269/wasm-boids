@@ -21,5 +21,8 @@ struct SpeciesParams {
   float velocityEpsilon = 0.0001f;
   float torqueStrength = 0.1f;
   float fieldOfViewDeg = 180.0f;
+  float bodyHeadLength = -0.15f; // 先端までの距離（正負は魚のローカル前方基準）
+  float bodyTailLength = 0.33f; // 後端までの距離
+  float bodyRadius = 0.035f;    // 直径0.07mの半径
   bool isPredator = false;
 };

@@ -11,5 +11,8 @@ inline SpeciesParams scaledParams(const SpeciesParams &src, float spatialScale)
     dst.maxSpeed        *= spatialScale;
     if(dst.minSpeed > 0.0f)
         dst.minSpeed    *= dst.maxSpeed * 0.4f;
+    dst.bodyHeadLength *= spatialScale;
+    dst.bodyTailLength *= spatialScale;
+    dst.bodyRadius     *= spatialScale;
     return dst;
 }
