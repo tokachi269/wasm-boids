@@ -19,6 +19,7 @@ const DEFAULT_SPECIES_FALLBACK = {
   lambda: 0.5,
   tau: 1.5,
   velocityEpsilon: 0.0001,
+  predatorAlertRadius: 1,
   isPredator: false,
   speciesId: 0,
 };
@@ -27,13 +28,17 @@ const DEFAULT_SPECIES_FALLBACK = {
  * Flock 設定のロード/保存/編集を司る小さなストアヘルパー。
  * localStorage に保存された配列を復元し、Vue からはこのストア経由で操作します。
  */
-export function createFlockSettingsStore(defaultSettings = []) {
+export function createFlockSettingsStore(defaultSettings = [], defaultSystem = {}) {
   const defaultTemplates = sanitizeSpeciesList(defaultSettings, defaultSettings);
+  const systemDefaults = { ...defaultSystem };
   const settings = reactive([]);
+  const systemSettings = reactive({});
 
   replaceSettings(defaultTemplates);
+  assignSystemSettings(systemDefaults);
   if (!loadFromStorage()) {
     replaceSettings(defaultTemplates);
+    assignSystemSettings(systemDefaults);
   }
 
   const totalBoids = computed(() => getTotalBoidCount(settings));
@@ -53,6 +58,15 @@ export function createFlockSettingsStore(defaultSettings = []) {
         replaceSettings(parsed);
         return true;
       }
+      if (parsed && typeof parsed === 'object') {
+        if (Array.isArray(parsed.species) && parsed.species.length > 0) {
+          replaceSettings(parsed.species);
+        }
+        if (parsed.system && typeof parsed.system === 'object') {
+          assignSystemSettings(parsed.system);
+        }
+        return true;
+      }
     } catch (error) {
       console.warn('Failed to load settings from localStorage:', error);
     }
@@ -65,7 +79,10 @@ export function createFlockSettingsStore(defaultSettings = []) {
     }
 
     try {
-      const snapshot = settings.map((entry) => ({ ...toRaw(entry) }));
+      const snapshot = {
+        species: settings.map((entry) => ({ ...toRaw(entry) })),
+        system: { ...toRaw(systemSettings) },
+      };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
       return true;
     } catch (error) {
@@ -80,8 +97,22 @@ export function createFlockSettingsStore(defaultSettings = []) {
     return sanitized;
   }
 
+  function assignSystemSettings(patch = {}) {
+    const merged = { ...systemDefaults, ...(patch || {}) };
+    Object.keys(systemSettings).forEach((key) => {
+      if (!(key in merged)) {
+        delete systemSettings[key];
+      }
+    });
+    Object.entries(merged).forEach(([key, value]) => {
+      systemSettings[key] = value;
+    });
+    return systemSettings;
+  }
+
   function resetToDefaults() {
     replaceSettings(defaultTemplates);
+    assignSystemSettings(systemDefaults);
     saveToStorage();
   }
 
@@ -113,10 +144,12 @@ export function createFlockSettingsStore(defaultSettings = []) {
 
   return {
     settings,
+    systemSettings,
     totalBoids,
     loadFromStorage,
     saveToStorage,
     replaceSettings,
+    assignSystemSettings,
     resetToDefaults,
     addSpecies,
     removeSpecies,
@@ -173,6 +206,7 @@ function sanitizeSpeciesEntry(entry = {}, fallback = DEFAULT_SPECIES_FALLBACK) {
   result.lambda = toFinite(merged.lambda, base.lambda ?? 0);
   result.tau = toFinite(merged.tau, base.tau ?? 0);
   result.velocityEpsilon = Math.max(0, toFinite(merged.velocityEpsilon, base.velocityEpsilon ?? 0.0001));
+  result.predatorAlertRadius = Math.max(0, toFinite(merged.predatorAlertRadius, base.predatorAlertRadius ?? 1));
 
   const speciesName = typeof merged.species === 'string' ? merged.species.trim() : '';
   result.species = speciesName || base.species || DEFAULT_SPECIES_FALLBACK.species;

@@ -41,6 +41,40 @@ export class WasmtimeBridge {
     this.currentFirstBoidXHandle = this.createWrappedFunction('currentFirstBoidX', 'number', []);
     this.speciesIdsPtrHandle = this.createWrappedFunction('speciesIdsPtr', 'number', []);
     this.syncReadToWriteBuffersHandle = this.createWrappedFunction('syncReadToWriteBuffers', 'void', []);
+    this.getSimulationTuningParamsHandle = this.createWrappedFunction('getSimulationTuningParams', 'object', []);
+    this.setSimulationTuningParamsHandle = this.createWrappedFunction('setSimulationTuningParams', 'void', ['object']);
+  }
+
+  getSimulationTuningParams() {
+    if (!this.wasm) {
+      return null;
+    }
+    const handle = this.ensureHandle(this.getSimulationTuningParamsHandle, 'getSimulationTuningParams');
+    return handle ? handle() : null;
+  }
+
+  setSimulationTuningParams(params) {
+    if (!this.wasm) {
+      return;
+    }
+    const handle = this.ensureHandle(this.setSimulationTuningParamsHandle, 'setSimulationTuningParams');
+    if (!handle || !params) {
+      return;
+    }
+    const toNumber = (value, fallback) => {
+      const num = Number(value);
+      return Number.isFinite(num) ? num : fallback;
+    };
+    handle({
+      threatDecay: toNumber(params.threatDecay, 0.5),
+      threatGain: toNumber(params.threatGain, 2.0),
+      maxEscapeWeight: toNumber(params.maxEscapeWeight, 1.0),
+      baseEscapeStrength: toNumber(params.baseEscapeStrength, 3.0),
+      escapeStrengthPerThreat: toNumber(params.escapeStrengthPerThreat, 10.0),
+      cohesionBoost: toNumber(params.cohesionBoost, 2.0),
+      separationMinFactor: toNumber(params.separationMinFactor, 1.0),
+      alignmentBoost: toNumber(params.alignmentBoost, 1.2),
+    });
   }
 
   /**
@@ -87,6 +121,7 @@ export class WasmtimeBridge {
         bodyHeadLength: toNumber(raw.bodyHeadLength, -0.15),
         bodyTailLength: toNumber(raw.bodyTailLength, 0.33),
         bodyRadius: toNumber(raw.bodyRadius, 0.035),
+        predatorAlertRadius: toNumber(raw.predatorAlertRadius, 1.0),
         isPredator: Boolean(raw.isPredator),
       });
     });

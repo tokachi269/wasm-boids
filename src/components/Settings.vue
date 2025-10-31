@@ -175,6 +175,28 @@
       />
     </div>
     <div class="setting-row">
+      <label>逃避開始距離<br>(Predator Alert):</label>
+      <input type="range" v-model.number="settings.predatorAlertRadius" min="0" max="10" step="0.05" />
+      <span 
+        v-if="!editingPredatorAlertRadius" 
+        class="editable-value" 
+        @click="startEditPredatorAlertRadius"
+        title="クリックして編集"
+      >{{ settings.predatorAlertRadius }}</span>
+      <input 
+        v-if="editingPredatorAlertRadius"
+        type="number" 
+        v-model.number="settings.predatorAlertRadius" 
+        min="0" 
+        max="20"
+        step="0.05"
+        class="value-input"
+        @blur="stopEditPredatorAlertRadius"
+        @keyup.enter="stopEditPredatorAlertRadius"
+        ref="predatorAlertRadiusInput"
+      />
+    </div>
+    <div class="setting-row">
       <label>最大速度<br>(Max Speed):</label>
       <input type="range" v-model.number="settings.maxSpeed" min="0.1" max="2" step="0.01" />
       <span 
@@ -370,6 +392,7 @@ const editingHorizontalTorque = ref(false);
 const editingTorqueStrength = ref(false);
 const editingLambda = ref(false);
 const editingTau = ref(false);
+const editingPredatorAlertRadius = ref(false);
 
 // 入力フィールドのref
 const countInput = ref(null);
@@ -386,6 +409,7 @@ const horizontalTorqueInput = ref(null);
 const torqueStrengthInput = ref(null);
 const lambdaInput = ref(null);
 const tauInput = ref(null);
+const predatorAlertRadiusInput = ref(null);
 
 const countDraft = ref(settings.count ?? 0);
 
@@ -488,6 +512,15 @@ async function startEditAlignmentRange() {
   }
 }
 
+async function startEditPredatorAlertRadius() {
+  editingPredatorAlertRadius.value = true;
+  await nextTick();
+  if (predatorAlertRadiusInput.value) {
+    predatorAlertRadiusInput.value.focus();
+    predatorAlertRadiusInput.value.select();
+  }
+}
+
 async function startEditMaxSpeed() {
   editingMaxSpeed.value = true;
   await nextTick();
@@ -573,6 +606,10 @@ function stopEditAlignment() {
 
 function stopEditAlignmentRange() {
   editingAlignmentRange.value = false;
+}
+
+function stopEditPredatorAlertRadius() {
+  editingPredatorAlertRadius.value = false;
 }
 
 function stopEditMaxSpeed() {

@@ -101,6 +101,7 @@ set(COMMON_SOURCES
     src/wasm/boid_unit.cpp
     src/wasm/boids_tree.cpp
     src/wasm/main.cpp
+    src/wasm/simulation_tuning.cpp
 )
 
 # インクルードディレクトリを指定

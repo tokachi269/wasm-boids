@@ -68,6 +68,7 @@ std::vector<SpeciesParams> NativeSimulation::getDefaultSettings() const {
   boids.horizontalTorque = 0.019f;
   boids.torqueStrength = 10.0f;
   boids.fieldOfViewDeg = 180.0f;
+  boids.predatorAlertRadius = 1.0f;
   boids.isPredator = false;
   
   defaults.push_back(boids);
@@ -91,6 +92,7 @@ std::vector<SpeciesParams> NativeSimulation::getDefaultSettings() const {
   predator.tau = 1.0f;
   predator.horizontalTorque = 0.022f;
   predator.torqueStrength = 0.0f;
+  predator.predatorAlertRadius = 0.8f;
   predator.isPredator = true;
 
   defaults.push_back(predator);

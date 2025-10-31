@@ -31,6 +31,7 @@ struct SoABuffers {
       predatorTargetTimers; // 捕食者の捕食対象ターゲット残時間 (秒)
 
   std::unordered_map<int, std::unordered_map<int, float>> cohesionMemories;
+  std::vector<float> predatorThreats; // 捕食圧の蓄積値（0-1）
 
   // 各BoidのcohesionMemoriesとactiveNeighbors（SOA形式）
   std::vector<std::vector<float>>
@@ -53,6 +54,7 @@ struct SoABuffers {
     predatorTargetIndices.reserve(n);
     predatorTargetTimers.reserve(n);
     predatorInfluences.reserve(n);
+    predatorThreats.reserve(n);
     boidCohesionMemories.reserve(n);
     boidActiveNeighbors.reserve(n);
   }
@@ -74,6 +76,7 @@ struct SoABuffers {
     predatorTargetIndices.resize(n, -1);
     predatorTargetTimers.resize(n, 0.0f);
     predatorInfluences.resize(n, glm::vec3(0.0f));
+    predatorThreats.resize(n, 0.0f);
     boidCohesionMemories.resize(n);
     boidActiveNeighbors.resize(n);
   }

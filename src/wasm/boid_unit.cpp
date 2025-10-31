@@ -1,6 +1,7 @@
 #include "boid_unit.h"
 #include "boids_tree.h"
 #include "pool_accessor.h"
+#include "simulation_tuning.h"
 #include <algorithm>
 #include <cmath>
 #include <future>
@@ -148,28 +149,52 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
         glm::vec3 chaseAcc = desiredVel - velocity;
         acceleration += chaseAcc;
       }
-    } else if (unit->buf->stresses[gIdx] > 0.1f ||
-               glm::length(unit->buf->predatorInfluences[gIdx]) > 0.001f) {
+  } else if (unit->buf->stresses[gIdx] > 0.1f ||
+         glm::length(unit->buf->predatorInfluences[gIdx]) > 0.001f) {
+    // -----------------------------------------------
+    // 逃避挙動: 捕食者からの影響を逃走加速度に変換
+    // -----------------------------------------------
+    float currentStress = unit->buf->stresses[gIdx];
+    glm::vec3 storedInfluence = unit->buf->predatorInfluences[gIdx];
+    float predatorInfluenceMagnitude = glm::length(storedInfluence);
 
-      float currentStress = unit->buf->stresses[gIdx];
-      float predatorInfluenceMagnitude =
-          glm::length(unit->buf->predatorInfluences[gIdx]);
+    // threatState は applyPredatorSweep で蓄積した恐怖レベル (0-1)。
+    float threatState = unit->buf->predatorThreats[gIdx];
+    // 直接の影響が強い場合は threatState を補強（0-1 に正規化して混ぜる）。
+    float influenceThreat = glm::clamp(predatorInfluenceMagnitude * 0.15f, 0.0f, 1.0f);
+    threatState = glm::max(threatState, influenceThreat);
+    float threatLevel = glm::clamp(threatState, 0.0f, 1.0f);
 
-      float escapeWeight = 0.8f; // 基本80%で逃走を優先
-      if (currentStress > 0.7f || predatorInfluenceMagnitude > 2.0f) {
-        escapeWeight = 0.7f; // 高ストレス時は70%逃走優先
-      } else if (currentStress > 0.4f || predatorInfluenceMagnitude > 1.0f) {
-        escapeWeight = 0.5f; // 中ストレス時は50%逃走優先
-      }
+    // 逃避方向のブレンド比率を計算（最大 maxEscapeWeight まで）
+    float escapeWeight = glm::clamp(
+      gSimulationTuning.threatGain * threatLevel, 0.0f,
+      gSimulationTuning.maxEscapeWeight);
 
-      glm::vec3 escapeForce = unit->buf->predatorInfluences[gIdx];
-      if (predatorInfluenceMagnitude > 0.001f) {
-        escapeForce = glm::normalize(escapeForce) * 10.0f; // 強い逃走力
-      }
-
-      acceleration =
-          acceleration * (1.0f - escapeWeight) + escapeForce * escapeWeight;
+    // 逃避加速度を計算（捕食者から遠ざかる方向）
+    glm::vec3 escapeForce = storedInfluence;
+    if (predatorInfluenceMagnitude > 0.001f) {
+    glm::vec3 fleeDir = storedInfluence / predatorInfluenceMagnitude;
+    float fleeStrength = gSimulationTuning.baseEscapeStrength +
+               gSimulationTuning.escapeStrengthPerThreat *
+                 threatLevel;
+    escapeForce = fleeDir * fleeStrength;
     }
+
+    // 通常加速度と逃避加速度を escapeWeight でブレンド
+    acceleration =
+      acceleration * (1.0f - escapeWeight) + escapeForce * escapeWeight;
+
+    // threat レベルを時間経過で減衰
+    float decayedThreat =
+      glm::max(threatState - gSimulationTuning.threatDecay * dt, 0.0f);
+    unit->buf->predatorThreats[gIdx] = decayedThreat;
+  } else {
+    // ストレスも影響もない場合は threat を徐々に減衰
+    unit->buf->predatorThreats[gIdx] =
+      glm::max(unit->buf->predatorThreats[gIdx] -
+             gSimulationTuning.threatDecay * dt,
+           0.0f);
+  }
     float currentStress = unit->buf->stresses[gIdx];
     float stressFactor = 1.0f;
 
@@ -263,7 +288,7 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
     unit->buf->velocitiesWrite[gIdx] = newVelocity;
     unit->buf->positionsWrite[gIdx] = position + newVelocity * dt;
     unit->buf->accelerations[gIdx] = glm::vec3(0.0f);
-    unit->buf->predatorInfluences[gIdx] *= 0.5f; // 30%保持で逃走を継続
+    unit->buf->predatorInfluences[gIdx] *= 0.5f; // 50%保持で逃走を継続
     unit->buf->orientationsWrite[gIdx] = BoidUnit::dirToQuatRollZero(newDir);
     if (unit->buf->stresses[gIdx] > 0.0f) {
       float decayRate = 1.0f;
@@ -370,9 +395,16 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
     std::stack<BoidUnit *, std::vector<BoidUnit *>> stack;
     stack.push(root);
 
-    constexpr float predatorRange = 1.0f;
-    constexpr float predatorRangeSq = predatorRange * predatorRange;
-    constexpr float predatorEffectRange = 1.0f;
+    // 全非捕食者種の警戒距離から最大値を決定してバウンディング判定で使用
+    float maxAlertRadius = 1.0f;
+    for (const auto &params : globalSpeciesParams) {
+      if (params.isPredator) {
+        continue;
+      }
+      maxAlertRadius =
+          std::max(maxAlertRadius, std::max(params.predatorAlertRadius, 0.0f));
+    }
+    const float predatorEffectRange = maxAlertRadius;
 
     auto *soa = predatorUnit->buf;
 
@@ -395,21 +427,35 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
             if (globalSpeciesParams[sidB].isPredator)
               continue;
 
+            // 各 prey 種ごとに設定された警戒距離を取得
+            const SpeciesParams &preyParams = globalSpeciesParams[sidB];
+            float alertRadius =
+                std::max(preyParams.predatorAlertRadius, 0.0f);
+            if (alertRadius <= 0.0f) {
+              alertRadius = maxAlertRadius; // 未設定時はデフォルト
+            }
+            float alertRadiusSq = alertRadius * alertRadius;
+
             glm::vec3 toTarget = soa->positions[idxB] - soa->positions[idxA];
             float d2 = glm::dot(toTarget, toTarget);
-            if (d2 >= predatorRangeSq)
-              continue;
+            if (d2 >= alertRadiusSq)
+              continue; // 警戒範囲外ならスキップ
 
+            // 逃避方向ベクトルと距離正規化（0〜1）
             glm::vec3 escapeDir =
                 glm::normalize(soa->positions[idxB] - soa->positions[idxA]);
             float normalizedDistance =
-                std::sqrt(std::max(d2, 1e-6f)) / predatorRange;
+                std::sqrt(std::max(d2, 1e-6f)) / alertRadius;
             float escapeStrength =
                 glm::clamp(1.0f - normalizedDistance, 0.0f, 1.0f);
+            // smoothstep 補間で滑らかに強度を上げる
             escapeStrength = escapeStrength * escapeStrength *
                              (3.0f - 2.0f * escapeStrength);
             // 逃走力を大幅に強化（放射線状逃走のため）
             soa->predatorInfluences[idxB] += escapeDir * escapeStrength * 5.0f;
+      // threat レベルとして逃走強度を記録（0-1で扱う）。
+      soa->predatorThreats[idxB] =
+        std::max(soa->predatorThreats[idxB], escapeStrength);
 
             float stressLevel =
                 glm::clamp(0.4f + escapeStrength * 0.6f, 0.0f, 1.0f);
@@ -695,6 +741,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
     // 自身の魚体をカプセルで近似し、後続の近接チェックに再利用する。
     const CapsuleSegment selfCapsule =
         makeCapsule(pos, selfOrientation, selfParams);
+    float threatLevel = glm::clamp(buf->predatorThreats[gIdx], 0.0f, 1.0f);
     const float viewRangeSq = globalSpeciesParams[sid].cohesionRange *
                               globalSpeciesParams[sid].cohesionRange;
     // console.call<void>("log", globalSpeciesParams[sid].species +
@@ -957,7 +1004,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
       float stressWeightSum = 0.0f;
       const float propagationRadius =
           glm::max(globalSpeciesParams[sid].cohesionRange, 1.0f);
-      const float propagationBlend = 0.9f; // dt を掛けて応答速度を調整
+      const float propagationBlend = 0.7f; // dt を掛けて応答速度を調整
 
       glm::vec3 sumSep = glm::vec3(0.0f);
       glm::vec3 sumAlign = glm::vec3(0.0f);
@@ -1076,11 +1123,14 @@ void BoidUnit::computeBoidInteraction(float dt) {
         wSep = glm::clamp(wSep, 0.0f, 1.0f);
         sumSep += (diff * wSep) * (-1.0f);
 
-        float wCoh = glm::clamp(dist / globalSpeciesParams[sid].cohesionRange,
-                                0.0f, 1.0f);
-        // stress に応じて凝集強度を増加
-        float stressFactor = 1.0f + selfStress * 0.2f;
-        wCoh *= stressFactor;
+    float wCoh = glm::clamp(dist / globalSpeciesParams[sid].cohesionRange,
+                0.0f, 1.0f);
+    // stress に応じて凝集強度を増加（再結集フェーズ強化）
+    float stressFactor = 1.0f + selfStress * 0.2f;
+    // threat レベルに応じた凝集ブースト（逃避中も群れを保つ）
+    float cohesionThreatFactor =
+      1.0f + gSimulationTuning.cohesionBoost * threatLevel;
+    wCoh *= stressFactor * cohesionThreatFactor;
 
         sumCoh += buf->positions[gNeighbor] * wCoh;
 
@@ -1101,8 +1151,12 @@ void BoidUnit::computeBoidInteraction(float dt) {
       glm::vec3 totalSeparation = glm::vec3(0.0f);
       float sepLen2 = glm::length2(sumSep);
       if (sepLen2 > EPS) {
+        // threat レベルが高いほど分離を弱める（群れを保つ）
+        float separationThreatFactor =
+            glm::mix(1.0f, gSimulationTuning.separationMinFactor, threatLevel);
         totalSeparation = (sumSep * (1.0f / glm::sqrt(sepLen2))) *
-                          globalSpeciesParams[sid].separation;
+                          (globalSpeciesParams[sid].separation *
+                           separationThreatFactor);
       }
 
       // 凝集の最終ベクトル
@@ -1121,8 +1175,12 @@ void BoidUnit::computeBoidInteraction(float dt) {
       glm::vec3 aliDir = avgAlignVel - vel;
       float aliLen2 = glm::length2(aliDir);
       if (aliLen2 > EPS) {
+        // threat レベルに応じた整列ブースト（逃避時も速度を揃えやすく）
+        float alignmentThreatFactor =
+            1.0f + gSimulationTuning.alignmentBoost * threatLevel;
         totalAlignment = (aliDir * (1.0f / glm::sqrt(aliLen2))) *
-                         globalSpeciesParams[sid].alignment;
+                         (globalSpeciesParams[sid].alignment *
+                          alignmentThreatFactor);
       }
 
       // --- 回転トルクによる向き補正（alignment方向へ向ける） ---

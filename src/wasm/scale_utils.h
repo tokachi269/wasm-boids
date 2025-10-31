@@ -14,5 +14,6 @@ inline SpeciesParams scaledParams(const SpeciesParams &src, float spatialScale)
     dst.bodyHeadLength *= spatialScale;
     dst.bodyTailLength *= spatialScale;
     dst.bodyRadius     *= spatialScale;
+    dst.predatorAlertRadius *= spatialScale;
     return dst;
 }

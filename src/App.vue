@@ -5,29 +5,176 @@
       <details>
         <summary>Settings</summary>
         <div v-for="(s, i) in settings" :key="i">
-          <Settings :settings="s" :can-remove="settings.length > 1" @remove="removeSpecies(i)" />
+          <Settings
+            :settings="s"
+            :can-remove="settings.length > 1"
+            @remove="removeSpecies(i)"
+          />
         </div>
-        <button class="add-species-button" @click="addSpecies">種族を追加</button>
-        <button @click="resetSettings" style="margin-bottom:1em;">リセット</button>
+        <button class="add-species-button" @click="addSpecies">
+          種族を追加
+        </button>
+        <button @click="resetSettings" style="margin-bottom: 1em">
+          リセット
+        </button>
+        <br />
+        <div class="settings tuning-settings">
+          <details class="species-section" open>
+            <summary class="species-header">
+              <span class="species-title">シミュレーション調整</span>
+            </summary>
+            <div class="species-content">
+              <div class="setting-row">
+                <label>脅威減衰<br />(threatDecay):</label>
+                <input
+                  type="range"
+                  min="0"
+                  max="5"
+                  step="0.05"
+                  v-model.number="systemSettings.threatDecay"
+                />
+                <input
+                  class="value-input"
+                  type="number"
+                  step="0.05"
+                  v-model.number="systemSettings.threatDecay"
+                />
+              </div>
+              <div class="setting-row">
+                <label>脅威増幅<br />(threatGain):</label>
+                <input
+                  type="range"
+                  min="0"
+                  max="5"
+                  step="0.05"
+                  v-model.number="systemSettings.threatGain"
+                />
+                <input
+                  class="value-input"
+                  type="number"
+                  step="0.05"
+                  v-model.number="systemSettings.threatGain"
+                />
+              </div>
+              <div class="setting-row">
+                <label>最大逃避重み<br />(maxEscapeWeight):</label>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  v-model.number="systemSettings.maxEscapeWeight"
+                />
+                <input
+                  class="value-input"
+                  type="number"
+                  step="0.01"
+                  v-model.number="systemSettings.maxEscapeWeight"
+                />
+              </div>
+              <div class="setting-row">
+                <label>基本逃避強度<br />(baseEscapeStrength):</label>
+                <input
+                  type="range"
+                  min="0"
+                  max="15"
+                  step="0.1"
+                  v-model.number="systemSettings.baseEscapeStrength"
+                />
+                <input
+                  class="value-input"
+                  type="number"
+                  step="0.1"
+                  v-model.number="systemSettings.baseEscapeStrength"
+                />
+              </div>
+              <div class="setting-row">
+                <label>脅威ごとの逃避<br />(escapeStrengthPerThreat):</label>
+                <input
+                  type="range"
+                  min="0"
+                  max="40"
+                  step="0.5"
+                  v-model.number="systemSettings.escapeStrengthPerThreat"
+                />
+                <input
+                  class="value-input"
+                  type="number"
+                  step="0.5"
+                  v-model.number="systemSettings.escapeStrengthPerThreat"
+                />
+              </div>
+              <div class="setting-row">
+                <label>凝集ブースト<br />(cohesionBoost):</label>
+                <input
+                  type="range"
+                  min="0"
+                  max="3"
+                  step="0.05"
+                  v-model.number="systemSettings.cohesionBoost"
+                />
+                <input
+                  class="value-input"
+                  type="number"
+                  step="0.05"
+                  v-model.number="systemSettings.cohesionBoost"
+                />
+              </div>
+              <div class="setting-row">
+                <label>分離下限係数<br />(separationMinFactor):</label>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  v-model.number="systemSettings.separationMinFactor"
+                />
+                <input
+                  class="value-input"
+                  type="number"
+                  step="0.01"
+                  v-model.number="systemSettings.separationMinFactor"
+                />
+              </div>
+              <div class="setting-row">
+                <label>整列ブースト<br />(alignmentBoost):</label>
+                <input
+                  type="range"
+                  min="0"
+                  max="2"
+                  step="0.05"
+                  v-model.number="systemSettings.alignmentBoost"
+                />
+                <input
+                  class="value-input"
+                  type="number"
+                  step="0.05"
+                  v-model.number="systemSettings.alignmentBoost"
+                />
+              </div>
+            </div>
+          </details>
+        </div>
         <div>
           <label>
             <input type="checkbox" v-model="showUnits" />
             Unit可視化
           </label>
-          <label style="margin-left:1em;">
+          <label style="margin-left: 1em">
             <input type="checkbox" v-model="showUnitSpheres" />
             スフィアのみ表示
           </label>
-          <label style="margin-left:1em;">
+          <label style="margin-left: 1em">
             <input type="checkbox" v-model="showUnitLines" />
             線のみ表示
           </label>
-          <label style="margin-left:1em;">
+          <label style="margin-left: 1em">
             <input type="checkbox" v-model="showUnitColors" />
             Unit色分け
           </label>
-          <label style="margin-left:1em;">
-            表示レイヤ下限: <input type="range" min="1" max="20" v-model="unitLayer" />
+          <label style="margin-left: 1em">
+            表示レイヤ下限:
+            <input type="range" min="1" max="20" v-model="unitLayer" />
             {{ unitLayer }}
           </label>
         </div>
@@ -37,26 +184,31 @@
       </div>
     </div>
     <div ref="threeContainer" class="three-container" />
-    <audio ref="backgroundAudio" src="/UnderWater.mp3" loop style="display:none" />
+    <audio
+      ref="backgroundAudio"
+      src="/UnderWater.mp3"
+      loop
+      style="display: none"
+    />
   </div>
 </template>
 
 <script setup>
-import { inject, onMounted, ref, watch, toRaw } from 'vue';
-import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import Settings from './components/Settings.vue';
-import StatsGl from 'stats-gl';
+import { inject, onMounted, ref, watch, toRaw } from "vue";
+import * as THREE from "three";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import Settings from "./components/Settings.vue";
+import StatsGl from "stats-gl";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
-import { BoidInstancing } from './rendering/BoidInstancing.js';
-import { FogPipeline } from './rendering/FogPipeline.js';
-import { ParticleField } from './rendering/ParticleField.js';
-import { WasmtimeBridge } from './simulation/WasmtimeBridge.js';
-import { createFlockSettingsStore } from './state/FlockSettingsStore.js';
+import { BoidInstancing } from "./rendering/BoidInstancing.js";
+import { FogPipeline } from "./rendering/FogPipeline.js";
+import { ParticleField } from "./rendering/ParticleField.js";
+import { WasmtimeBridge } from "./simulation/WasmtimeBridge.js";
+import { createFlockSettingsStore } from "./state/FlockSettingsStore.js";
 
-const wasmModule = inject('wasmModule');
+const wasmModule = inject("wasmModule");
 if (!wasmModule) {
-  console.error('wasmModule not provided');
+  console.error("wasmModule not provided");
 }
 
 const wasmBridge = wasmModule ? new WasmtimeBridge(wasmModule) : null;
@@ -64,57 +216,104 @@ const wasmBridge = wasmModule ? new WasmtimeBridge(wasmModule) : null;
 // const getUnitCount = wasmModule.cwrap('getUnitCount', 'number', []);
 // const getUnitParentIndicesPtr = wasmModule.cwrap('getUnitParentIndicesPtr', 'number', []);
 
-function isMobileDevice() {
-  if (typeof navigator === 'undefined') {
+function isLowSpecDevice() {
+  if (typeof navigator === "undefined") {
     return false;
   }
-  return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+  
+  // モバイルデバイスの検出
+  const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
+    navigator.userAgent
+  );
+  if (isMobile) {
+    return true;
+  }
+  
+  // Intel内蔵GPUの検出（ノートPC等）
+  try {
+    const canvas = document.createElement('canvas');
+    const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+    if (gl) {
+      const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+      if (debugInfo) {
+        const renderer = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL);
+        if (renderer && /intel/i.test(renderer)) {
+          console.log('Detected Intel integrated GPU:', renderer);
+          return true;
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to detect GPU:', e);
+  }
+  
+  return false;
 }
 
 function fetchTreeStructure() {
   return wasmBridge?.exportTreeStructure() ?? null;
 }
-const mobileBoidCount = isMobileDevice() ? 6000 : 10000;
+const mobileBoidCount = isLowSpecDevice() ? 6000 : 10000;
 
-const DEFAULT_SETTINGS = [{
-  species: 'Boids',         // 種族名
-  count: mobileBoidCount,   // 群れの数（スマホなら6000、PCなら10000）
-  cohesion: 38,             // 凝集
-  cohesionRange: 30,        // 凝集範囲
-  separation: 8,            // 分離
-  separationRange: 0.6,     // 分離範囲
-  alignment: 19,            // 整列
-  alignmentRange: 6,        // 整列範囲
-  maxSpeed: 0.26,           // 最大速度
-  maxTurnAngle: 0.25,       // 最大旋回角
-  maxNeighbors: 6,          // 最大近傍数
-  horizontalTorque: 0.019,  // 水平化トルク
-  torqueStrength: 10,       // 回転トルク強度
-  lambda: 0.62,             // 速度調整係数
-  tau: 1.0                  // 記憶時間スケール
-}, {
-  species: 'Predator',
-  count: 1,
-  cohesion: 5.58,                     // 捕食者には使わない
-  separation: 0.0,
-  alignment: 0.0,
-  maxSpeed: 1.37,                     // 速く逃げられるよう速度は大きめ
-  minSpeed: 0.4,
-  maxTurnAngle: 0.2,
-  separationRange: 14.0,
-  alignmentRange: 11.0,
-  cohesionRange: 77.0,
-  maxNeighbors: 0,
-  lambda: 0.05,
-  tau: 1.0, // 捕食者は常に追いかける
-  horizontalTorque: 0.022,
-  torqueStrength: 0.0,
-  isPredator: true                // ← 捕食者フラグ
-}];
+const DEFAULT_SETTINGS = [
+  {
+    species: "Boids", // 種族名
+    count: mobileBoidCount, // 群れの数（スマホなら6000、PCなら10000）
+    cohesion: 38, // 凝集
+    cohesionRange: 30, // 凝集範囲
+    separation: 8, // 分離
+    separationRange: 0.6, // 分離範囲
+    alignment: 19, // 整列
+    alignmentRange: 6, // 整列範囲
+    maxSpeed: 0.26, // 最大速度
+    maxTurnAngle: 0.25, // 最大旋回角
+    maxNeighbors: 6, // 最大近傍数
+    horizontalTorque: 0.019, // 水平化トルク
+    torqueStrength: 10, // 回転トルク強度
+    lambda: 0.62, // 速度調整係数
+    tau: 1.0, // 記憶時間スケール
+    predatorAlertRadius: 1.0, // 捕食者を察知する距離
+  },
+  {
+    species: "Predator",
+    count: 1,
+    cohesion: 5.58, // 捕食者には使わない
+    separation: 0.0,
+    alignment: 0.0,
+    maxSpeed: 1.37, // 速く逃げられるよう速度は大きめ
+    minSpeed: 0.4,
+    maxTurnAngle: 0.13,
+    separationRange: 14.0,
+    alignmentRange: 11.0,
+    cohesionRange: 77.0,
+    maxNeighbors: 0,
+    lambda: 0.05,
+    tau: 1.0, // 捕食者は常に追いかける
+    horizontalTorque: 0.022,
+    torqueStrength: 0.0,
+    isPredator: true, // 捕食者フラグ
+  },
+];
 
-const flockStore = createFlockSettingsStore(DEFAULT_SETTINGS);
+const DEFAULT_TUNING_SETTINGS = {
+  threatDecay: 0.75, // 脅威減衰速度（1/sec）
+  threatGain: 2.0, // 脅威→逃避ブレンド倍率
+  maxEscapeWeight: 1.0, // 逃避方向の最大割合（0〜1）
+  baseEscapeStrength: 3.0, // 基本逃避強度
+  escapeStrengthPerThreat: 10.0, // 脅威レベルごとの追加逃避強度
+  cohesionBoost: 2.0, // 脅威時の凝集力ブースト
+  separationMinFactor: 1.0, // 脅威時の分離力スケール下限（0〜1）
+  alignmentBoost: 1.2, // 脅威時の整列力ブースト
+};
+
+const flockStore = createFlockSettingsStore(
+  DEFAULT_SETTINGS,
+  DEFAULT_TUNING_SETTINGS
+);
 const {
   settings,
+  systemSettings,
+  assignSystemSettings: syncSystemSettings,
   totalBoids,
   replaceSettings,
   resetToDefaults,
@@ -123,6 +322,35 @@ const {
   saveToStorage,
 } = flockStore;
 
+const tuningInitialized = ref(false);
+
+// シミュレーション調整値を正規化し、欠損時はデフォルトで補完する。
+function sanitizeTuningParams(raw = {}) {
+  const sanitized = {};
+  for (const [key, fallback] of Object.entries(DEFAULT_TUNING_SETTINGS)) {
+    const value = Number(raw[key]);
+    sanitized[key] = Number.isFinite(value) ? value : fallback;
+  }
+  return sanitized;
+}
+
+// reactive な systemSettings へ値を反映し、そのまま wasm へ渡せるプレーンオブジェクトを返す。
+function updateSystemSettings(newValues) {
+  const payload = sanitizeTuningParams(newValues);
+  syncSystemSettings(payload);
+  return payload;
+}
+
+// wasm 側へ現在のシミュレーション調整パラメータを送信する。
+function applySystemSettingsToWasm() {
+  if (!wasmBridge) {
+    return;
+  }
+  const payload = sanitizeTuningParams(systemSettings);
+  wasmBridge.setSimulationTuningParams(payload);
+}
+
+// 設定配列のディープコピーを作成（再初期化時の状態復元用）
 function snapshotSettingsList(list) {
   return list.map((item) => JSON.parse(JSON.stringify(toRaw(item))));
 }
@@ -130,9 +358,10 @@ function snapshotSettingsList(list) {
 let cachedTotalBoidCount = totalBoids.value;
 let lastSpeciesSignature = getSpeciesSignature(settings);
 let previousSettingsSnapshot = snapshotSettingsList(settings);
-let pendingStateForReinitialize = null;
-let pendingSettingsSnapshot = null;
+let pendingStateForReinitialize = null; // 再初期化待ちの状態スナップショット
+let pendingSettingsSnapshot = null; // 再初期化待ちの設定スナップショット
 
+// 外部スナップショットで設定を上書きし、localStorage に保存
 function applySettingsSnapshot(snapshot) {
   if (!Array.isArray(snapshot) || snapshot.length === 0) {
     return null;
@@ -160,51 +389,58 @@ function removeSpecies(index) {
   return removed;
 }
 
+// Three.js レンダリング用の DOM 参照と主要オブジェクト
 const threeContainer = ref(null);
 const backgroundAudio = ref(null);
 let scene, camera, renderer, controls;
-let fogPipeline = null;
-let particleField = null;
+let fogPipeline = null; // 深度フォグパイプライン
+let particleField = null; // 背景パーティクルフィールド
 
 const paused = ref(false);
 
+// デバッグ用 Unit 可視化フラグ
 const showUnits = ref(true);
 const showUnitSpheres = ref(false);
 const showUnitLines = ref(false);
 const showUnitColors = ref(false);
 const unitLayer = ref(1);
 
-let unitSpheres = [];
-let unitLines = [];
+let unitSpheres = []; // デバッグ用スフィアメッシュ
+let unitLines = []; // デバッグ用ラインメッシュ
 
 let maxDepth = 1;
-let stats = null;
+let stats = null; // stats-gl パフォーマンス表示
 let glContext = null;
 let frameCounter = 0;
-let flockReinitTimer = null;
+let flockReinitTimer = null; // 群れ再初期化の遅延タイマー
 
 let animationTimer = null;
-const FRAME_INTERVAL = 1000 / 1000;//1000 / 60; // 60FPS
-const COUNT_REINIT_DELAY_MS = 400;
+const FRAME_INTERVAL = 1000 / 1000; // アニメーションフレーム間隔（ミリ秒）
+const COUNT_REINIT_DELAY_MS = 400; // 個体数変更後の再初期化待機時間
 
 function positionStatsOverlay(element) {
   if (!element) return;
-  element.style.position = 'fixed';
-  element.style.padding = '80px';
-  element.style.pointerEvents = 'none';
-  element.style.display = 'flex';
-  element.style.flexDirection = 'column';
-  element.style.alignItems = 'flex-end';
-  element.style.gap = '6px';
-  element.style.maxWidth = '200px';
-  element.style.width = 'auto';
-  element.style.boxSizing = 'border-box';
+  element.style.position = "fixed";
+  element.style.padding = "80px";
+  element.style.pointerEvents = "none";
+  element.style.display = "flex";
+  element.style.flexDirection = "column";
+  element.style.alignItems = "flex-end";
+  element.style.gap = "6px";
+  element.style.maxWidth = "200px";
+  element.style.width = "auto";
+  element.style.boxSizing = "border-box";
   element.style.zIndex = 1000;
 }
 
 // ツリーの最大深さを計算
 function calcMaxDepth(unit, depth = 0) {
-  if (!unit || !unit.children || typeof unit.children.size !== 'function' || unit.children.size() === 0) {
+  if (
+    !unit ||
+    !unit.children ||
+    typeof unit.children.size !== "function" ||
+    unit.children.size() === 0
+  ) {
     return depth;
   }
   let max = depth;
@@ -216,7 +452,7 @@ function calcMaxDepth(unit, depth = 0) {
 }
 
 function handleKeydown(e) {
-  if (e.code === 'Space') {
+  if (e.code === "Space") {
     paused.value = !paused.value;
   }
 }
@@ -236,8 +472,10 @@ function initThreeJS() {
   renderer = new THREE.WebGLRenderer({
     antialias: true,
     depth: true, // 深度バッファを有効化
-
   });
+  // トーンマッピングを有効化し水中ライティングのダイナミクスを保つ。
+  renderer.toneMapping = THREE.CineonToneMapping;
+  renderer.toneMappingExposure = 0.8;
   renderer.setPixelRatio(window.devicePixelRatio); // 高DPI対応
   renderer.setSize(width, height);
   renderer.shadowMap.enabled = true;
@@ -265,11 +503,17 @@ function initThreeJS() {
   scene.add(ground);
 
   // ライト
-  const ambientLight = new THREE.AmbientLight(toHex(OCEAN_COLORS.AMBIENT_LIGHT), 0.9);
+  const ambientLight = new THREE.AmbientLight(
+    toHex(OCEAN_COLORS.AMBIENT_LIGHT),
+    0.9
+  );
   scene.add(ambientLight);
 
   // 太陽光（やや暖色のDirectionalLight）
-  const dirLight = new THREE.DirectionalLight(toHex(OCEAN_COLORS.SUN_LIGHT), 20); // 暖色＆強め
+  const dirLight = new THREE.DirectionalLight(
+    toHex(OCEAN_COLORS.SUN_LIGHT),
+    20
+  ); // 暖色＆強め
   dirLight.position.set(300, 500, 200); // 高い位置から照らす
   dirLight.castShadow = true;
 
@@ -288,7 +532,7 @@ function initThreeJS() {
 
   scene.add(dirLight);
   initParticleSystem();
-  if (!isMobileDevice()) {
+  if (!isLowSpecDevice()) {
     fogPipeline?.dispose();
     fogPipeline = new FogPipeline(heightFogConfig);
     fogPipeline.init(renderer, scene, camera, width, height);
@@ -297,7 +541,7 @@ function initThreeJS() {
     fogPipeline = null;
   }
   // ウィンドウリサイズ対応
-  window.addEventListener('resize', onWindowResize);
+  window.addEventListener("resize", onWindowResize);
 }
 
 function onWindowResize() {
@@ -331,26 +575,26 @@ function createSinCosLutTexture(size) {
   return texture;
 }
 
-const TRIPLE_BUFFER_SIZE = 3;               // BoidInstancing のトリプルバッファ数
-const HIDDEN_POSITION = 1e6;                // 非表示インスタンスを退避させる座標値
-const IDENTITY_QUATERNION = [0, 0, 0, 1];   // 非表示インスタンスに適用する無回転クォータニオン
-const SIN_LUT_SIZE = 256;                   // 尾びれアニメ用サイン LUT サイズ
+const TRIPLE_BUFFER_SIZE = 3; // BoidInstancing のトリプルバッファ数
+const HIDDEN_POSITION = 1e6; // 非表示インスタンスを退避させる座標値
+const IDENTITY_QUATERNION = [0, 0, 0, 1]; // 非表示インスタンスに適用する無回転クォータニオン
+const SIN_LUT_SIZE = 256; // 尾びれアニメ用サイン LUT サイズ
 const sinCosLutTexture = createSinCosLutTexture(SIN_LUT_SIZE);
 // LOD距離閾値（平方距離）: 近距離はハイポリ、中距離はLOD+アニメ、遠距離はLOD静止
 const LOD_NEAR_DISTANCE_SQ = 4; // 2m以内はメインモデル
 const LOD_MID_DISTANCE_SQ = 25; // 5m以内はLODモデル＋アニメ
 const tailAnimation = {
   uniforms: {
-    uTailTime: { value: 0 },            // 時間（波形生成用）
-    uTailAmplitude: { value: 0.14 },    // 振幅（全身の揺れ幅）
-    uTailFrequency: { value: 10.0 },    // 周波数（くねり速度）
-    uTailPhaseStride: { value: 5.0 },   // 体の長さ方向の位相差（波長に相当）
-    uTailTurnStrength: { value: 0.1 },  // 旋回時の強度
-    uTailSpeedScale: { value: 1 },      // 速度による影響度
-    uTailRight: { value: new THREE.Vector3(1, 0, 0) },     // 尾アニメの右方向ベクトル
-    uTailForward: { value: new THREE.Vector3(0, 0, 1) },   // 尾アニメの進行方向ベクトル
-    uTailUp: { value: new THREE.Vector3(0, 1, 0) },        // 尾アニメの上方向ベクトル
-    uTailEnable: { value: 1 },          // アニメーション有効/無効
+    uTailTime: { value: 0 }, // 時間（波形生成用）
+    uTailAmplitude: { value: 0.14 }, // 振幅（全身の揺れ幅）
+    uTailFrequency: { value: 10.0 }, // 周波数（くねり速度）
+    uTailPhaseStride: { value: 5.0 }, // 体の長さ方向の位相差（波長に相当）
+    uTailTurnStrength: { value: 0.1 }, // 旋回時の強度
+    uTailSpeedScale: { value: 1 }, // 速度による影響度
+    uTailRight: { value: new THREE.Vector3(1, 0, 0) }, // 尾アニメの右方向ベクトル
+    uTailForward: { value: new THREE.Vector3(0, 0, 1) }, // 尾アニメの進行方向ベクトル
+    uTailUp: { value: new THREE.Vector3(0, 1, 0) }, // 尾アニメの上方向ベクトル
+    uTailEnable: { value: 1 }, // アニメーション有効/無効
     uSinLut: { value: sinCosLutTexture },
     uLutSize: { value: SIN_LUT_SIZE },
   },
@@ -368,44 +612,43 @@ const boidInstancing = new BoidInstancing({
 let instancedMeshHigh = null;
 let instancedMeshLow = null;
 
-
 // 海中シーンの色味をまとめて管理する定数群
 const OCEAN_COLORS = {
-  SKY_HIGHLIGHT: '#4fbaff',
-  SKY_BLUE: '#15a1ff',
-  DEEP_BLUE: '#002968',
-  SEAFLOOR: '#777465',
-  FOG: '#153a6c',
-  AMBIENT_LIGHT: '#2c9aff',
-  SUN_LIGHT: '#5389b7',
-  SIDE_LIGHT1: '#6ba3d0',
-  SIDE_LIGHT2: '#2d5f7a',
-  BOTTOM_LIGHT: '#0f2635',
+  SKY_HIGHLIGHT: "#4fbaff",
+  SKY_BLUE: "#15a1ff",
+  DEEP_BLUE: "#002968",
+  SEAFLOOR: "#777465",
+  FOG: "#153a6c",
+  AMBIENT_LIGHT: "#59a5eb",
+  SUN_LIGHT: "#5389b7",
+  SIDE_LIGHT1: "#6ba3d0",
+  SIDE_LIGHT2: "#2d5f7a",
+  BOTTOM_LIGHT: "#0f2635",
 };
 
 // '#rrggbb' 形式の色を three.js の整数表現に変換
-const toHex = (colorStr) => parseInt(colorStr.replace('#', '0x'), 16);
+const toHex = (colorStr) => parseInt(colorStr.replace("#", "0x"), 16);
 
 // 距離と深度で濃さが変わる海中フォグ設定
 const heightFogConfig = {
-  color: new THREE.Color(OCEAN_COLORS.DEEP_BLUE),       // 遠景で溶け込む深海色
-  distanceStart: 4.0,                      // カメラからこの距離まではフォグゼロ
-  distanceEnd: 60.0,                       // この距離でフォグが最大になる
-  distanceExponent: 0.4,                   // 距離カーブの滑らかさ
-  distanceControlPoint1: new THREE.Vector2(0.2, 0.8),    // 距離ベジェ曲線の制御点（開始側）
-  distanceControlPoint2: new THREE.Vector2(0.75, 0.95),  // 距離ベジェ曲線の制御点（終端側）
-  surfaceLevel: 100.0,                       // 水面の高さ。ここから下がるほど暗くなる
-  heightFalloff: 0.01,                       // 深度による減衰率
-  heightExponent: 1,                          // 深度カーブの強さ
-  maxOpacity: 1.2,                            // 最大フォグ率
+  color: new THREE.Color(OCEAN_COLORS.DEEP_BLUE), // 遠景で溶け込む深海色
+  distanceStart: 4.0, // カメラからこの距離まではフォグゼロ
+  distanceEnd: 60.0, // この距離でフォグが最大になる
+  distanceExponent: 0.4, // 距離カーブの滑らかさ
+  distanceControlPoint1: new THREE.Vector2(0.2, 0.8), // 距離ベジェ曲線の制御点（開始側）
+  distanceControlPoint2: new THREE.Vector2(0.75, 0.95), // 距離ベジェ曲線の制御点（終端側）
+  surfaceLevel: 100.0, // 水面の高さ。ここから下がるほど暗くなる
+  heightFalloff: 0.01, // 深度による減衰率
+  heightExponent: 1, // 深度カーブの強さ
+  maxOpacity: 1.2, // 最大フォグ率
 };
 
 function createOceanSphere() {
   if (!scene) return null;
 
   // 上層→深層のグラデーションで海中の空気感を演出
-  const canvas = document.createElement('canvas');
-  const context = canvas.getContext('2d');
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
   canvas.width = 512;
   canvas.height = 512;
 
@@ -438,7 +681,7 @@ function createOceanSphere() {
 
 function createFadeOutGroundMaterial() {
   const textureLoader = new THREE.TextureLoader();
-  const alphaMap = textureLoader.load('./models/groundAlfa.png');
+  const alphaMap = textureLoader.load("./models/groundAlfa.png");
 
   alphaMap.minFilter = THREE.LinearFilter;
   alphaMap.magFilter = THREE.LinearFilter;
@@ -470,7 +713,7 @@ function initParticleSystem() {
     return;
   }
   if (!particleField) {
-    particleField = new ParticleField(isMobileDevice());
+    particleField = new ParticleField(isLowSpecDevice());
   }
   particleField.init(scene, renderer, camera, controls);
 }
@@ -491,17 +734,17 @@ function initBackgroundAudioPlayback() {
 
   const tryPlay = () => {
     const playResult = audioEl.play();
-    if (playResult && typeof playResult.then === 'function') {
+    if (playResult && typeof playResult.then === "function") {
       playResult.catch(() => {
         const resume = () => {
-          document.removeEventListener('pointerdown', resume);
-          document.removeEventListener('keydown', resume);
+          document.removeEventListener("pointerdown", resume);
+          document.removeEventListener("keydown", resume);
           audioEl.play().catch(() => {
             /* ignored */
           });
         };
-        document.addEventListener('pointerdown', resume, { once: true });
-        document.addEventListener('keydown', resume, { once: true });
+        document.addEventListener("pointerdown", resume, { once: true });
+        document.addEventListener("keydown", resume, { once: true });
       });
     }
   };
@@ -528,67 +771,85 @@ function getWasmViews(count) {
   return wasmBridge.getBuffers(count);
 }
 
+// 現在の群れ状態（位置・速度・向き）をスナップショット
 function captureFlockState() {
   return wasmBridge?.captureState() ?? null;
 }
 
+// 過去の群れ状態を復元（個体数変更時などに種ごとに引き継ぐ）
 function restoreFlockState(previousState, oldSettings, newSettings) {
   wasmBridge?.restoreState(previousState, oldSettings, newSettings);
 }
 
-let boidModel = null; // 読み込んだモデルを保持
-let boidModelLod = null; // 読み込んだモデルを保持
-let originalMaterial = null; // 元のマテリアルを保持
-let originalMaterialLod = null; // 元のLODマテリアルを保持
+// 3D モデルとマテリアルの保持用変数
+let boidModel = null;
+let boidModelLod = null;
+let originalMaterial = null;
+let originalMaterialLod = null;
 let predatorModel = null;
 let predatorMaterial = null;
 
-// 前回のshowUnitColorsの状態を保持（OFF→ONの検知用）
+// 前回の Unit 色分け状態を保持（OFF→ON 検知用）
 let lastShowUnitColors = false;
 
+// 捕食者の総数を計算
 function getPredatorCount() {
-  return settings.reduce((sum, s) => sum + ((s.isPredator && s.count) ? s.count : 0), 0);
+  return settings.reduce(
+    (sum, s) => sum + (s.isPredator && s.count ? s.count : 0),
+    0
+  );
 }
 
+// 全 Boid の総数を取得
 function getTotalBoidCount() {
   return totalBoids.value;
 }
 
+// 種族構成の署名文字列を生成（個体数変更検知用）
 function getSpeciesSignature(specList = settings) {
   if (!Array.isArray(specList)) {
-    return '';
+    return "";
   }
   return specList
-    .map((s, index) => `${index}:${(s && s.count) || 0}:${s && s.isPredator ? 1 : 0}`)
-    .join('|');
+    .map(
+      (s, index) =>
+        `${index}:${(s && s.count) || 0}:${s && s.isPredator ? 1 : 0}`
+    )
+    .join("|");
 }
 
+// 現在の種族設定から WASM 用のベクタを生成
 function createSpeciesParamsVector() {
   if (!wasmBridge) {
-    console.warn('WasmtimeBridge が初期化されていません');
+    console.warn("WasmtimeBridge が初期化されていません");
     return null;
   }
 
   const rawSettings = toRaw(settings);
-  const source = Array.isArray(rawSettings) ? rawSettings : Array.from(settings ?? []);
+  const source = Array.isArray(rawSettings)
+    ? rawSettings
+    : Array.from(settings ?? []);
   const vector = wasmBridge.buildSpeciesParams(source);
   if (!vector) {
-    console.warn('WasmtimeBridge.buildSpeciesParams の呼び出しに失敗しました');
+    console.warn("WasmtimeBridge.buildSpeciesParams の呼び出しに失敗しました");
   }
   return vector;
 }
 
+// 群れを再初期化（個体数・種族変更時に即座実行）
 function reinitializeFlockNow() {
   if (!wasmModule || !wasmBridge) return;
 
   const pendingState = pendingStateForReinitialize?.state || null;
-  const oldSettingsRef = pendingStateForReinitialize?.oldSettings || previousSettingsSnapshot;
-  const newSettingsRef = pendingSettingsSnapshot || snapshotSettingsList(settings);
+  const oldSettingsRef =
+    pendingStateForReinitialize?.oldSettings || previousSettingsSnapshot;
+  const newSettingsRef =
+    pendingSettingsSnapshot || snapshotSettingsList(settings);
   const targetSignature = getSpeciesSignature(newSettingsRef);
 
   const vector = createSpeciesParamsVector();
   if (!vector) {
-    console.error('Failed to create species parameter vector');
+    console.error("Failed to create species parameter vector");
     applySettingsSnapshot(previousSettingsSnapshot);
     pendingStateForReinitialize = null;
     pendingSettingsSnapshot = null;
@@ -598,14 +859,17 @@ function reinitializeFlockNow() {
   try {
     wasmModule.callInitBoids(vector, 1, 6, 0.25);
   } finally {
-    if (typeof vector.delete === 'function') {
+    if (typeof vector.delete === "function") {
       vector.delete();
     }
   }
   try {
     wasmBridge.buildSpatialIndex(16, 0);
   } catch (error) {
-    console.error('WasmtimeBridge.buildSpatialIndex の呼び出しに失敗しました', error);
+    console.error(
+      "WasmtimeBridge.buildSpatialIndex の呼び出しに失敗しました",
+      error
+    );
   }
   const total = getTotalBoidCount();
   cachedTotalBoidCount = total;
@@ -621,6 +885,7 @@ function reinitializeFlockNow() {
   pendingSettingsSnapshot = null;
 }
 
+// 群れ再初期化を遅延実行（設定変更の連打を吸収）
 function scheduleFlockReinitialize() {
   if (flockReinitTimer) {
     clearTimeout(flockReinitTimer);
@@ -641,9 +906,16 @@ function scheduleFlockReinitialize() {
   }, COUNT_REINIT_DELAY_MS);
 }
 
+// インスタンシングメッシュを初期化（個体数に応じてバッファを確保）
 function initInstancedBoids(count) {
-  if (!scene || !boidModel || !boidModelLod || !originalMaterial || !originalMaterialLod) {
-    console.warn('initInstancedBoids: required assets are not ready');
+  if (
+    !scene ||
+    !boidModel ||
+    !boidModelLod ||
+    !originalMaterial ||
+    !originalMaterialLod
+  ) {
+    console.warn("initInstancedBoids: required assets are not ready");
     return;
   }
 
@@ -657,7 +929,7 @@ function initInstancedBoids(count) {
   });
 
   if (!initialized) {
-    console.error('Failed to initialize boid instancing');
+    console.error("Failed to initialize boid instancing");
     return;
   }
 
@@ -667,7 +939,7 @@ function initInstancedBoids(count) {
 
   // 捕食者メッシュも最新設定に合わせて生成しておく
   const predatorCount = getPredatorCount();
-  if (typeof boidInstancing.ensurePredatorMeshes === 'function') {
+  if (typeof boidInstancing.ensurePredatorMeshes === "function") {
     boidInstancing.ensurePredatorMeshes(predatorCount);
   }
 
@@ -679,11 +951,9 @@ function initInstancedBoids(count) {
   }
 }
 
-
-
 function loadBoidModel(callback) {
   const loader = new GLTFLoader();
-  const basePath = process.env.BASE_URL || '/'; // publicPath を取得
+  const basePath = process.env.BASE_URL || "/"; // publicPath を取得
   const textureLoader = new THREE.TextureLoader();
   let pendingAssets = 3;
   const notifyReady = () => {
@@ -693,23 +963,23 @@ function loadBoidModel(callback) {
     }
   };
   const texture = textureLoader.load(
-    './models/fish.png', // テクスチャのパス
+    "./models/fish.png", // テクスチャのパス
     () => {
-      console.log('Texture loaded successfully.');
+      console.log("Texture loaded successfully.");
     },
     undefined,
     (error) => {
-      console.error('An error occurred while loading the texture:', error);
+      console.error("An error occurred while loading the texture:", error);
     }
   );
   const textureLod = textureLoader.load(
-    './models/fish_lod.png', // テクスチャのパス
+    "./models/fish_lod.png", // テクスチャのパス
     () => {
-      console.log('Texture loaded successfully.');
+      console.log("Texture loaded successfully.");
     },
     undefined,
     (error) => {
-      console.error('An error occurred while loading the texture:', error);
+      console.error("An error occurred while loading the texture:", error);
     }
   );
   texture.flipY = false;
@@ -718,13 +988,16 @@ function loadBoidModel(callback) {
   textureLod.colorSpace = THREE.SRGBColorSpace;
 
   const predatorTexture = textureLoader.load(
-    './models/fishPredetor.png',
+    "./models/fishPredetor.png",
     () => {
-      console.log('Predator texture loaded successfully.');
+      console.log("Predator texture loaded successfully.");
     },
     undefined,
     (error) => {
-      console.error('An error occurred while loading the predator texture:', error);
+      console.error(
+        "An error occurred while loading the predator texture:",
+        error
+      );
     }
   );
   predatorTexture.flipY = false;
@@ -735,10 +1008,10 @@ function loadBoidModel(callback) {
     roughness: 0.5,
     metalness: 0.2,
     transparent: false, // 半透明を有効化
-    alphaTest: 0.5,    // アルファテストを設定
-    map: texture,      // テクスチャを設定
+    alphaTest: 0.5, // アルファテストを設定
+    map: texture, // テクスチャを設定
     vertexColors: false, // 通常時は無効
-    vertexColor: 0xffffff
+    vertexColor: 0xffffff,
   });
 
   let boidLodMaterial = new THREE.MeshStandardMaterial({
@@ -746,11 +1019,10 @@ function loadBoidModel(callback) {
     roughness: 0.5,
     metalness: 0.2,
     transparent: false, // 半透明を有効化
-    alphaTest: 0.5,    // アルファテストを設定
-    map: textureLod,      // テクスチャを設定
+    alphaTest: 0.5, // アルファテストを設定
+    map: textureLod, // テクスチャを設定
     vertexColors: false, // 通常時は無効
-    vertexColor: 0xffffff
-
+    vertexColor: 0xffffff,
   });
 
   originalMaterial = boidMaterial;
@@ -781,7 +1053,7 @@ function loadBoidModel(callback) {
     },
     undefined,
     (error) => {
-      console.error('An error occurred while loading the model:', error);
+      console.error("An error occurred while loading the model:", error);
       notifyReady();
     }
   );
@@ -802,7 +1074,7 @@ function loadBoidModel(callback) {
     },
     undefined,
     (error) => {
-      console.error('An error occurred while loading the LOD model:', error);
+      console.error("An error occurred while loading the LOD model:", error);
       notifyReady();
     }
   );
@@ -822,7 +1094,10 @@ function loadBoidModel(callback) {
     },
     undefined,
     (error) => {
-      console.error('An error occurred while loading the predator model:', error);
+      console.error(
+        "An error occurred while loading the predator model:",
+        error
+      );
       notifyReady();
     }
   );
@@ -839,7 +1114,7 @@ function clearUnitVisuals() {
 function drawUnitTree(unit, layer = 0) {
   // スフィア: スライダで制御
   if (
-    layer >= (maxDepth - unitLayer.value + 1) &&
+    layer >= maxDepth - unitLayer.value + 1 &&
     (unit.children == null || unit.children.size() === 0 || layer === maxDepth)
   ) {
     let sphere;
@@ -862,7 +1137,12 @@ function drawUnitTree(unit, layer = 0) {
   }
 
   // 線: チェックボックスで全て表示、色は深さでグラデ
-  if (showUnitLines.value && unit.children && typeof unit.children.size === 'function' && unit.children.size() > 0) {
+  if (
+    showUnitLines.value &&
+    unit.children &&
+    typeof unit.children.size === "function" &&
+    unit.children.size() > 0
+  ) {
     for (let i = 0; i < unit.children.size(); i++) {
       const child = unit.children.get(i);
       let line;
@@ -872,7 +1152,11 @@ function drawUnitTree(unit, layer = 0) {
       } else {
         const lineGeometry = new THREE.BufferGeometry();
         const lineMaterial = new THREE.LineBasicMaterial({
-          color: new THREE.Color().setHSL(0.35, 1, 0.7 - 0.4 * (layer / maxDepth)),
+          color: new THREE.Color().setHSL(
+            0.35,
+            1,
+            0.7 - 0.4 * (layer / maxDepth)
+          ),
         });
         line = new THREE.Line(lineGeometry, lineMaterial);
         scene.add(line);
@@ -887,7 +1171,11 @@ function drawUnitTree(unit, layer = 0) {
   }
 
   // 再帰
-  if (unit.children && typeof unit.children.size === 'function' && unit.children.size() > 0) {
+  if (
+    unit.children &&
+    typeof unit.children.size === "function" &&
+    unit.children.size() > 0
+  ) {
     for (let i = 0; i < unit.children.size(); i++) {
       const child = unit.children.get(i);
       drawUnitTree(child, layer + 1);
@@ -945,9 +1233,14 @@ function animate() {
     predatorCount,
   });
 
-  const visibleCount = updateInfo.visibleCount ?? Math.max(0, count - predatorCount);
+  const visibleCount =
+    updateInfo.visibleCount ?? Math.max(0, count - predatorCount);
 
-  if (showUnitColors.value && instancedMeshHigh.instanceColor && instancedMeshLow.instanceColor) {
+  if (
+    showUnitColors.value &&
+    instancedMeshHigh.instanceColor &&
+    instancedMeshLow.instanceColor
+  ) {
     const unitMappings = wasmBridge?.getUnitMappings(count);
     if (unitMappings) {
       for (let i = 0; i < visibleCount; i++) {
@@ -959,9 +1252,10 @@ function animate() {
           }
         }
 
-        const color = unitId >= 0
-          ? new THREE.Color().setHSL((unitId % 100) / 100, 0.8, 0.6)
-          : new THREE.Color(1, 0, 0);
+        const color =
+          unitId >= 0
+            ? new THREE.Color().setHSL((unitId % 100) / 100, 0.8, 0.6)
+            : new THREE.Color(1, 0, 0);
 
         instancedMeshHigh.setColorAt(i, color);
         instancedMeshLow.setColorAt(i, color);
@@ -969,7 +1263,11 @@ function animate() {
       instancedMeshHigh.instanceColor.needsUpdate = true;
       instancedMeshLow.instanceColor.needsUpdate = true;
     }
-  } else if (lastShowUnitColors && instancedMeshHigh.instanceColor && instancedMeshLow.instanceColor) {
+  } else if (
+    lastShowUnitColors &&
+    instancedMeshHigh.instanceColor &&
+    instancedMeshLow.instanceColor
+  ) {
     const whiteColor = new THREE.Color(1, 1, 1);
     for (let i = 0; i < visibleCount; i++) {
       instancedMeshHigh.setColorAt(i, whiteColor);
@@ -977,7 +1275,7 @@ function animate() {
     }
     instancedMeshHigh.instanceColor.needsUpdate = true;
     instancedMeshLow.instanceColor.needsUpdate = true;
-    console.log('✓ Reset vertex colors to white (OFF mode)');
+    console.log("✓ Reset vertex colors to white (OFF mode)");
   }
 
   lastShowUnitColors = showUnitColors.value;
@@ -1023,15 +1321,25 @@ function drawTreeStructure(treeData) {
 
   treeData.forEach((rootNode) => drawNode(rootNode));
 }
+
+// シミュレーションを開始（群れ初期化 + アニメーションループ起動）
 function startSimulation() {
   reinitializeFlockNow();
   animate();
 }
 
 onMounted(() => {
+  // 初回マウント時にシステム調整値を WASM に反映
+  if (!tuningInitialized.value) {
+    updateSystemSettings(toRaw(systemSettings));
+    tuningInitialized.value = true;
+    applySystemSettingsToWasm();
+    saveToStorage();
+  }
+
   initThreeJS();
   loadBoidModel(() => {
-    console.log('Boid model loaded successfully.');
+    console.log("Boid model loaded successfully.");
 
     stats = new StatsGl({
       trackGPU: true,
@@ -1051,8 +1359,8 @@ onMounted(() => {
 
     const ensureStatsOverlay = () => {
       const statsElement =
-        (typeof stats?.domElement !== 'undefined' ? stats.domElement : null) ||
-        (typeof stats?.getDom === 'function' ? stats.getDom() : null) ||
+        (typeof stats?.domElement !== "undefined" ? stats.domElement : null) ||
+        (typeof stats?.getDom === "function" ? stats.getDom() : null) ||
         stats?.dom ||
         stats?.container ||
         stats?.wrapper ||
@@ -1067,19 +1375,19 @@ onMounted(() => {
     };
 
     const initPromise =
-      stats && typeof stats.init === 'function'
+      stats && typeof stats.init === "function"
         ? Promise.resolve(stats.init(statsInitTarget))
         : Promise.resolve();
 
     initPromise
       .then(() => {
-        if (typeof stats?.patchThreeRenderer === 'function') {
+        if (typeof stats?.patchThreeRenderer === "function") {
           stats.patchThreeRenderer(renderer);
         }
         ensureStatsOverlay();
       })
       .catch((error) => {
-        console.error('Failed to initialize stats-gl:', error);
+        console.error("Failed to initialize stats-gl:", error);
         ensureStatsOverlay();
       });
 
@@ -1087,9 +1395,23 @@ onMounted(() => {
     initBackgroundAudioPlayback();
   });
 
-  window.addEventListener('keydown', handleKeydown);
+  window.addEventListener("keydown", handleKeydown);
 });
 
+// グローバル調整値の変更を監視し、wasm 側へ逐次反映する。
+watch(
+  systemSettings,
+  () => {
+    if (!tuningInitialized.value) {
+      return;
+    }
+    applySystemSettingsToWasm();
+    saveToStorage();
+  },
+  { deep: true }
+);
+
+// 種族設定の変更を監視し、WASM 側へ反映 + 必要なら再初期化
 watch(
   settings,
   () => {
@@ -1099,7 +1421,7 @@ watch(
         try {
           wasmModule.setGlobalSpeciesParamsFromJS(vector, 1);
         } finally {
-          if (typeof vector.delete === 'function') {
+          if (typeof vector.delete === "function") {
             vector.delete();
           }
         }
@@ -1108,6 +1430,7 @@ watch(
 
     saveToStorage();
 
+    // 種族構成（個体数・捕食者フラグ）が変わった場合は群れ再初期化
     const signature = getSpeciesSignature(settings);
     if (signature !== lastSpeciesSignature) {
       scheduleFlockReinitialize();
@@ -1122,11 +1445,11 @@ watch(
     }
 
     const predators = getPredatorCount();
-    if (typeof boidInstancing.ensurePredatorMeshes === 'function') {
+    if (typeof boidInstancing.ensurePredatorMeshes === "function") {
       boidInstancing.ensurePredatorMeshes(predators);
     }
     const predatorMeshes =
-      typeof boidInstancing.getPredatorMeshes === 'function'
+      typeof boidInstancing.getPredatorMeshes === "function"
         ? boidInstancing.getPredatorMeshes()
         : [];
     for (const mesh of predatorMeshes) {
@@ -1136,17 +1459,23 @@ watch(
   { deep: true }
 );
 
+// 設定をリセット（プリセットまたはデフォルトに戻す）
 function resetSettings(presetList) {
   if (Array.isArray(presetList) && presetList.length > 0) {
     applySettingsSnapshot(presetList);
   } else {
     resetToDefaults();
   }
+  updateSystemSettings(DEFAULT_TUNING_SETTINGS);
+  saveToStorage();
+  if (tuningInitialized.value) {
+    applySystemSettingsToWasm();
+  }
 }
 
-// Unit可視化の変更を監視
+// Unit 可視化の変更を監視（デバッグ用）
 watch(showUnits, (newValue) => {
-  console.log('showUnits changed to:', newValue);
+  console.log("showUnits changed to:", newValue);
   if (!newValue) {
     // Unit可視化をオフにした場合、既存の可視化要素をクリア
     clearUnitVisuals();
@@ -1155,7 +1484,12 @@ watch(showUnits, (newValue) => {
 
 // Unit表示モードの変更を監視
 watch([showUnitSpheres, showUnitLines], ([newSpheres, newLines]) => {
-  console.log('Unit display mode changed - Spheres:', newSpheres, 'Lines:', newLines);
+  console.log(
+    "Unit display mode changed - Spheres:",
+    newSpheres,
+    "Lines:",
+    newLines
+  );
   // 表示モードが変更されたら既存の表示をクリアして再描画
   if (showUnits.value) {
     clearUnitVisuals();
@@ -1212,5 +1546,92 @@ watch([showUnitSpheres, showUnitLines], ([newSpheres, newLines]) => {
 .add-species-button {
   margin-top: 10px;
   margin-bottom: 10px;
+}
+
+.tuning-settings {
+  pointer-events: none;
+  display: inline-block;
+  margin-top: 10px;
+}
+
+.tuning-settings * {
+  pointer-events: auto;
+}
+
+.tuning-settings .species-section {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 5px;
+  background-color: rgba(255, 255, 255, 0.05);
+  pointer-events: auto;
+  position: relative;
+  overflow: visible;
+  max-width: 100%;
+  width: fit-content;
+  min-width: 260px;
+}
+
+.tuning-settings .species-header {
+  padding: 10px;
+  font-weight: bold;
+  cursor: pointer;
+  background-color: rgba(255, 255, 255, 0.1);
+  border-radius: 5px 5px 0 0;
+  user-select: none;
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+}
+
+.tuning-settings .species-header:hover {
+  background-color: rgba(255, 255, 255, 0.15);
+}
+
+.tuning-settings .species-title {
+  flex: 1;
+}
+
+.tuning-settings .species-content {
+  padding: 10px;
+  pointer-events: auto;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.tuning-settings .setting-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+  width: 100%;
+}
+
+.tuning-settings .setting-row label {
+  width: 150px;
+  text-align: left;
+  margin-right: 10px;
+  flex-shrink: 0;
+  line-height: 1.3;
+}
+
+.tuning-settings .setting-row input[type="range"] {
+  width: 140px;
+  min-width: 100px;
+  max-width: 220px;
+  margin: 0 10px;
+}
+
+.tuning-settings .value-input {
+  width: 70px;
+  padding: 2px 4px;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+}
+
+.tuning-settings .value-input:focus {
+  outline: none;
+  border-color: #007bff;
+  box-shadow: 0 0 3px rgba(0, 123, 255, 0.3);
 }
 </style>

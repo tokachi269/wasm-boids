@@ -24,5 +24,6 @@ struct SpeciesParams {
   float bodyHeadLength = -0.15f; // 先端までの距離（正負は魚のローカル前方基準）
   float bodyTailLength = 0.33f; // 後端までの距離
   float bodyRadius = 0.035f;    // 直径0.07mの半径
-  bool isPredator = false;
+  float predatorAlertRadius = 1.0f; // 捕食者を察知して逃避を始める距離（種ごとに設定可能）
+  bool isPredator = false; // この種が捕食者かどうか
 };

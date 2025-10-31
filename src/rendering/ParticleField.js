@@ -7,7 +7,12 @@ const PARTICLE_BASE_SPREAD_MOBILE = new THREE.Vector3(16, 9, 18);
 const PARTICLE_BASE_MAX_DISTANCE_DESKTOP = PARTICLE_BASE_SPREAD_DESKTOP.z * 1.2;
 const PARTICLE_BASE_MAX_DISTANCE_MOBILE = PARTICLE_BASE_SPREAD_MOBILE.z * 1.2;
 // ワールド基底（流れ方向および左右上下の初期値）
-const DEFAULT_FLOW_DIR = new THREE.Vector3(1, 0, 0);
+const FLOW_TILT_DEGREES = 30; // 粒子の流れを水平から約30度下向きに傾ける
+const DEFAULT_FLOW_DIR = new THREE.Vector3(
+  Math.cos(THREE.MathUtils.degToRad(FLOW_TILT_DEGREES)),
+  -Math.sin(THREE.MathUtils.degToRad(FLOW_TILT_DEGREES)),
+  0
+);
 const DEFAULT_LAT1 = new THREE.Vector3(0, 0, 1);
 const DEFAULT_LAT2 = new THREE.Vector3(0, 1, 0);
 
