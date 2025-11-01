@@ -18,10 +18,10 @@
           リセット
         </button>
         <br />
-        <div class="settings tuning-settings">
-          <details class="species-section" open>
+        <div class="settings tuning-settings" >
+          <details class="species-section" :open="false">
             <summary class="species-header">
-              <span class="species-title">シミュレーション調整</span>
+              <span class="species-title">Adjustment</span>
             </summary>
             <div class="species-content">
               <div class="setting-row">
@@ -216,44 +216,51 @@ const wasmBridge = wasmModule ? new WasmtimeBridge(wasmModule) : null;
 // const getUnitCount = wasmModule.cwrap('getUnitCount', 'number', []);
 // const getUnitParentIndicesPtr = wasmModule.cwrap('getUnitParentIndicesPtr', 'number', []);
 
-function isLowSpecDevice() {
+function detectDeviceProfile() {
+  const profile = {
+    isMobile: false,
+    hasIntegratedGpu: false,
+  };
+
   if (typeof navigator === "undefined") {
-    return false;
+    return profile;
   }
-  
-  // モバイルデバイスの検出
-  const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
+
+  // モバイルデバイスを最優先で認識
+  profile.isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
     navigator.userAgent
   );
-  if (isMobile) {
-    return true;
+  if (profile.isMobile) {
+    return profile;
   }
-  
-  // Intel内蔵GPUの検出（ノートPC等）
+
+  // Intel内蔵GPU（ノートPCでのエントリーGPU）を検出
   try {
-    const canvas = document.createElement('canvas');
-    const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+    const canvas = document.createElement("canvas");
+    const gl = canvas.getContext("webgl2") || canvas.getContext("webgl");
     if (gl) {
-      const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+      const debugInfo = gl.getExtension("WEBGL_debug_renderer_info");
       if (debugInfo) {
         const renderer = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL);
         if (renderer && /intel/i.test(renderer)) {
-          console.log('Detected Intel integrated GPU:', renderer);
-          return true;
+          console.log("Detected Intel integrated GPU:", renderer);
+          profile.hasIntegratedGpu = true;
         }
       }
     }
-  } catch (e) {
-    console.warn('Failed to detect GPU:', e);
+  } catch (error) {
+    console.warn("Failed to inspect GPU characteristics:", error);
   }
-  
-  return false;
+
+  return profile;
 }
 
 function fetchTreeStructure() {
   return wasmBridge?.exportTreeStructure() ?? null;
 }
-const mobileBoidCount = isLowSpecDevice() ? 6000 : 10000;
+const deviceProfile = detectDeviceProfile();
+const useLowSpecPreset = deviceProfile.isMobile || deviceProfile.hasIntegratedGpu;
+const mobileBoidCount = useLowSpecPreset ? 6000 : 10000;
 
 const DEFAULT_SETTINGS = [
   {
@@ -421,16 +428,15 @@ const COUNT_REINIT_DELAY_MS = 400; // 個体数変更後の再初期化待機時
 function positionStatsOverlay(element) {
   if (!element) return;
   element.style.position = "fixed";
-  element.style.padding = "80px";
-  element.style.pointerEvents = "none";
-  element.style.display = "flex";
-  element.style.flexDirection = "column";
-  element.style.alignItems = "flex-end";
-  element.style.gap = "6px";
-  element.style.maxWidth = "200px";
-  element.style.width = "auto";
-  element.style.boxSizing = "border-box";
-  element.style.zIndex = 1000;
+  element.style.top = "0px";
+  element.style.right = "0px";
+  element.style.left = "auto";
+  element.style.bottom = "auto";
+  element.style.zIndex = "9999";
+  element.style.width = "270px";
+    element.style.height = "48px";
+  element.style.pointerEvents = "auto";
+  element.style.transform = "none";
 }
 
 // ツリーの最大深さを計算
@@ -532,7 +538,7 @@ function initThreeJS() {
 
   scene.add(dirLight);
   initParticleSystem();
-  if (!isLowSpecDevice()) {
+  if (!deviceProfile.isMobile) {
     fogPipeline?.dispose();
     fogPipeline = new FogPipeline(heightFogConfig);
     fogPipeline.init(renderer, scene, camera, width, height);
@@ -713,7 +719,7 @@ function initParticleSystem() {
     return;
   }
   if (!particleField) {
-    particleField = new ParticleField(isLowSpecDevice());
+  particleField = new ParticleField(useLowSpecPreset);
   }
   particleField.init(scene, renderer, camera, controls);
 }

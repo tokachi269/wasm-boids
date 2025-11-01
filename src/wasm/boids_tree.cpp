@@ -150,28 +150,6 @@ void BoidTree::setRenderPointersToWriteBuffers() {
                                      buf.orientationsWrite.data());
 }
 
-// ---- ツリー可視化 ----
-void printTree(const BoidUnit *node, int depth) {
-  if (!node)
-    return;
-
-  std::string indent(depth * 2, ' ');
-  // speciesIdを出す
-  std::string speciesIdsStr;
-  speciesIdsStr = node->speciesId;
-
-  logger::log(indent + "Level: " + std::to_string(node->level) +
-              " | Boids: " + std::to_string(node->indices.size()) +
-              " | Children: " + std::to_string(node->children.size()) +
-              " | Center: (" + std::to_string(node->center.x) + ", " +
-              std::to_string(node->center.y) + ", " +
-              std::to_string(node->center.z) + ")" +
-              " | Radius: " + std::to_string(node->radius) +
-              " | speciesIds: [" + std::to_string(node->speciesId) + "]");
-
-  for (const auto *child : node->children)
-    printTree(child, depth + 1);
-}
 void BoidTree::build(int maxPerUnit, int level) {
   // 既存の root を削除して再生成
   if (root) {

@@ -21,15 +21,12 @@ public:
     int id;            // 各 BoidUnit のユニークな ID
     BoidUnit* parent = nullptr; // 親ノードへのポインタ
     BoidUnit* topParent = nullptr; // 親ノードへのポインタ
-    static constexpr int MAX_BOIDS = 16;     // Boid数の上限（local index）
     int speciesId = -1;
     SoABuffers *buf = nullptr;
-    std::vector<int> indices;
 
     std::vector<BoidUnit *> children;
     glm::vec3 center{}, averageVelocity{};
     float radius = 0.0f;
-    int level = 0;
     int frameCount = 0;
 
     BoidUnit() : id(nextId++) {
