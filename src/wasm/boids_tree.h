@@ -6,17 +6,23 @@
 #include "boid.h"
 #include "species_params.h"
 #include "boids_buffers.h"
+#include "spatial_index.h"
 
-class BoidTree
+class BoidTree : public SpatialIndex
 {
 public:
     static BoidTree& instance() {
         static BoidTree instance; // シングルトンインスタンス
         return instance;
     }
+    struct LeafCacheEntry {
+        BoidUnit *node;
+        BoidUnit *parent;
+    };
+
     BoidUnit *root;
     int frameCount = 0;
-    std::vector<BoidUnit *> leafCache;
+    std::vector<LeafCacheEntry> leafCache;
     int splitIndex = 0;
     int mergeIndex = 0;
     int maxBoidsPerUnit = 16;
@@ -36,9 +42,8 @@ public:
     void setFlockSize(int newSize, float posRange, float velRange);
     void initializeBoids(const std::vector<SpeciesParams> &speciesParamsList, float posRange, float velRange);
     void initializeBoidMemories(const std::vector<SpeciesParams> &speciesParamsList);
-    void build(int maxPerUnit = 16, int level = 0);
-    void buildRecursive(BoidUnit *node, const std::vector<int> &indices, int maxPerUnit, int level);
-    BoidUnit *findParent(BoidUnit *node, BoidUnit *target);
+    void build(int maxPerUnit = 16);
+    void buildRecursive(BoidUnit *node, const std::vector<int> &indices, int maxPerUnit);
     void update(float dt = 1.0f);
     void trySplitRecursive(BoidUnit *node);
     // バッファ更新
@@ -52,10 +57,21 @@ public:
     void setGlobalSpeciesParams(const SpeciesParams &params);
     void rebuildTreeWithUnits(BoidUnit *node,
                               const std::vector<BoidUnit *> &units,
-                              int maxPerUnit, int level);
+                              int maxPerUnit);
+
+    // SpatialIndex implementation
+    void forEachLeaf(const LeafVisitor &visitor) const override;
+    void forEachLeafIntersectingSphere(const glm::vec3 &center, float radius,
+                                       const LeafVisitor &visitor) const override;
 
 private:
     void returnNodeToPool(BoidUnit* node);
+    void collectLeavesForCache(BoidUnit *node, BoidUnit *parent);
+    void forEachLeafRecursive(const BoidUnit *node, const LeafVisitor &visitor) const;
+    void forEachLeafIntersectingSphereRecursive(const BoidUnit *node,
+                                                const glm::vec3 &center,
+                                                float radius,
+                                                const LeafVisitor &visitor) const;
     // レンダリング用ポインタを読み取りバッファに設定（描画時に使用）
     void setRenderPointersToReadBuffers();
     // レンダリング用ポインタを書き込みバッファに設定（デバッグ用）
