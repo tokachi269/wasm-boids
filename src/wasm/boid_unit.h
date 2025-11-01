@@ -2,60 +2,45 @@
 #define GLM_ENABLE_EXPERIMENTAL
 
 #include <vector>
-#include <bitset>
-#include <unordered_map>
-#include <array>
+#include <cstddef>
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/norm.hpp>
-#include <glm/gtx/rotate_vector.hpp>
-
-#include "boid.h"
-#include "species_params.h"
 
 struct SoABuffers;
+class LbvhIndex;
 
 class BoidUnit
 {
 public:
     static int nextId; // 次の ID を管理する静的変数
     int id;            // 各 BoidUnit のユニークな ID
-    int speciesId = -1;
     SoABuffers *buf = nullptr;
 
-    std::vector<BoidUnit *> children;
     std::vector<int> indices;        // このユニットが保持する Boid のグローバルインデックス
+    std::vector<BoidUnit *> children; // KD木時代の互換用。LBVH移行後は空のまま使用。
     glm::vec3 center{}, averageVelocity{};
     float radius = 0.0f;
     int frameCount = 0;
+    int speciesId = -1;
 
-    BoidUnit() : id(nextId++) {
-        // cohesionMemoriesは中央バッファで管理
-    }
+    BoidUnit();
+    ~BoidUnit() = default;
 
-    // デストラクタ：プールシステムを使用するため、childrenの削除は行わない
-    ~BoidUnit() {
-        // プールシステムを使用するため、childrenの削除は BoidTree が管理
-        children.clear();
-    }
-
-    int getMaxID() const;
-    bool isBoidUnit() const;
-    void computeBoundingSphere();
-    void computeBoidInteraction(float dt);
-    void applyInterUnitInfluence(BoidUnit *other, float dt = 1.0f);
-    void updateRecursive(float dt = 1.0f);
-    bool needsSplit(float splitRadius = 40.0f, float directionVarThresh = 0.5f, int maxBoids = 64) const;
-    std::vector<BoidUnit *> split(int numSplits = 2);
-    std::vector<BoidUnit *> splitByClustering(int numClusters = 4);
-    void splitInPlace(int maxBoids = 64);
-    bool canMergeWith(const BoidUnit &other, float mergeDist = 60.0f, float velThresh = 0.5f, float maxRadius = 120.0f, int maxBoids = 32) const;
-    void mergeWith(const BoidUnit &other);
+    bool isBoidUnit() const; // 子を持たない場合に葉扱い
+    bool needsSplit(float radiusThreshold, float densityThreshold,
+                    int maxPerUnit) const;
+    void splitInPlace(int maxPerUnit);
+    bool canMergeWith(const BoidUnit &other) const;
     void mergeWith(BoidUnit *other);
-    void addRepulsionToAllBoids(BoidUnit *unit, const glm::vec3 &repulsion);
-    glm::vec3 fixRoll(const glm::vec3 &direction);
+
+    void computeBoundingSphere();
     static glm::quat dirToQuatRollZero(const glm::vec3 &forward);
-    void applyPredatorInfluence(int gIdx, glm::vec3 &acceleration, const glm::vec3 &position);
     static float easeOut(float t);
 };
 
-void printTree(const BoidUnit *node, int depth = 0);
+void computeBoidInteractionsRange(SoABuffers &buf, const LbvhIndex &index,
+                                  int begin, int end, float dt);
+
+void updateBoidKinematicsRange(SoABuffers &buf, int begin, int end,
+                               float dt);

@@ -3,6 +3,7 @@
 #include <vector>
 #include <cstdint>
 #include "boid_unit.h"
+#include "lbvh_index.h"
 #include "boid.h"
 #include "species_params.h"
 #include "boids_buffers.h"
@@ -30,6 +31,8 @@ public:
 
     // BoidUnit プール
     std::stack<BoidUnit*> unitPool;
+
+    LbvhIndex lbvhIndex_{32};
     
     BoidTree();
     ~BoidTree();
@@ -44,6 +47,8 @@ public:
     void initializeBoidMemories(const std::vector<SpeciesParams> &speciesParamsList);
     void build(int maxPerUnit = 16);
     void buildRecursive(BoidUnit *node, const std::vector<int> &indices, int maxPerUnit);
+    SpatialIndex &spatialIndex();
+    const SpatialIndex &spatialIndex() const;
     void update(float dt = 1.0f);
     void trySplitRecursive(BoidUnit *node);
     // バッファ更新

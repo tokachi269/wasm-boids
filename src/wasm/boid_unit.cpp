@@ -5,18 +5,13 @@
 #include "spatial_query.h"
 #include <algorithm>
 #include <cmath>
-#include <future>
 #include <glm/glm.hpp>
 #include <glm/gtc/random.hpp>
 #include <glm/gtx/norm.hpp>
 #include <glm/gtx/quaternion.hpp>
 #include <glm/gtx/rotate_vector.hpp>
 #include <glm/gtx/string_cast.hpp>
-#include <stack>
 #include <utility>
-#include <vector>
-
-bool BoidUnit::isBoidUnit() const { return children.empty(); }
 
 /**
  * 小角度近似を使用した軽量回転関数。
@@ -48,8 +43,8 @@ struct CapsuleSegment {
   float radius; // 体の半径
 };
 
-// 姿勢クォータニオンから前方ベクトルを取り出す。数値が崩れた場合は Z+
-// にフォールバック。
+// 姿勢クォータニオンから前方ベクトルを取り出す。
+// 数値が崩れた場合は Z+ にフォールバック。
 inline glm::vec3 forwardFromOrientation(const glm::quat &q) {
   glm::vec3 forward = glm::rotate(q, glm::vec3(0.0f, 0.0f, 1.0f));
   float len2 = glm::length2(forward);
@@ -314,216 +309,151 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
  * - 階層構造内でユニットの境界を計算する際に使用。
  */
 void BoidUnit::computeBoundingSphere() {
-  if (isBoidUnit()) {
-    if (indices.empty())
-      return;
-
-    // 中心を計算
+  if (!buf || indices.empty()) {
     center = glm::vec3(0.0f);
-    for (int gIdx : indices)
-      center += buf->positions[gIdx];
-    center /= static_cast<float>(indices.size());
+    radius = 0.0f;
+    return;
+  }
 
-    // 平均距離と分散を計算
-    float sum = 0.0f, sum2 = 0.0f;
-    for (int gIdx : indices) {
-      float d = glm::distance(center, buf->positions[gIdx]);
-      sum += d;
-      sum2 += d * d;
+  center = glm::vec3(0.0f);
+  for (int gIdx : indices) {
+    center += buf->positions[gIdx];
+  }
+  center /= static_cast<float>(indices.size());
+
+  float sum = 0.0f;
+  float sum2 = 0.0f;
+  for (int gIdx : indices) {
+    float d = glm::distance(center, buf->positions[gIdx]);
+    sum += d;
+    sum2 += d * d;
+  }
+  float mean = sum / static_cast<float>(indices.size());
+  float var = sum2 / static_cast<float>(indices.size()) - mean * mean;
+  float stddev = var > 0.0f ? std::sqrt(var) : 0.0f;
+
+  radius = mean + stddev;
+}
+const glm::vec3 predatorCenter = predatorUnit->center;
+
+// SpatialIndex を介して捕食者の影響範囲と重なる Boid を直接列挙
+for (int idxA : predatorUnit->indices) {
+  spatial_query::forEachBoidInSphere(
+      BoidTree::instance().spatialIndex(), predatorCenter, predatorEffectRange,
+      [&](int idxB, const BoidUnit *leafNode) {
+        if (leafNode && leafNode == predatorUnit) {
+          return;
+        }
+        if (idxA == idxB) {
+          return;
+        }
+
+        const int sidB = soa->speciesIds[idxB];
+        if (globalSpeciesParams[sidB].isPredator) {
+          return;
+        }
+
+        const SpeciesParams &preyParams = globalSpeciesParams[sidB];
+        float alertRadius = std::max(preyParams.predatorAlertRadius, 0.0f);
+        if (alertRadius <= 0.0f) {
+          alertRadius = maxAlertRadius;
+        }
+        const float alertRadiusSq = alertRadius * alertRadius;
+
+        const glm::vec3 toTarget = soa->positions[idxB] - soa->positions[idxA];
+        const float d2 = glm::dot(toTarget, toTarget);
+        if (d2 >= alertRadiusSq) {
+          return;
+        }
+
+        const glm::vec3 escapeDir = glm::normalize(toTarget);
+        const float normalizedDistance =
+            std::sqrt(std::max(d2, 1e-6f)) / alertRadius;
+        float escapeStrength =
+            glm::clamp(1.0f - normalizedDistance, 0.0f, 1.0f);
+        escapeStrength =
+            escapeStrength * escapeStrength * (3.0f - 2.0f * escapeStrength);
+
+        soa->predatorInfluences[idxB] += escapeDir * escapeStrength * 5.0f;
+        soa->predatorThreats[idxB] =
+            std::max(soa->predatorThreats[idxB], escapeStrength);
+
+        const float stressLevel =
+            glm::clamp(0.4f + escapeStrength * 0.6f, 0.0f, 1.0f);
+        soa->stresses[idxB] = std::max(soa->stresses[idxB], stressLevel);
+      });
+}
+
+return true;
+}
+;
+
+bool predatorHandled = applyPredatorSweep(this);
+predatorHandled = applyPredatorSweep(other) || predatorHandled;
+
+// if (!predatorHandled && frameCount % 6 != 0) {
+//   // 再構築頻度でない場合は通常の相互作用をスキップ
+//   return;
+// }
+
+// 通常の影響処理（非捕食者または通常時）
+if (!indices.empty() && !other->indices.empty()) {
+  for (int idxA : indices) {
+    glm::vec3 sumVel = glm::vec3(0.00001f);
+    glm::vec3 sumPos = glm::vec3(0.00001f);
+    glm::vec3 sep = glm::vec3(0.00001f);
+    int cnt = 0;
+    int sidA = speciesId;
+    for (int idxB : other->indices) {
+      // 種族IDチェック: 異なる種族同士では群れ行動を行わない
+      int sidB = other->buf->speciesIds[idxB];
+      if (sidA != sidB) {
+        continue; // 異なる種族とは群れ行動しない
+      }
+
+      glm::vec3 diff = buf->positions[idxA] - other->buf->positions[idxB];
+      float d2 = glm::dot(diff, diff);
+
+      if (d2 < 100.0f && d2 > 1e-4f) {
+        float d = std::sqrt(d2);
+        float w = std::max(0.0f, 1.0f - (d / 40.0f));
+
+        sumVel += other->buf->velocities[idxB] * w;
+        sumPos += other->buf->positions[idxB] * w;
+        sep += (diff / (d2 + 1.0f)) * w;
+        ++cnt;
+      }
     }
-    float mean = sum / static_cast<float>(indices.size());
-    float var = sum2 / static_cast<float>(indices.size()) - mean * mean;
-    float stddev = var > 0.0f ? std::sqrt(var) : 0.0f;
+    if (cnt > 0) {
+      // ストレス状態に応じた段階的動作制御
+      float currentStress = buf->stresses[idxA];
+      float cohesionMultiplier = 1.0f;
+      float speedMultiplier = 1.0f;
 
-    // 平均 + α × 標準偏差（α = 1.0）で半径を決定
-    radius = mean + 1.0f * stddev;
-  } else {
-    if (children.empty())
-      return; // 子ノードの中心を計算 - パフォーマンス最適化
-    center = glm::vec3(0.0f);
-    const size_t childrenSize = children.size();
-    const BoidUnit *const *childrenData = children.data();
+      // 逃走後の再結集フェーズ（中程度ストレス時）
+      if (currentStress > 0.2f && currentStress < 0.9f) {
+        cohesionMultiplier = 5.0f; // 凝集力を3倍に強化
+        speedMultiplier = 1.5f;    // 移動速度を1.5倍に向上
+      }
+      // 高ストレス時は逃走優先（凝集力抑制）
+      else if (currentStress >= 0.9f) {
+        cohesionMultiplier = 0.5f; // 凝集力を大幅に抑制
+      }
 
-    for (size_t i = 0; i < childrenSize; ++i) {
-      center += childrenData[i]->center;
+      buf->accelerations[idxA] +=
+          (sumVel / float(cnt) - buf->velocities[idxA]) *
+          globalSpeciesParams[sidA].alignment;
+      buf->accelerations[idxA] += (sumPos / float(cnt) - buf->positions[idxA]) *
+                                  globalSpeciesParams[sidA].cohesion *
+                                  cohesionMultiplier; // 凝集強化
+      buf->accelerations[idxA] += sep * globalSpeciesParams[sidA].separation;
+
+      // 再結集中の速度向上を後で適用するため、ストレス情報を保持
+      buf->stresses[idxA] =
+          glm::max(buf->stresses[idxA], speedMultiplier - 1.0f);
     }
-    center /= static_cast<float>(childrenSize);
-
-    // 子ノード中心までの平均距離 + 子ノード半径 - パフォーマンス最適化
-    float sum = 0.0f, sum2 = 0.0f;
-    for (size_t i = 0; i < childrenSize; ++i) {
-      const BoidUnit *child = childrenData[i];
-      float d = glm::distance(center, child->center) + child->radius;
-      sum += d;
-      sum2 += d * d;
-    }
-    float mean = sum / static_cast<float>(childrenSize);
-    float var = sum2 / static_cast<float>(childrenSize) - mean * mean;
-    float stddev = var > 0.0f ? std::sqrt(var) : 0.0f;
-
-    radius = mean + 1.0f * stddev;
   }
 }
-const int targetIndex = 50; // ログを出力する特定の Boid のインデックス
-
-/** * 他のユニットとの相互作用を計算し、加速度に影響を加える。
- *
- * @param other 他の BoidUnit へのポインタ
- *
- * 処理内容:
- * - **捕食者の場合**: 木構造を使って再帰的に獲物を探索し、捕食圧を適用
- * - **通常の場合**: ユニット間でBoidの相互作用を計算
- *
- * 機能:
- * - 捕食者の逃避反応とストレス計算
- * - ユニット間のBoid相互作用による分離・凝集・整列
- */
-void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
-  auto applyPredatorSweep = [&](BoidUnit *predatorUnit) -> bool {
-    if (!predatorUnit || !predatorUnit->isBoidUnit())
-      return false;
-
-    int predatorSid = predatorUnit->speciesId;
-    if (!globalSpeciesParams[predatorSid].isPredator)
-      return false;
-
-    if (predatorUnit->indices.empty())
-      return false;
-
-    // 全非捕食者種の警戒距離から最大値を決定してバウンディング判定で使用
-    float maxAlertRadius = 1.0f;
-    for (const auto &params : globalSpeciesParams) {
-      if (params.isPredator) {
-        continue;
-      }
-      maxAlertRadius =
-          std::max(maxAlertRadius, std::max(params.predatorAlertRadius, 0.0f));
-    }
-    const float predatorEffectRange = maxAlertRadius;
-
-    auto *soa = predatorUnit->buf;
-    const glm::vec3 predatorCenter = predatorUnit->center;
-
-    // SpatialIndex を介して捕食者の影響範囲と重なる Boid を直接列挙
-    for (int idxA : predatorUnit->indices) {
-      spatial_query::forEachBoidInSphere(
-          BoidTree::instance(), predatorCenter, predatorEffectRange,
-          [&](int idxB, const BoidUnit *leafNode) {
-            if (!leafNode || leafNode == predatorUnit) {
-              return;
-            }
-            if (idxA == idxB) {
-              return;
-            }
-
-            const int sidB = soa->speciesIds[idxB];
-            if (globalSpeciesParams[sidB].isPredator) {
-              return;
-            }
-
-            const SpeciesParams &preyParams = globalSpeciesParams[sidB];
-            float alertRadius = std::max(preyParams.predatorAlertRadius, 0.0f);
-            if (alertRadius <= 0.0f) {
-              alertRadius = maxAlertRadius;
-            }
-            const float alertRadiusSq = alertRadius * alertRadius;
-
-            const glm::vec3 toTarget =
-                soa->positions[idxB] - soa->positions[idxA];
-            const float d2 = glm::dot(toTarget, toTarget);
-            if (d2 >= alertRadiusSq) {
-              return;
-            }
-
-            const glm::vec3 escapeDir = glm::normalize(toTarget);
-            const float normalizedDistance =
-                std::sqrt(std::max(d2, 1e-6f)) / alertRadius;
-            float escapeStrength =
-                glm::clamp(1.0f - normalizedDistance, 0.0f, 1.0f);
-            escapeStrength = escapeStrength * escapeStrength *
-                             (3.0f - 2.0f * escapeStrength);
-
-            soa->predatorInfluences[idxB] +=
-                escapeDir * escapeStrength * 5.0f;
-            soa->predatorThreats[idxB] =
-                std::max(soa->predatorThreats[idxB], escapeStrength);
-
-            const float stressLevel =
-                glm::clamp(0.4f + escapeStrength * 0.6f, 0.0f, 1.0f);
-            soa->stresses[idxB] =
-                std::max(soa->stresses[idxB], stressLevel);
-          });
-    }
-
-    return true;
-  };
-
-  bool predatorHandled = applyPredatorSweep(this);
-  predatorHandled = applyPredatorSweep(other) || predatorHandled;
-
-  // if (!predatorHandled && frameCount % 6 != 0) {
-  //   // 再構築頻度でない場合は通常の相互作用をスキップ
-  //   return;
-  // }
-
-  // 通常の影響処理（非捕食者または通常時）
-  if (!indices.empty() && !other->indices.empty()) {
-    for (int idxA : indices) {
-      glm::vec3 sumVel = glm::vec3(0.00001f);
-      glm::vec3 sumPos = glm::vec3(0.00001f);
-      glm::vec3 sep = glm::vec3(0.00001f);
-      int cnt = 0;
-      int sidA = speciesId;
-      for (int idxB : other->indices) {
-        // 種族IDチェック: 異なる種族同士では群れ行動を行わない
-        int sidB = other->buf->speciesIds[idxB];
-        if (sidA != sidB) {
-          continue; // 異なる種族とは群れ行動しない
-        }
-
-        glm::vec3 diff = buf->positions[idxA] - other->buf->positions[idxB];
-        float d2 = glm::dot(diff, diff);
-
-        if (d2 < 100.0f && d2 > 1e-4f) {
-          float d = std::sqrt(d2);
-          float w = std::max(0.0f, 1.0f - (d / 40.0f));
-
-          sumVel += other->buf->velocities[idxB] * w;
-          sumPos += other->buf->positions[idxB] * w;
-          sep += (diff / (d2 + 1.0f)) * w;
-          ++cnt;
-        }
-      }
-      if (cnt > 0) {
-        // ストレス状態に応じた段階的動作制御
-        float currentStress = buf->stresses[idxA];
-        float cohesionMultiplier = 1.0f;
-        float speedMultiplier = 1.0f;
-
-        // 逃走後の再結集フェーズ（中程度ストレス時）
-        if (currentStress > 0.2f && currentStress < 0.9f) {
-          cohesionMultiplier = 5.0f; // 凝集力を3倍に強化
-          speedMultiplier = 1.5f;    // 移動速度を1.5倍に向上
-        }
-        // 高ストレス時は逃走優先（凝集力抑制）
-        else if (currentStress >= 0.9f) {
-          cohesionMultiplier = 0.5f; // 凝集力を大幅に抑制
-        }
-
-        buf->accelerations[idxA] +=
-            (sumVel / float(cnt) - buf->velocities[idxA]) *
-            globalSpeciesParams[sidA].alignment;
-        buf->accelerations[idxA] +=
-            (sumPos / float(cnt) - buf->positions[idxA]) *
-            globalSpeciesParams[sidA].cohesion * cohesionMultiplier; // 凝集強化
-        buf->accelerations[idxA] += sep * globalSpeciesParams[sidA].separation;
-
-        // 再結集中の速度向上を後で適用するため、ストレス情報を保持
-        buf->stresses[idxA] =
-            glm::max(buf->stresses[idxA], speedMultiplier - 1.0f);
-      }
-    }
-  }
 }
 
 /**
@@ -662,9 +592,10 @@ inline glm::quat BoidUnit::dirToQuatRollZero(const glm::vec3 &forward) {
  * - Fast-start吸引制御による群れの縁での強制凝集
  * - 捕食者の追跡ターゲット選択と更新
  */
-void BoidUnit::computeBoidInteraction(float dt) {
-  // 空間インデックス向けの境界情報を毎フレーム更新
-  computeBoundingSphere();
+void BoidUnit::computeBoidInteractionRange(std::size_t begin, std::size_t end,
+                                           float dt) {
+  if (begin >= end)
+    return;
 
   glm::vec3 separation;
   glm::vec3 alignment;
@@ -674,7 +605,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
   glm::vec3 vel;
   int sid = -1;
   // 軽量なランダム数生成（WASMでmt19937が使えないため）
-  static uint32_t rng_state = 1;
+  static thread_local uint32_t rng_state = 1;
   auto simple_rand = [&]() -> uint32_t {
     rng_state = rng_state * 1103515245 + 12345;
     return (rng_state >> 16) & 0x7fff;
@@ -685,17 +616,18 @@ void BoidUnit::computeBoidInteraction(float dt) {
   // 事前計算しておく定数／準備
   // -----------------------------------------------
   // 非ゼロ判定用イプシロン
-  constexpr float EPS =
-      1e-8f; // 候補距離を入れてソート/部分ソートするための領域
+  // 候補距離を入れてソート/部分ソートするための領域
+  constexpr float EPS = 1e-8f;
   std::vector<std::pair<float, int>> candidates;
-  if (candidates.capacity() < indices.size()) {
-    candidates.reserve(indices.size());
+  const std::size_t sliceSize = end - begin;
+  if (candidates.capacity() < sliceSize) {
+    candidates.reserve(sliceSize);
   }
 
   // -----------------------------------------------
   // 各 Boid（leafノード内）ごとの反復
   // -----------------------------------------------
-  for (size_t index = 0; index < indices.size(); ++index) {
+  for (std::size_t index = begin; index < end; ++index) {
     // -------------------------------------------------------
     // 1. 初期化フェーズ
     //    - 加速度計算用に separation/alignment/cohesion をリセット
@@ -704,8 +636,8 @@ void BoidUnit::computeBoidInteraction(float dt) {
     separation = glm::vec3(0.00001f);
     alignment = glm::vec3(0.00001f);
     cohesion = glm::vec3(0.00001f);
-    sid = speciesId;
     gIdx = indices[index];
+    sid = buf->speciesIds[gIdx];
     pos = buf->positions[gIdx];
     vel = buf->velocities[gIdx];
     const SpeciesParams &selfParams = globalSpeciesParams[sid];
@@ -756,9 +688,9 @@ void BoidUnit::computeBoidInteraction(float dt) {
 
         // SpatialIndex を通じて周辺の非捕食者を直接収集
         spatial_query::forEachBoidInSphere(
-            BoidTree::instance(), pos, targetSearchRadius,
+            BoidTree::instance().spatialIndex(), pos, targetSearchRadius,
             [&](int candidateIdx, const BoidUnit *leafNode) {
-              if (leafNode == this) {
+              if (leafNode && leafNode == this) {
                 return;
               }
               if (candidateIdx == gIdx) {
@@ -973,12 +905,12 @@ void BoidUnit::computeBoidInteraction(float dt) {
 
     if (neighborCount > 0) {
       // 近傍のストレスを集約し、逃走の波を伝搬させる。
-    float selfStress = buf->stresses[gIdx];
-    float stressGainSum = 0.0f;
-    float stressWeightSum = 0.0f;
-    const float propagationRadius =
-      glm::max(globalSpeciesParams[sid].cohesionRange, 1.0f);
-    const float propagationBlend = 0.7f; // dt を掛けて応答速度を調整
+      float selfStress = buf->stresses[gIdx];
+      float stressGainSum = 0.0f;
+      float stressWeightSum = 0.0f;
+      const float propagationRadius =
+          glm::max(globalSpeciesParams[sid].cohesionRange, 1.0f);
+      const float propagationBlend = 0.7f; // dt を掛けて応答速度を調整
 
       glm::vec3 sumSep = glm::vec3(0.0f);
       glm::vec3 sumAlign = glm::vec3(0.0f);
@@ -1098,14 +1030,14 @@ void BoidUnit::computeBoidInteraction(float dt) {
         wSep = glm::clamp(wSep, 0.0f, 1.0f);
         sumSep += (diff * wSep) * (-1.0f);
 
-    float wCoh = glm::clamp(dist / globalSpeciesParams[sid].cohesionRange,
-                0.0f, 1.0f);
-    // stress に応じて凝集強度を増加（再結集フェーズ強化）
-    float stressFactor = 1.0f + selfStress * 0.2f;
-    // threat レベルに応じた凝集ブースト（逃避中も群れを保つ）
-    float cohesionThreatFactor =
-      1.0f + gSimulationTuning.cohesionBoost * threatLevel;
-    wCoh *= stressFactor * cohesionThreatFactor;
+        float wCoh = glm::clamp(dist / globalSpeciesParams[sid].cohesionRange,
+                                0.0f, 1.0f);
+        // stress に応じて凝集強度を増加（再結集フェーズ強化）
+        float stressFactor = 1.0f + selfStress * 0.2f;
+        // threat レベルに応じた凝集ブースト（逃避中も群れを保つ）
+        float cohesionThreatFactor =
+            1.0f + gSimulationTuning.cohesionBoost * threatLevel;
+        wCoh *= stressFactor * cohesionThreatFactor;
 
         sumCoh += buf->positions[gNeighbor] * wCoh;
 
@@ -1129,9 +1061,9 @@ void BoidUnit::computeBoidInteraction(float dt) {
         // threat レベルが高いほど分離を弱める（群れを保つ）
         float separationThreatFactor =
             glm::mix(1.0f, gSimulationTuning.separationMinFactor, threatLevel);
-        totalSeparation = (sumSep * (1.0f / glm::sqrt(sepLen2))) *
-                          (globalSpeciesParams[sid].separation *
-                           separationThreatFactor);
+        totalSeparation =
+            (sumSep * (1.0f / glm::sqrt(sepLen2))) *
+            (globalSpeciesParams[sid].separation * separationThreatFactor);
       }
 
       // 凝集の最終ベクトル
@@ -1153,9 +1085,9 @@ void BoidUnit::computeBoidInteraction(float dt) {
         // threat レベルに応じた整列ブースト（逃避時も速度を揃えやすく）
         float alignmentThreatFactor =
             1.0f + gSimulationTuning.alignmentBoost * threatLevel;
-        totalAlignment = (aliDir * (1.0f / glm::sqrt(aliLen2))) *
-                         (globalSpeciesParams[sid].alignment *
-                          alignmentThreatFactor);
+        totalAlignment =
+            (aliDir * (1.0f / glm::sqrt(aliLen2))) *
+            (globalSpeciesParams[sid].alignment * alignmentThreatFactor);
       }
 
       // --- 回転トルクによる向き補正（alignment方向へ向ける） ---
@@ -1203,300 +1135,6 @@ void BoidUnit::computeBoidInteraction(float dt) {
   }
 }
 
-/**
- * 分割が必要か判定する。
- *
- * 判定条件:
- * - Boid数が上限を超過
- * - 半径が閾値を超過
- * - 方向のバラつきが閾値を超過
- */
-bool BoidUnit::needsSplit(float splitRadius, float directionVarThresh,
-                          int maxBoids) const {
-  if (static_cast<int>(indices.size()) > maxBoids)
-    return true;
-  if (radius > splitRadius)
-    return true;
-
-  // 方向のバラつき判定
-  if (indices.size() > 1) {
-    glm::vec3 avg = glm::vec3(0.0f);
-    for (int gIdx : indices)
-      avg += glm::normalize(buf->velocities[gIdx]);
-    avg /= static_cast<float>(indices.size());
-
-    float var = 0.0f;
-    for (int gIdx : indices)
-      var += glm::length(glm::normalize(buf->velocities[gIdx]) - avg);
-    var /= static_cast<float>(indices.size());
-
-    if (var > directionVarThresh)
-      return true;
-  }
-  return false;
-}
-
-/**
- * 最大分散軸で指定数に分割する。
- *
- * 処理内容:
- * - 最大分散軸を特定
- * - 等間隔でグループ分け
- * - 各グループに新しいBoidUnitを作成
- */
-std::vector<BoidUnit *> BoidUnit::split(int numSplits) {
-  if (numSplits < 2)
-    numSplits = 2;
-  if (static_cast<int>(indices.size()) < numSplits)
-    numSplits = static_cast<int>(indices.size());
-
-  // 最大分散軸を求める
-  int axis = 0;
-  float maxVar = 0.0f;
-  for (int ax = 0; ax < 3; ++ax) {
-    float mean = 0.0f, var = 0.0f;
-    for (int gIdx : indices)
-      mean += (ax == 0   ? buf->positions[gIdx].x
-               : ax == 1 ? buf->positions[gIdx].y
-                         : buf->positions[gIdx].z);
-    mean /= static_cast<float>(indices.size());
-
-    for (int gIdx : indices) {
-      float v = (ax == 0   ? buf->positions[gIdx].x
-                 : ax == 1 ? buf->positions[gIdx].y
-                           : buf->positions[gIdx].z) -
-                mean;
-      var += v * v;
-    }
-    if (var > maxVar) {
-      maxVar = var;
-      axis = ax;
-    }
-  }
-
-  // min / max を取り等間隔で分ける
-  float minVal = std::numeric_limits<float>::max();
-  float maxVal = -std::numeric_limits<float>::max();
-  for (int gIdx : indices) {
-    float v = (axis == 0   ? buf->positions[gIdx].x
-               : axis == 1 ? buf->positions[gIdx].y
-                           : buf->positions[gIdx].z);
-    minVal = std::min(minVal, v);
-    maxVal = std::max(maxVal, v);
-  }
-
-  float interval = (maxVal - minVal) / numSplits;
-  std::vector<std::vector<int>> groups(numSplits);
-  for (int gIdx : indices) {
-    float v = (axis == 0   ? buf->positions[gIdx].x
-               : axis == 1 ? buf->positions[gIdx].y
-                           : buf->positions[gIdx].z);
-    int idx = std::min(numSplits - 1, int((v - minVal) / interval));
-    groups[idx].push_back(gIdx);
-  }
-
-  // 子 BoidUnit を生成
-  std::vector<BoidUnit *> result;
-  for (const auto &g : groups) {
-    if (g.empty())
-      continue;
-    BoidUnit *u = new BoidUnit();
-    u->buf = buf;   // 中央バッファ共有
-    u->indices = g; // インデックスだけ保持
-    u->computeBoundingSphere();
-    result.push_back(u);
-  }
-  return result;
-}
-
-/**
- * 現在のユニットを分割し子ノードとして配置する。
- *
- * 処理内容:
- * - 分割必要性を判定
- * - クラスタリングで4分割
- * - 自身は中間ノードに変更
- */
-void BoidUnit::splitInPlace(int maxBoids) {
-  if (!needsSplit(80.0f, 0.5f, maxBoids))
-    return;
-
-  auto splits = splitByClustering(4);
-
-  indices.clear();
-  children = std::move(splits);
-
-  computeBoundingSphere();
-}
-
-/**
- * k-means風クラスタリングでindicesをグループ化する。
- *
- * 処理内容:
- * - 初期中心を先頭から選択
- * - 5回の反復でクラスタリング実行
- * - 各グループに新しいBoidUnitを作成
- */
-std::vector<BoidUnit *> BoidUnit::splitByClustering(int numClusters) {
-  if ((int)indices.size() < numClusters)
-    numClusters = static_cast<int>(indices.size());
-  if (numClusters < 2)
-    numClusters = 2;
-
-  // 初期中心をランダム（ここでは先頭から）に選択
-  std::vector<glm::vec3> centers;
-  for (int k = 0; k < numClusters; ++k)
-    centers.push_back(buf->positions[indices[k]]);
-
-  std::vector<int> assign(indices.size(), 0);
-
-  // 反復回数は少なめに固定
-  for (int iter = 0; iter < 5; ++iter) {
-    // 割り当て
-    for (size_t i = 0; i < indices.size(); ++i) {
-      int gI = indices[i];
-      float best = std::numeric_limits<float>::max();
-      int bestK = 0;
-      for (int k = 0; k < numClusters; ++k) {
-        float d = glm::distance(buf->positions[gI], centers[k]);
-        if (d < best) {
-          best = d;
-          bestK = k;
-        }
-      }
-      assign[i] = bestK;
-    }
-
-    // 中心を再計算
-    std::vector<glm::vec3> newCenters(numClusters, glm::vec3(0.0f));
-    std::vector<int> counts(numClusters, 0);
-    for (size_t i = 0; i < indices.size(); ++i) {
-      int gI = indices[i];
-      newCenters[assign[i]] += buf->positions[gI];
-      counts[assign[i]]++;
-    }
-    for (int k = 0; k < numClusters; ++k) {
-      if (counts[k] > 0)
-        newCenters[k] /= static_cast<float>(counts[k]);
-      else
-        newCenters[k] = centers[k];
-    }
-    centers.swap(newCenters);
-  }
-
-  // グループごとに global index をまとめる
-  std::vector<std::vector<int>> groups(numClusters);
-  for (size_t i = 0; i < indices.size(); ++i)
-    groups[assign[i]].push_back(indices[i]);
-
-  // 各グループから BoidUnit を生成
-  std::vector<BoidUnit *> result;
-  for (const auto &g : groups) {
-    if (g.empty())
-      continue;
-    auto *u = new BoidUnit();
-    u->buf = buf;   // 中央バッファを共有
-    u->indices = g; // インデックスだけ保持
-    u->speciesId = speciesId; // 親ノードの speciesId を継承
-
-    // buf->speciesIds に反映
-    for (int gIdx : g) {
-      buf->speciesIds[gIdx] = speciesId;
-    }
-
-    u->computeBoundingSphere();
-    result.push_back(u);
-  }
-  return result;
-}
-
-/**
- * 指定されたユニットと結合可能か判定する。
- *
- * 判定条件:
- * - 中心間距離が閾値以下
- * - 平均速度差が閾値以下
- * - 結合後のBoid数が上限以下
- * - 結合後の半径が上限以下
- */
-bool BoidUnit::canMergeWith(const BoidUnit &other, float mergeDist,
-                            float velThresh, float maxRadius,
-                            int maxBoids) const {
-  // 中心間距離
-  if (glm::distance(center, other.center) > mergeDist)
-    return false;
-
-  // 平均速度差
-  if (glm::length(averageVelocity - other.averageVelocity) > velThresh)
-    return false;
-
-  // Boid 数上限
-  if (static_cast<int>(indices.size() + other.indices.size()) > maxBoids)
-    return false;
-
-  // 結合後の中心
-  glm::vec3 newCenter =
-      (center * static_cast<float>(indices.size()) +
-       other.center * static_cast<float>(other.indices.size())) /
-      static_cast<float>(indices.size() + other.indices.size());
-
-  // 結合後の半径
-  float newRadius = 0.0f;
-  for (int gIdx : indices)
-    newRadius =
-        std::max(newRadius, glm::distance(newCenter, buf->positions[gIdx]));
-  for (int gIdx : other.indices)
-    newRadius =
-        std::max(newRadius, glm::distance(newCenter, buf->positions[gIdx]));
-
-  return newRadius <= maxRadius;
-}
-
-/**
- * 他ユニットを結合する（値渡し版）。
- *
- * 処理内容:
- * - indicesを結合
- * - speciesIdを更新
- * - バウンディングスフィアを再計算
- */
-void BoidUnit::mergeWith(const BoidUnit &other) {
-  // indices を結合
-  indices.insert(indices.end(), other.indices.begin(), other.indices.end());
-
-  // buf->speciesIds を更新
-  for (int gIdx : other.indices) {
-    buf->speciesIds[gIdx] = speciesId;
-  }
-
-  computeBoundingSphere();
-}
-
-/**
- * 他ユニットを結合する（ポインタ版）。
- *
- * 処理内容:
- * - indicesを結合
- * - speciesIdを更新
- * - 自ノードを葉に変更
- * - 呼び出し側での木構造更新を前提
- */
-void BoidUnit::mergeWith(BoidUnit *other) {
-  // indices を結合
-  indices.insert(indices.end(), other->indices.begin(), other->indices.end());
-
-  // buf->speciesIds を更新
-  for (int gIdx : other->indices) {
-    buf->speciesIds[gIdx] = speciesId; // 自ノードの speciesId を適用
-  }
-
-  // 自ノードを葉に戻す
-  children.clear();
-
-  // バウンディングスフィアを再計算
-  computeBoundingSphere();
-}
-
 // 兄弟ノード配下の全 Boid に反発を適用
 void BoidUnit::addRepulsionToAllBoids(BoidUnit *unit,
                                       const glm::vec3 &repulsion) {
@@ -1511,22 +1149,4 @@ void BoidUnit::addRepulsionToAllBoids(BoidUnit *unit,
     for (auto *c : unit->children)
       addRepulsionToAllBoids(c, repulsion);
   }
-}
-
-int BoidUnit::getMaxID() const {
-  int maxID = -1; // 初期値を -1 に設定（ID が負の値になることはないと仮定）
-  for (int idx : indices) {
-    if (buf->ids[idx] > maxID) {
-      maxID = buf->ids[idx];
-    }
-  }
-
-  // 子ノードがある場合、再帰的に最大 ID を取得
-  for (const auto *child : children) {
-    if (child) {
-      maxID = std::max(maxID, child->getMaxID());
-    }
-  }
-
-  return maxID;
 }

@@ -1,9 +1,12 @@
+#pragma once
+
 #include "boid.h"
 #include <bitset>
 #include <boost/align/aligned_allocator.hpp>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <unordered_map>
+#include <array>
 #include <vector>
 
 template <typename T> using A16 = boost::alignment::aligned_allocator<T, 16>;
@@ -37,6 +40,8 @@ struct SoABuffers {
   std::vector<std::vector<float>>
       boidCohesionMemories;                         // dt累積（-1.0fで未使用）
   std::vector<std::bitset<16>> boidActiveNeighbors; // 使用中slotのインデックス
+  std::vector<std::array<int, 16>>
+    boidNeighborIndices; // 各slotに対応するグローバルBoid index
 
   void reserveAll(std::size_t n) {
     positions.reserve(n);
@@ -57,6 +62,7 @@ struct SoABuffers {
     predatorThreats.reserve(n);
     boidCohesionMemories.reserve(n);
     boidActiveNeighbors.reserve(n);
+  boidNeighborIndices.reserve(n);
   }
 
   // Boid 数に合わせてフラグをクリア/サイズ調整
@@ -79,6 +85,10 @@ struct SoABuffers {
     predatorThreats.resize(n, 0.0f);
     boidCohesionMemories.resize(n);
     boidActiveNeighbors.resize(n);
+    boidNeighborIndices.resize(n);
+    for (auto &slots : boidNeighborIndices) {
+      slots.fill(-1);
+    }
   }
 
   // 書き込みバッファを読み取りバッファから同期（初期化時用）

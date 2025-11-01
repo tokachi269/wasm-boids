@@ -100,6 +100,7 @@ set(COMMON_SOURCES
     src/wasm/entry.cpp
     src/wasm/boid_unit.cpp
     src/wasm/boids_tree.cpp
+    src/wasm/lbvh_index.cpp
     src/wasm/main.cpp
     src/wasm/simulation_tuning.cpp
 )
