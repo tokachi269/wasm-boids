@@ -51,8 +51,8 @@ uintptr_t stepSimulation(float dt) {
 
 float currentFirstBoidX() { return debugFirstBoidX(); }
 
-void build(int maxPerUnit = 16, int level = 0) {
-  BoidTree::instance().build(maxPerUnit, level);
+void build(int maxPerUnit = 16, int /*level*/ = 0) {
+  BoidTree::instance().build(maxPerUnit);
 }
 uintptr_t posPtr() { return BoidTree::instance().getPositionsPtr(); }
 uintptr_t velPtr() { return BoidTree::instance().getVelocitiesPtr(); }

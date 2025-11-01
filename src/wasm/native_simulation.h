@@ -14,7 +14,6 @@ private:
     float positionRange = 3.0f;
     float velocityRange = 0.25f;
     int maxBoidsPerUnit = 16;
-    int rootLevel = 0;
     int reportInterval = 60; // フレーム数
     int sleepMillis = 16;
     std::size_t maxFrames = 600; // 約10秒 (60FPS想定)

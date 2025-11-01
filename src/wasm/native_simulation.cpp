@@ -158,7 +158,7 @@ void NativeSimulation::startSimulation() {
 
   BoidTree::instance().initializeBoids(scaled, options_.positionRange,
                                        options_.velocityRange);
-  BoidTree::instance().build(options_.maxBoidsPerUnit, options_.rootLevel);
+  BoidTree::instance().build(options_.maxBoidsPerUnit);
 
   const int totalBoids = calculateTotalBoidCount(settings_);
   logger::log("Simulation initialized with " + std::to_string(totalBoids) +

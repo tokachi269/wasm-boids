@@ -19,9 +19,6 @@ class BoidUnit
 public:
     static int nextId; // 次の ID を管理する静的変数
     int id;            // 各 BoidUnit のユニークな ID
-    BoidUnit* parent = nullptr; // 親ノードへのポインタ
-    BoidUnit* topParent = nullptr; // 親ノードへのポインタ
-    static constexpr int MAX_BOIDS = 16;     // Boid数の上限（local index）
     int speciesId = -1;
     SoABuffers *buf = nullptr;
     std::vector<int> indices;
@@ -54,7 +51,7 @@ public:
     void splitInPlace(int maxBoids = 64);
     bool canMergeWith(const BoidUnit &other, float mergeDist = 60.0f, float velThresh = 0.5f, float maxRadius = 120.0f, int maxBoids = 32) const;
     void mergeWith(const BoidUnit &other);
-    void mergeWith(BoidUnit *other, BoidUnit *parent);
+    void mergeWith(BoidUnit *other);
     void addRepulsionToAllBoids(BoidUnit *unit, const glm::vec3 &repulsion);
     glm::vec3 fixRoll(const glm::vec3 &direction);
     static glm::quat dirToQuatRollZero(const glm::vec3 &forward);
