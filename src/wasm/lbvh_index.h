@@ -3,6 +3,7 @@
 #include "boids_buffers.h"
 #include "spatial_index.h"
 #include <glm/glm.hpp>
+#include <cstddef>
 #include <vector>
 
 
@@ -19,6 +20,12 @@ public:
   void forEachLeaf(const LeafVisitor &visitor) const override;
   void forEachLeafIntersectingSphere(const glm::vec3 &center, float radius,
                                      const LeafVisitor &visitor) const override;
+
+  // center から最大 maxRadius 以内で距離が近い順に最大 maxCount 個の
+  // Boid インデックスを outIndices/outDistancesSq に格納する。
+  // 戻り値は格納した要素数。maxRadius <= 0 の場合は半径制限なし。
+  int gatherNearest(const glm::vec3 &center, int maxCount, float maxRadius,
+                    int *outIndices, float *outDistancesSq) const;
 
 private:
   struct Node {

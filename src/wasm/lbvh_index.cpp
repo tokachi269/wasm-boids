@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <queue>
 #include <vector>
 
 namespace {
@@ -126,6 +127,130 @@ void LbvhIndex::forEachLeafIntersectingSphere(
         stack.push_back(node.right);
     }
   }
+}
+
+namespace {
+
+float distanceToAabbSq(const glm::vec3 &point, const glm::vec3 &minBounds,
+                       const glm::vec3 &maxBounds) {
+  const glm::vec3 clamped = glm::clamp(point, minBounds, maxBounds);
+  const glm::vec3 diff = clamped - point;
+  return glm::dot(diff, diff);
+}
+
+} // namespace
+
+int LbvhIndex::gatherNearest(const glm::vec3 &center, int maxCount,
+                             float maxRadius, int *outIndices,
+                             float *outDistancesSq) const {
+  if (maxCount <= 0 || !outIndices || !outDistancesSq || nodes_.empty() ||
+      !buffers_ || buffers_->positions.empty()) {
+    return 0;
+  }
+
+  const float maxRadiusSq = (maxRadius > 0.0f)
+                                ? (maxRadius * maxRadius)
+                                : std::numeric_limits<float>::infinity();
+
+  struct QueueEntry {
+    int nodeIndex;
+    float distSq;
+  };
+
+  struct QueueCompare {
+    bool operator()(const QueueEntry &a, const QueueEntry &b) const {
+      return a.distSq > b.distSq;
+    }
+  };
+
+  std::priority_queue<QueueEntry, std::vector<QueueEntry>, QueueCompare> queue;
+  queue.push({0, distanceToAabbSq(center, nodes_[0].boundsMin,
+                                  nodes_[0].boundsMax)});
+
+  std::vector<std::pair<float, int>> best;
+  best.reserve(static_cast<std::size_t>(maxCount));
+  float currentWorstSq = maxRadiusSq;
+
+  auto updateWorst = [&]() {
+    if (static_cast<int>(best.size()) < maxCount) {
+      currentWorstSq = maxRadiusSq;
+      return;
+    }
+    float worst = best.front().first;
+    for (const auto &entry : best) {
+      if (entry.first > worst) {
+        worst = entry.first;
+      }
+    }
+    currentWorstSq = std::min(maxRadiusSq, worst);
+  };
+
+  while (!queue.empty()) {
+    if (!best.empty() && static_cast<int>(best.size()) >= maxCount &&
+        queue.top().distSq > currentWorstSq) {
+      break;
+    }
+
+    const QueueEntry entry = queue.top();
+    queue.pop();
+
+    if (entry.distSq > currentWorstSq) {
+      continue;
+    }
+
+    const Node &node = nodes_[entry.nodeIndex];
+    if (node.isLeaf) {
+      for (int i = node.begin; i < node.end; ++i) {
+        const int boidIdx = leafIndexStorage_[i];
+        const glm::vec3 &pos = buffers_->positions[boidIdx];
+        const glm::vec3 diff = pos - center;
+        const float distSq = glm::dot(diff, diff);
+        if (distSq > currentWorstSq || distSq > maxRadiusSq) {
+          continue;
+        }
+
+        if (static_cast<int>(best.size()) < maxCount) {
+          best.emplace_back(distSq, boidIdx);
+          updateWorst();
+        } else {
+          auto worstIt = std::max_element(
+              best.begin(), best.end(),
+              [](const auto &a, const auto &b) { return a.first < b.first; });
+          if (worstIt != best.end() && distSq < worstIt->first) {
+            *worstIt = std::make_pair(distSq, boidIdx);
+            updateWorst();
+          }
+        }
+      }
+    } else {
+      if (node.left >= 0) {
+        const float childDist = distanceToAabbSq(center,
+                                                 nodes_[node.left].boundsMin,
+                                                 nodes_[node.left].boundsMax);
+        if (childDist <= currentWorstSq) {
+          queue.push({node.left, childDist});
+        }
+      }
+      if (node.right >= 0) {
+        const float childDist = distanceToAabbSq(center,
+                                                 nodes_[node.right].boundsMin,
+                                                 nodes_[node.right].boundsMax);
+        if (childDist <= currentWorstSq) {
+          queue.push({node.right, childDist});
+        }
+      }
+    }
+  }
+
+  std::sort(best.begin(), best.end(),
+            [](const auto &a, const auto &b) { return a.first < b.first; });
+
+  const int count = static_cast<int>(best.size());
+  for (int i = 0; i < count; ++i) {
+    outDistancesSq[i] = best[static_cast<std::size_t>(i)].first;
+    outIndices[i] = best[static_cast<std::size_t>(i)].second;
+  }
+  return count;
 }
 
 int LbvhIndex::buildRecursive(int start, int end) {

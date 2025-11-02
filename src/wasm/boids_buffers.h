@@ -1,7 +1,7 @@
 #pragma once
 
 #include "boid.h"
-#include <bitset>
+#include <cstdint>
 #include <boost/align/aligned_allocator.hpp>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -38,8 +38,8 @@ struct SoABuffers {
 
   // 各BoidのcohesionMemoriesとactiveNeighbors（SOA形式）
   std::vector<std::vector<float>>
-      boidCohesionMemories;                         // dt累積（-1.0fで未使用）
-  std::vector<std::bitset<16>> boidActiveNeighbors; // 使用中slotのインデックス
+    boidCohesionMemories;                         // dt累積（-1.0fで未使用）
+  std::vector<uint16_t> boidNeighborMasks;          // 使用中slotのビットマスク
   std::vector<std::array<int, 16>>
     boidNeighborIndices; // 各slotに対応するグローバルBoid index
 
@@ -61,8 +61,8 @@ struct SoABuffers {
     predatorInfluences.reserve(n);
     predatorThreats.reserve(n);
     boidCohesionMemories.reserve(n);
-    boidActiveNeighbors.reserve(n);
-  boidNeighborIndices.reserve(n);
+    boidNeighborMasks.reserve(n);
+    boidNeighborIndices.reserve(n);
   }
 
   // Boid 数に合わせてフラグをクリア/サイズ調整
@@ -84,7 +84,7 @@ struct SoABuffers {
     predatorInfluences.resize(n, glm::vec3(0.0f));
     predatorThreats.resize(n, 0.0f);
     boidCohesionMemories.resize(n);
-    boidActiveNeighbors.resize(n);
+    boidNeighborMasks.resize(n, 0);
     boidNeighborIndices.resize(n);
     for (auto &slots : boidNeighborIndices) {
       slots.fill(-1);

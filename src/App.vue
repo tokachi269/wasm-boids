@@ -260,7 +260,7 @@ function fetchTreeStructure() {
 }
 const deviceProfile = detectDeviceProfile();
 const useLowSpecPreset = deviceProfile.isMobile || deviceProfile.hasIntegratedGpu;
-const mobileBoidCount = useLowSpecPreset ? 6000 : 10000;
+const mobileBoidCount = useLowSpecPreset ? 6000 : 100;
 
 const DEFAULT_SETTINGS = [
   {
