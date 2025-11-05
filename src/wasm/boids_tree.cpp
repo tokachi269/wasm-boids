@@ -8,7 +8,6 @@
 #include <cmath>
 #include <random>
 #include <unordered_map>
-#include <chrono>
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -105,7 +104,6 @@ void BoidTree::update(float dt) {
   const float clampedDt = std::clamp(dt, 0.0f, 0.1f) * 5.0f;
 
   const int count = static_cast<int>(buf.positions.size());
-  const auto frameStart = std::chrono::steady_clock::now();
   if (count == 0 || clampedDt <= 0.0f) {
     setRenderPointersToReadBuffers();
     lbvhIndex_.build(buf);
@@ -114,29 +112,16 @@ void BoidTree::update(float dt) {
   }
 
   setRenderPointersToReadBuffers();
-  const auto preCompute = std::chrono::steady_clock::now();
+  lbvhIndex_.resetQueryStats();
   computeBoidInteractionsRange(buf, lbvhIndex_, 0, count, clampedDt);
-  const auto postCompute = std::chrono::steady_clock::now();
+  lastQueryStats_ = lbvhIndex_.consumeQueryStats();
 
   setRenderPointersToWriteBuffers();
   updateBoidKinematicsRange(buf, 0, count, clampedDt);
-  const auto postKinematics = std::chrono::steady_clock::now();
   buf.swapReadWrite();
   setRenderPointersToReadBuffers();
   lbvhIndex_.build(buf);
-  const auto postBuild = std::chrono::steady_clock::now();
   frameCount++;
-
-  if ((frameCount % 30) == 0) {
-    const auto computeMs = std::chrono::duration_cast<std::chrono::microseconds>(postCompute - preCompute).count() * 0.001f;
-    const auto kinematicsMs = std::chrono::duration_cast<std::chrono::microseconds>(postKinematics - postCompute).count() * 0.001f;
-    const auto buildMs = std::chrono::duration_cast<std::chrono::microseconds>(postBuild - postKinematics).count() * 0.001f;
-    const auto totalMs = std::chrono::duration_cast<std::chrono::microseconds>(postBuild - frameStart).count() * 0.001f;
-    logger::log("Frame timing ms -> compute:" + std::to_string(computeMs) +
-                " kinematics:" + std::to_string(kinematicsMs) +
-                " build:" + std::to_string(buildMs) +
-                " total:" + std::to_string(totalMs));
-  }
 }
 
 void BoidTree::initializeBoids(

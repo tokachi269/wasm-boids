@@ -4,7 +4,6 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
-#include <queue>
 #include <vector>
 
 namespace {
@@ -38,10 +37,13 @@ void LbvhIndex::build(const SoABuffers &buffers) {
   leafRecords_.clear();
   leafIndexStorage_.clear();
   mortonOrder_.clear();
+  boidToLeafIndex_.clear();
 
   if (count == 0) {
     return;
   }
+
+  boidToLeafIndex_.assign(count, -1);
 
   glm::vec3 boundsMin(std::numeric_limits<float>::max());
   glm::vec3 boundsMax(-std::numeric_limits<float>::max());
@@ -148,14 +150,16 @@ int LbvhIndex::gatherNearest(const glm::vec3 &center, int maxCount,
     return 0;
   }
 
+  stats_.queries.fetch_add(1, std::memory_order_relaxed);
+
+  int localNodesVisited = 0;
+  int localLeavesVisited = 0;
+  int localBoidsConsidered = 0;
+  int localMaxQueue = 0;
+
   const float maxRadiusSq = (maxRadius > 0.0f)
                                 ? (maxRadius * maxRadius)
                                 : std::numeric_limits<float>::infinity();
-
-  struct QueueEntry {
-    int nodeIndex;
-    float distSq;
-  };
 
   struct QueueCompare {
     bool operator()(const QueueEntry &a, const QueueEntry &b) const {
@@ -163,11 +167,31 @@ int LbvhIndex::gatherNearest(const glm::vec3 &center, int maxCount,
     }
   };
 
-  std::priority_queue<QueueEntry, std::vector<QueueEntry>, QueueCompare> queue;
-  queue.push({0, distanceToAabbSq(center, nodes_[0].boundsMin,
-                                  nodes_[0].boundsMax)});
+  auto &queue = queryQueue_;
+  queue.clear();
+  queue.reserve(nodes_.size());
 
-  std::vector<std::pair<float, int>> best;
+  QueueCompare compare;
+  auto pushNode = [&](int nodeIndex, float distSq) {
+    queue.push_back(QueueEntry{nodeIndex, distSq});
+    std::push_heap(queue.begin(), queue.end(), compare);
+    if (static_cast<int>(queue.size()) > localMaxQueue) {
+      localMaxQueue = static_cast<int>(queue.size());
+    }
+  };
+
+  auto popNode = [&]() {
+    std::pop_heap(queue.begin(), queue.end(), compare);
+    QueueEntry entry = queue.back();
+    queue.pop_back();
+    return entry;
+  };
+
+  pushNode(0, distanceToAabbSq(center, nodes_[0].boundsMin,
+                               nodes_[0].boundsMax));
+
+  auto &best = neighborScratch_;
+  best.clear();
   best.reserve(static_cast<std::size_t>(maxCount));
   float currentWorstSq = maxRadiusSq;
 
@@ -187,12 +211,12 @@ int LbvhIndex::gatherNearest(const glm::vec3 &center, int maxCount,
 
   while (!queue.empty()) {
     if (!best.empty() && static_cast<int>(best.size()) >= maxCount &&
-        queue.top().distSq > currentWorstSq) {
+        queue.front().distSq > currentWorstSq) {
       break;
     }
 
-    const QueueEntry entry = queue.top();
-    queue.pop();
+    const QueueEntry entry = popNode();
+    ++localNodesVisited;
 
     if (entry.distSq > currentWorstSq) {
       continue;
@@ -200,8 +224,10 @@ int LbvhIndex::gatherNearest(const glm::vec3 &center, int maxCount,
 
     const Node &node = nodes_[entry.nodeIndex];
     if (node.isLeaf) {
+      ++localLeavesVisited;
       for (int i = node.begin; i < node.end; ++i) {
         const int boidIdx = leafIndexStorage_[i];
+        ++localBoidsConsidered;
         const glm::vec3 &pos = buffers_->positions[boidIdx];
         const glm::vec3 diff = pos - center;
         const float distSq = glm::dot(diff, diff);
@@ -228,7 +254,7 @@ int LbvhIndex::gatherNearest(const glm::vec3 &center, int maxCount,
                                                  nodes_[node.left].boundsMin,
                                                  nodes_[node.left].boundsMax);
         if (childDist <= currentWorstSq) {
-          queue.push({node.left, childDist});
+          pushNode(node.left, childDist);
         }
       }
       if (node.right >= 0) {
@@ -236,21 +262,57 @@ int LbvhIndex::gatherNearest(const glm::vec3 &center, int maxCount,
                                                  nodes_[node.right].boundsMin,
                                                  nodes_[node.right].boundsMax);
         if (childDist <= currentWorstSq) {
-          queue.push({node.right, childDist});
+          pushNode(node.right, childDist);
         }
       }
     }
   }
 
+  stats_.nodesVisited.fetch_add(localNodesVisited, std::memory_order_relaxed);
+  stats_.leavesVisited.fetch_add(localLeavesVisited,
+                                 std::memory_order_relaxed);
+  stats_.boidsConsidered.fetch_add(localBoidsConsidered,
+                                   std::memory_order_relaxed);
+  int prevMax = stats_.maxQueueSize.load(std::memory_order_relaxed);
+  while (localMaxQueue > prevMax &&
+         !stats_.maxQueueSize.compare_exchange_weak(
+             prevMax, localMaxQueue, std::memory_order_relaxed)) {
+  }
+
   std::sort(best.begin(), best.end(),
             [](const auto &a, const auto &b) { return a.first < b.first; });
 
-  const int count = static_cast<int>(best.size());
+  const int count = std::min(maxCount, static_cast<int>(best.size()));
   for (int i = 0; i < count; ++i) {
     outDistancesSq[i] = best[static_cast<std::size_t>(i)].first;
     outIndices[i] = best[static_cast<std::size_t>(i)].second;
   }
   return count;
+}
+
+bool LbvhIndex::getLeafMembers(int boidIndex, const int *&outIndices,
+                               int &outCount) const {
+  outIndices = nullptr;
+  outCount = 0;
+
+  if (!buffers_ || boidIndex < 0 ||
+      boidIndex >= static_cast<int>(boidToLeafIndex_.size())) {
+    return false;
+  }
+
+  const int leafIndex = boidToLeafIndex_[boidIndex];
+  if (leafIndex < 0 || leafIndex >= static_cast<int>(leafRecords_.size())) {
+    return false;
+  }
+
+  const LeafRecord &record = leafRecords_[leafIndex];
+  if (record.count <= 0) {
+    return false;
+  }
+
+  outIndices = leafIndexStorage_.data() + record.offset;
+  outCount = record.count;
+  return true;
 }
 
 int LbvhIndex::buildRecursive(int start, int end) {
@@ -276,7 +338,15 @@ int LbvhIndex::buildRecursive(int start, int end) {
     }
     current.boundsMin = boundsMin;
     current.boundsMax = boundsMax;
+    const int recordIndex = static_cast<int>(leafRecords_.size());
     leafRecords_.push_back(LeafRecord{nodeIndex, current.begin, count});
+    for (int i = current.begin; i < current.end; ++i) {
+      const int boidIdx = leafIndexStorage_[i];
+      if (boidIdx >= 0 &&
+          boidIdx < static_cast<int>(boidToLeafIndex_.size())) {
+        boidToLeafIndex_[boidIdx] = recordIndex;
+      }
+    }
     return nodeIndex;
   }
 
@@ -299,4 +369,26 @@ glm::vec3 LbvhIndex::vecMin(const glm::vec3 &a, const glm::vec3 &b) {
 
 glm::vec3 LbvhIndex::vecMax(const glm::vec3 &a, const glm::vec3 &b) {
   return glm::vec3(std::max(a.x, b.x), std::max(a.y, b.y), std::max(a.z, b.z));
+}
+
+void LbvhIndex::resetQueryStats() const {
+  stats_.queries.store(0, std::memory_order_relaxed);
+  stats_.nodesVisited.store(0, std::memory_order_relaxed);
+  stats_.leavesVisited.store(0, std::memory_order_relaxed);
+  stats_.boidsConsidered.store(0, std::memory_order_relaxed);
+  stats_.maxQueueSize.store(0, std::memory_order_relaxed);
+}
+
+LbvhIndex::QueryStats LbvhIndex::consumeQueryStats() const {
+  QueryStats snapshot;
+  snapshot.queries = stats_.queries.exchange(0, std::memory_order_relaxed);
+  snapshot.nodesVisited =
+      stats_.nodesVisited.exchange(0, std::memory_order_relaxed);
+  snapshot.leavesVisited =
+      stats_.leavesVisited.exchange(0, std::memory_order_relaxed);
+  snapshot.boidsConsidered =
+      stats_.boidsConsidered.exchange(0, std::memory_order_relaxed);
+  snapshot.maxQueueSize =
+      stats_.maxQueueSize.exchange(0, std::memory_order_relaxed);
+  return snapshot;
 }

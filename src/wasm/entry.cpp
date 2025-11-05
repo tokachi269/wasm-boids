@@ -1,6 +1,7 @@
 #include "entry.h"
 #include "boids_tree.h"
 #include "scale_utils.h"
+#include <algorithm>
 #include <cstdint>
 #include <iostream>
 
@@ -89,5 +90,24 @@ uintptr_t speciesIdsPtr() {
 
 void syncReadToWriteBuffers() {
   BoidTree::instance().buf.syncWriteFromRead();
+}
+
+struct LbvhQueryStatsRaw {
+  int queries;
+  int nodesVisited;
+  int leavesVisited;
+  int boidsConsidered;
+  int maxQueueSize;
+};
+
+const LbvhQueryStatsRaw *getLbvhQueryStatsPtr() {
+  static LbvhQueryStatsRaw snapshot{};
+  const auto stats = BoidTree::instance().getLastQueryStats();
+  snapshot.queries = stats.queries;
+  snapshot.nodesVisited = stats.nodesVisited;
+  snapshot.leavesVisited = stats.leavesVisited;
+  snapshot.boidsConsidered = stats.boidsConsidered;
+  snapshot.maxQueueSize = stats.maxQueueSize;
+  return &snapshot;
 }
 }

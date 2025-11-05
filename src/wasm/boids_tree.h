@@ -33,6 +33,8 @@ public:
                                      const LeafVisitor &visitor) const override;
   void update(float dt = 1.0f);
 
+  LbvhIndex::QueryStats getLastQueryStats() const { return lastQueryStats_; }
+
   uintptr_t getPositionsPtr();
   uintptr_t getVelocitiesPtr();
   uintptr_t getOrientationsPtr();
@@ -55,6 +57,7 @@ private:
   int frameCount = 0;
   int maxBoidsPerUnit = 16;
   LbvhIndex lbvhIndex_;
+  LbvhIndex::QueryStats lastQueryStats_{};
 };
 
 extern std::vector<SpeciesParams> globalSpeciesParams;

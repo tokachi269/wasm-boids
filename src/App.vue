@@ -213,6 +213,10 @@ if (!wasmModule) {
 
 const wasmBridge = wasmModule ? new WasmtimeBridge(wasmModule) : null;
 
+if (typeof window !== "undefined" && wasmBridge) {
+  window.readLbvhStats = () => wasmBridge.getLbvhQueryStatsSnapshot();
+}
+
 // const getUnitCount = wasmModule.cwrap('getUnitCount', 'number', []);
 // const getUnitParentIndicesPtr = wasmModule.cwrap('getUnitParentIndicesPtr', 'number', []);
 

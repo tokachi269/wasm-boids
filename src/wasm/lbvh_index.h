@@ -3,6 +3,7 @@
 #include "boids_buffers.h"
 #include "spatial_index.h"
 #include <glm/glm.hpp>
+#include <atomic>
 #include <cstddef>
 #include <vector>
 
@@ -27,6 +28,22 @@ public:
   int gatherNearest(const glm::vec3 &center, int maxCount, float maxRadius,
                     int *outIndices, float *outDistancesSq) const;
 
+  // 与えられた Boid index が所属する葉ノードのメンバーリストを取得する。
+  // true を返す場合、outIndices は葉内の連続領域を指し、outCount は要素数。
+  bool getLeafMembers(int boidIndex, const int *&outIndices,
+                      int &outCount) const;
+
+  struct QueryStats {
+    int queries = 0;
+    int nodesVisited = 0;
+    int leavesVisited = 0;
+    int boidsConsidered = 0;
+    int maxQueueSize = 0;
+  };
+
+  void resetQueryStats() const;
+  QueryStats consumeQueryStats() const;
+
 private:
   struct Node {
     glm::vec3 boundsMin{0.0f};
@@ -44,6 +61,11 @@ private:
     int count = 0;
   };
 
+  struct QueueEntry {
+    int nodeIndex = -1;
+    float distSq = 0.0f;
+  };
+
   const SoABuffers *buffers_ = nullptr;
   int maxLeafSize_ = 32;
 
@@ -51,6 +73,18 @@ private:
   std::vector<int> leafIndexStorage_;   // 連続した Boid インデックス配列
   std::vector<Node> nodes_;             // BVH ノード配列（0 がルート）
   std::vector<LeafRecord> leafRecords_; // 迅速な葉列挙用キャッシュ
+  mutable std::vector<QueueEntry> queryQueue_;
+  mutable std::vector<std::pair<float, int>> neighborScratch_;
+  std::vector<int> boidToLeafIndex_;
+  struct QueryStatsAtomic {
+    std::atomic<int> queries{0};
+    std::atomic<int> nodesVisited{0};
+    std::atomic<int> leavesVisited{0};
+    std::atomic<int> boidsConsidered{0};
+    std::atomic<int> maxQueueSize{0};
+  };
+
+  mutable QueryStatsAtomic stats_;
 
   int buildRecursive(int start, int end);
   static glm::vec3 vecMin(const glm::vec3 &a, const glm::vec3 &b);

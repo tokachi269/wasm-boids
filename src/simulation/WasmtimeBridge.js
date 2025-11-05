@@ -43,6 +43,7 @@ export class WasmtimeBridge {
     this.syncReadToWriteBuffersHandle = this.createWrappedFunction('syncReadToWriteBuffers', 'void', []);
     this.getSimulationTuningParamsHandle = this.createWrappedFunction('getSimulationTuningParams', 'object', []);
     this.setSimulationTuningParamsHandle = this.createWrappedFunction('setSimulationTuningParams', 'void', ['object']);
+    this.getLbvhQueryStatsPtrHandle = this.createWrappedFunction('getLbvhQueryStatsPtr', 'number', []);
   }
 
   getSimulationTuningParams() {
@@ -75,6 +76,28 @@ export class WasmtimeBridge {
       separationMinFactor: toNumber(params.separationMinFactor, 1.0),
       alignmentBoost: toNumber(params.alignmentBoost, 1.2),
     });
+  }
+
+  getLbvhQueryStatsSnapshot() {
+    if (!this.wasm) {
+      return null;
+    }
+    const handle = this.getLbvhQueryStatsPtrHandle;
+    if (typeof handle !== 'function') {
+      return null;
+    }
+    const ptr = handle();
+    if (!ptr) {
+      return null;
+    }
+    const view = new Int32Array(this.wasm.HEAP32.buffer, ptr, 5);
+    return {
+      queries: view[0],
+      nodesVisited: view[1],
+      leavesVisited: view[2],
+      boidsConsidered: view[3],
+      maxQueueSize: view[4],
+    };
   }
 
   /**
