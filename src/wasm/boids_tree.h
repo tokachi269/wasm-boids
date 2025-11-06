@@ -14,6 +14,7 @@
 #include "species_params.h"
 #include "spatial_index.h"
 
+// Boid群の管理とシミュレーション更新を行うクラス
 class BoidTree : public SpatialIndex {
 public:
   static BoidTree &instance();
@@ -49,6 +50,7 @@ public:
 private:
   void setRenderPointersToReadBuffers();
   void setRenderPointersToWriteBuffers();
+  void rebuildSpatialIndex();
 
   uintptr_t renderPositionsPtr_ = 0;
   uintptr_t renderVelocitiesPtr_ = 0;
@@ -58,6 +60,11 @@ private:
   int maxBoidsPerUnit = 16;
   LbvhIndex lbvhIndex_;
   LbvhIndex::QueryStats lastQueryStats_{};
+  bool lbvhDirty_ = true;
+  int framesSinceRebuild_ = 0;
+  float cumulativeDisplacementSinceRebuild_ = 0.0f;
+  float maxStepDisplacementSqSinceRebuild_ = 0.0f;
+  float lastAverageDisplacement_ = 0.0f;
 };
 
 extern std::vector<SpeciesParams> globalSpeciesParams;

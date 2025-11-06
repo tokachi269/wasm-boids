@@ -27,7 +27,8 @@ struct Primitive {
 
 } // namespace
 
-LbvhIndex::LbvhIndex(int maxLeafSize) : maxLeafSize_(std::max(1, maxLeafSize)) {}
+LbvhIndex::LbvhIndex(int maxLeafSize)
+  : maxLeafSize_(std::max(8, maxLeafSize)) {}
 
 void LbvhIndex::build(const SoABuffers &buffers) {
   buffers_ = &buffers;
@@ -135,9 +136,13 @@ namespace {
 
 float distanceToAabbSq(const glm::vec3 &point, const glm::vec3 &minBounds,
                        const glm::vec3 &maxBounds) {
-  const glm::vec3 clamped = glm::clamp(point, minBounds, maxBounds);
-  const glm::vec3 diff = clamped - point;
-  return glm::dot(diff, diff);
+  const float dx = std::max(std::max(minBounds.x - point.x, 0.0f),
+                            point.x - maxBounds.x);
+  const float dy = std::max(std::max(minBounds.y - point.y, 0.0f),
+                            point.y - maxBounds.y);
+  const float dz = std::max(std::max(minBounds.z - point.z, 0.0f),
+                            point.z - maxBounds.z);
+  return dx * dx + dy * dy + dz * dz;
 }
 
 } // namespace
@@ -160,110 +165,242 @@ int LbvhIndex::gatherNearest(const glm::vec3 &center, int maxCount,
   const float maxRadiusSq = (maxRadius > 0.0f)
                                 ? (maxRadius * maxRadius)
                                 : std::numeric_limits<float>::infinity();
+  const bool hasRadiusLimit = std::isfinite(maxRadiusSq);
 
-  struct QueueCompare {
-    bool operator()(const QueueEntry &a, const QueueEntry &b) const {
-      return a.distSq > b.distSq;
-    }
-  };
+  auto &scratch = threadScratch();
+  auto &stack = scratch.stack;
+  stack.clear();
+  if (stack.capacity() < 128) {
+    stack.reserve(128);
+  }
 
-  auto &queue = queryQueue_;
-  queue.clear();
-  queue.reserve(nodes_.size());
+  const float rootDist =
+      distanceToAabbSq(center, nodes_[0].boundsMin, nodes_[0].boundsMax);
+  if (rootDist > maxRadiusSq && hasRadiusLimit) {
+    return 0;
+  }
 
-  QueueCompare compare;
-  auto pushNode = [&](int nodeIndex, float distSq) {
-    queue.push_back(QueueEntry{nodeIndex, distSq});
-    std::push_heap(queue.begin(), queue.end(), compare);
-    if (static_cast<int>(queue.size()) > localMaxQueue) {
-      localMaxQueue = static_cast<int>(queue.size());
-    }
-  };
+  stack.push_back(QueueEntry{0, rootDist});
+  localMaxQueue = 1;
 
-  auto popNode = [&]() {
-    std::pop_heap(queue.begin(), queue.end(), compare);
-    QueueEntry entry = queue.back();
-    queue.pop_back();
-    return entry;
-  };
-
-  pushNode(0, distanceToAabbSq(center, nodes_[0].boundsMin,
-                               nodes_[0].boundsMax));
-
-  auto &best = neighborScratch_;
+  auto &best = scratch.best;
   best.clear();
-  best.reserve(static_cast<std::size_t>(maxCount));
+  if (best.capacity() < static_cast<std::size_t>(maxCount)) {
+    best.reserve(static_cast<std::size_t>(maxCount));
+  }
   float currentWorstSq = maxRadiusSq;
+
+  auto heapSiftUp = [&](int idx) {
+    while (idx > 0) {
+      const int parent = (idx - 1) / 2;
+      if (best[parent].first >= best[idx].first) {
+        break;
+      }
+      std::swap(best[parent], best[idx]);
+      idx = parent;
+    }
+  };
+
+  auto heapSiftDown = [&](int idx) {
+    const int size = static_cast<int>(best.size());
+    while (true) {
+      const int left = idx * 2 + 1;
+      if (left >= size) {
+        break;
+      }
+      int largest = left;
+      const int right = left + 1;
+      if (right < size && best[right].first > best[left].first) {
+        largest = right;
+      }
+      if (best[idx].first >= best[largest].first) {
+        break;
+      }
+      std::swap(best[idx], best[largest]);
+      idx = largest;
+    }
+  };
 
   auto updateWorst = [&]() {
     if (static_cast<int>(best.size()) < maxCount) {
       currentWorstSq = maxRadiusSq;
-      return;
+    } else if (!best.empty()) {
+      currentWorstSq = std::min(maxRadiusSq, best.front().first);
     }
-    float worst = best.front().first;
-    for (const auto &entry : best) {
-      if (entry.first > worst) {
-        worst = entry.first;
-      }
-    }
-    currentWorstSq = std::min(maxRadiusSq, worst);
   };
 
-  while (!queue.empty()) {
-    if (!best.empty() && static_cast<int>(best.size()) >= maxCount &&
-        queue.front().distSq > currentWorstSq) {
-      break;
+  auto pushCandidate = [&](float distSq, int index) {
+    if (static_cast<int>(best.size()) < maxCount) {
+      best.emplace_back(distSq, index);
+      heapSiftUp(static_cast<int>(best.size()) - 1);
+      updateWorst();
+    } else if (!best.empty() && distSq < best.front().first) {
+      best.front() = std::make_pair(distSq, index);
+      heapSiftDown(0);
+      updateWorst();
     }
+  };
 
-    const QueueEntry entry = popNode();
-    ++localNodesVisited;
+  const glm::vec3 *positions = buffers_->positions.data();
 
-    if (entry.distSq > currentWorstSq) {
-      continue;
+  constexpr int kLeafWarmupCount = 8;
+  auto processLeaf = [&](const Node &node) {
+    ++localLeavesVisited;
+    const int *leafIndices = leafIndexStorage_.data() + node.begin;
+    const int leafCount = node.end - node.begin;
+    int i = 0;
+    const int warmupLimit = std::min(leafCount, kLeafWarmupCount);
+    for (; i < warmupLimit; ++i) {
+      const int boidIdx = leafIndices[i];
+      ++localBoidsConsidered;
+      const glm::vec3 &pos = positions[boidIdx];
+      const float dx = pos.x - center.x;
+      const float dy = pos.y - center.y;
+      const float dz = pos.z - center.z;
+      const float distSq = dx * dx + dy * dy + dz * dz;
+      if (hasRadiusLimit && distSq > maxRadiusSq) {
+        continue;
+      }
+      pushCandidate(distSq, boidIdx);
     }
+    for (; i < leafCount; ++i) {
+      const int boidIdx = leafIndices[i];
+      ++localBoidsConsidered;
+      const glm::vec3 &pos = positions[boidIdx];
+      const float dx = pos.x - center.x;
+      const float dy = pos.y - center.y;
+      const float dz = pos.z - center.z;
+      const float distSq = dx * dx + dy * dy + dz * dz;
+      if (distSq > currentWorstSq) {
+        continue;
+      }
+      if (hasRadiusLimit && distSq > maxRadiusSq) {
+        continue;
+      }
+      pushCandidate(distSq, boidIdx);
+    }
+  };
 
-    const Node &node = nodes_[entry.nodeIndex];
-    if (node.isLeaf) {
-      ++localLeavesVisited;
-      for (int i = node.begin; i < node.end; ++i) {
-        const int boidIdx = leafIndexStorage_[i];
-        ++localBoidsConsidered;
-        const glm::vec3 &pos = buffers_->positions[boidIdx];
-        const glm::vec3 diff = pos - center;
-        const float distSq = glm::dot(diff, diff);
-        if (distSq > currentWorstSq || distSq > maxRadiusSq) {
+  if (hasRadiusLimit) {
+    while (!stack.empty()) {
+      QueueEntry entry = stack.back();
+      stack.pop_back();
+
+      int nodeIndex = entry.nodeIndex;
+      float nodeDistSq = entry.distSq;
+
+      while (true) {
+        if (nodeDistSq > currentWorstSq || nodeDistSq > maxRadiusSq) {
+          break;
+        }
+
+        ++localNodesVisited;
+        const Node &node = nodes_[nodeIndex];
+        if (node.isLeaf) {
+          processLeaf(node);
+          break;
+        }
+
+        int nearIndex = -1;
+        float nearDist = std::numeric_limits<float>::infinity();
+        int farIndex = -1;
+        float farDist = std::numeric_limits<float>::infinity();
+
+        if (node.left >= 0) {
+          nearIndex = node.left;
+          nearDist = distanceToAabbSq(center, nodes_[nearIndex].boundsMin,
+                                       nodes_[nearIndex].boundsMax);
+        }
+
+        if (node.right >= 0) {
+          const float dist = distanceToAabbSq(center, nodes_[node.right].boundsMin,
+                                              nodes_[node.right].boundsMax);
+          if (dist < nearDist) {
+            farIndex = nearIndex;
+            farDist = nearDist;
+            nearIndex = node.right;
+            nearDist = dist;
+          } else {
+            farIndex = node.right;
+            farDist = dist;
+          }
+        }
+
+        if (farIndex >= 0 && farDist <= currentWorstSq && farDist <= maxRadiusSq) {
+          stack.push_back(QueueEntry{farIndex, farDist});
+          if (static_cast<int>(stack.size()) > localMaxQueue) {
+            localMaxQueue = static_cast<int>(stack.size());
+          }
+        }
+
+        if (nearIndex >= 0 && nearDist <= currentWorstSq && nearDist <= maxRadiusSq) {
+          nodeIndex = nearIndex;
+          nodeDistSq = nearDist;
           continue;
         }
 
-        if (static_cast<int>(best.size()) < maxCount) {
-          best.emplace_back(distSq, boidIdx);
-          updateWorst();
-        } else {
-          auto worstIt = std::max_element(
-              best.begin(), best.end(),
-              [](const auto &a, const auto &b) { return a.first < b.first; });
-          if (worstIt != best.end() && distSq < worstIt->first) {
-            *worstIt = std::make_pair(distSq, boidIdx);
-            updateWorst();
+        break;
+      }
+    }
+  } else {
+    while (!stack.empty()) {
+      QueueEntry entry = stack.back();
+      stack.pop_back();
+
+      int nodeIndex = entry.nodeIndex;
+      float nodeDistSq = entry.distSq;
+
+      while (true) {
+        if (nodeDistSq > currentWorstSq) {
+          break;
+        }
+
+        ++localNodesVisited;
+        const Node &node = nodes_[nodeIndex];
+        if (node.isLeaf) {
+          processLeaf(node);
+          break;
+        }
+
+        int nearIndex = -1;
+        float nearDist = std::numeric_limits<float>::infinity();
+        int farIndex = -1;
+        float farDist = std::numeric_limits<float>::infinity();
+
+        if (node.left >= 0) {
+          nearIndex = node.left;
+          nearDist = distanceToAabbSq(center, nodes_[nearIndex].boundsMin,
+                                       nodes_[nearIndex].boundsMax);
+        }
+
+        if (node.right >= 0) {
+          const float dist = distanceToAabbSq(center, nodes_[node.right].boundsMin,
+                                              nodes_[node.right].boundsMax);
+          if (dist < nearDist) {
+            farIndex = nearIndex;
+            farDist = nearDist;
+            nearIndex = node.right;
+            nearDist = dist;
+          } else {
+            farIndex = node.right;
+            farDist = dist;
           }
         }
-      }
-    } else {
-      if (node.left >= 0) {
-        const float childDist = distanceToAabbSq(center,
-                                                 nodes_[node.left].boundsMin,
-                                                 nodes_[node.left].boundsMax);
-        if (childDist <= currentWorstSq) {
-          pushNode(node.left, childDist);
+
+        if (farIndex >= 0 && farDist <= currentWorstSq) {
+          stack.push_back(QueueEntry{farIndex, farDist});
+          if (static_cast<int>(stack.size()) > localMaxQueue) {
+            localMaxQueue = static_cast<int>(stack.size());
+          }
         }
-      }
-      if (node.right >= 0) {
-        const float childDist = distanceToAabbSq(center,
-                                                 nodes_[node.right].boundsMin,
-                                                 nodes_[node.right].boundsMax);
-        if (childDist <= currentWorstSq) {
-          pushNode(node.right, childDist);
+
+        if (nearIndex >= 0 && nearDist <= currentWorstSq) {
+          nodeIndex = nearIndex;
+          nodeDistSq = nearDist;
+          continue;
         }
+
+        break;
       }
     }
   }
@@ -279,13 +416,21 @@ int LbvhIndex::gatherNearest(const glm::vec3 &center, int maxCount,
              prevMax, localMaxQueue, std::memory_order_relaxed)) {
   }
 
-  std::sort(best.begin(), best.end(),
-            [](const auto &a, const auto &b) { return a.first < b.first; });
-
   const int count = std::min(maxCount, static_cast<int>(best.size()));
-  for (int i = 0; i < count; ++i) {
-    outDistancesSq[i] = best[static_cast<std::size_t>(i)].first;
-    outIndices[i] = best[static_cast<std::size_t>(i)].second;
+  for (int i = count - 1; i >= 0; --i) {
+    const auto top = best.front();
+    const std::size_t lastIndex = best.size() - 1;
+    if (lastIndex > 0) {
+      best.front() = best[lastIndex];
+      best.pop_back();
+      if (!best.empty()) {
+        heapSiftDown(0);
+      }
+    } else {
+      best.pop_back();
+    }
+    outDistancesSq[i] = top.first;
+    outIndices[i] = top.second;
   }
   return count;
 }
@@ -383,12 +528,17 @@ LbvhIndex::QueryStats LbvhIndex::consumeQueryStats() const {
   QueryStats snapshot;
   snapshot.queries = stats_.queries.exchange(0, std::memory_order_relaxed);
   snapshot.nodesVisited =
-      stats_.nodesVisited.exchange(0, std::memory_order_relaxed);
+    stats_.nodesVisited.exchange(0, std::memory_order_relaxed);
   snapshot.leavesVisited =
-      stats_.leavesVisited.exchange(0, std::memory_order_relaxed);
+    stats_.leavesVisited.exchange(0, std::memory_order_relaxed);
   snapshot.boidsConsidered =
-      stats_.boidsConsidered.exchange(0, std::memory_order_relaxed);
+    stats_.boidsConsidered.exchange(0, std::memory_order_relaxed);
   snapshot.maxQueueSize =
-      stats_.maxQueueSize.exchange(0, std::memory_order_relaxed);
+    stats_.maxQueueSize.exchange(0, std::memory_order_relaxed);
   return snapshot;
+}
+
+LbvhIndex::QueryScratch &LbvhIndex::threadScratch() {
+  thread_local QueryScratch scratch;
+  return scratch;
 }
