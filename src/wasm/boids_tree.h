@@ -51,6 +51,8 @@ private:
   void setRenderPointersToReadBuffers();
   void setRenderPointersToWriteBuffers();
   void rebuildSpatialIndex();
+  void resetSpatialIndexQuality();
+  bool shouldRebuildForQuality(const LbvhIndex::QueryStats &stats);
 
   uintptr_t renderPositionsPtr_ = 0;
   uintptr_t renderVelocitiesPtr_ = 0;
@@ -65,6 +67,12 @@ private:
   float cumulativeDisplacementSinceRebuild_ = 0.0f;
   float maxStepDisplacementSqSinceRebuild_ = 0.0f;
   float lastAverageDisplacement_ = 0.0f;
+  float queryNodesEwma_ = 0.0f;
+  float queryBoidsEwma_ = 0.0f;
+  float queryNodesBaseline_ = 0.0f;
+  float queryBoidsBaseline_ = 0.0f;
+  int querySamplesSinceRebuild_ = 0;
+  bool queryBaselineValid_ = false;
 };
 
 extern std::vector<SpeciesParams> globalSpeciesParams;

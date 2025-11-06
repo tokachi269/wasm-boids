@@ -2,12 +2,11 @@
 
 #include "boids_buffers.h"
 #include "spatial_index.h"
-#include <glm/glm.hpp>
 #include <atomic>
 #include <cstddef>
+#include <glm/glm.hpp>
 #include <utility>
 #include <vector>
-
 
 // LBVH (Linear Bounding Volume Hierarchy) に基づく SpatialIndex 実装。
 // BoidTree とは独立に SoABuffers を直接参照して球クエリを提供する。
@@ -18,14 +17,16 @@ public:
   // SoA バッファから LBVH 構造を再構築する。
   // positions が空の場合は内部状態をクリアする。
   void build(const SoABuffers &buffers);
+  void refit(const SoABuffers &buffers);
 
   void forEachLeaf(const LeafVisitor &visitor) const override;
   void forEachLeafIntersectingSphere(const glm::vec3 &center, float radius,
                                      const LeafVisitor &visitor) const override;
 
-  // center から最大 maxRadius 以内で距離が近い順に最大 maxCount 個の
-  // Boid インデックスを outIndices/outDistancesSq に格納する。
-  // 戻り値は格納した要素数。maxRadius <= 0 の場合は半径制限なし。
+  // center 周辺の Boid を探索し、距離が近いものから最大 maxCount 件を返す。
+  // near-first DFS で木を辿り、暫定候補を固定長ヒープに保管することで
+  // 逐次的に currentWorstSq を縮め、枝刈りを効かせる設計になっている。
+  // maxRadius <= 0 の場合は無制限、そうでなければ半径制限付き k-NN となる。
   int gatherNearest(const glm::vec3 &center, int maxCount, float maxRadius,
                     int *outIndices, float *outDistancesSq) const;
 
@@ -46,6 +47,7 @@ public:
   QueryStats consumeQueryStats() const;
 
 private:
+  // 近距離優先の深さ優先探索で利用するノード情報（距離²を保持）。
   struct QueueEntry {
     int nodeIndex = -1;
     float distSq = 0.0f;

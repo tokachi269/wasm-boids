@@ -1,4 +1,8 @@
-﻿#define GLM_ENABLE_EXPERIMENTAL
+﻿// Boid 個体レベルの物理・行動計算エンジン
+// 群れ行動（結合・分離・整列）、境界回避、近傍管理を実装する中核モジュール。
+// LBVH 空間インデックスと連携し、リアルタイム群集シミュレーションを実現。
+
+#define GLM_ENABLE_EXPERIMENTAL
 
 #include "boid_unit.h"
 
@@ -28,14 +32,14 @@ extern std::vector<SpeciesParams> globalSpeciesParams;
 
 namespace {
 
-// 計算用の小さな定数
-constexpr float kEpsilon = 1e-6f;
-constexpr float kMinDirLen2 = 1e-12f;
-constexpr int kMaxNeighborSlots = 16;
-// 近傍を削除する際のヒステリシス係数（遠すぎる近傍を徐々に除外）
-constexpr float kNeighborDropHysteresis = 1.15f;
+// 計算用の小さな定数群：浮動小数点演算の安定性と近傍管理の制御パラメータ
+constexpr float kEpsilon = 1e-6f;        // ゼロ除算防止用の微小値
+constexpr float kMinDirLen2 = 1e-12f;    // 方向ベクトル正規化の最小二乗長
+constexpr int kMaxNeighborSlots = 16;    // 近傍キャッシュの最大スロット数
+constexpr float kNeighborDropHysteresis = 1.15f; // 近傍除外時のヒステリシス係数
 
-// 近傍スロット管理用ビットマスク操作
+// 近傍スロット管理用ビットマスク操作：高効率な存在フラグ管理
+// 16個の近傍スロットの使用状況を単一の uint16_t で管理する仕組み
 inline bool maskTest(uint16_t mask, int slot) {
   return ((mask >> slot) & 1u) != 0;
 }
@@ -49,6 +53,7 @@ inline void maskReset(uint16_t &mask, int slot) {
 }
 
 // 軸周りの近似回転（小角度向け高速化）
+// 三角関数を使わずに外積で近似計算し、リアルタイム性能を優先
 inline glm::vec3 approxRotate(const glm::vec3 &v, const glm::vec3 &axis,
                               float angle) {
   const float axisLen2 = glm::length2(axis);
@@ -59,7 +64,8 @@ inline glm::vec3 approxRotate(const glm::vec3 &v, const glm::vec3 &axis,
   return v + angle * glm::cross(normalizedAxis, v);
 }
 
-// 方向からロールゼロのクォータニオンを生成
+// 方向ベクトルからロールゼロのクォータニオンを生成
+// Boid の姿勢表現で、前方向は指定、ロール（Z軸回転）は無しの標準姿勢を作る
 inline glm::quat dirToQuatRollZero(const glm::vec3 &forward) {
   glm::vec3 f = glm::normalize(forward);
   glm::vec3 up(0.0f, 1.0f, 0.0f);
@@ -72,7 +78,8 @@ inline glm::quat dirToQuatRollZero(const glm::vec3 &forward) {
   return glm::quat_cast(basis);
 }
 
-// イージング関数（smoothstep）
+// イージング関数群：滑らかな値変化のためのカーブ計算
+// Boid の行動変化や境界反応で急激な変化を避けるために使用
 inline float easeOut(float t) { return t * t * (3.0f - 2.0f * t); }
 
 inline float smoothStep(float edge0, float edge1, float x) {
@@ -83,7 +90,8 @@ inline float smoothStep(float edge0, float edge1, float x) {
   return t * t * (3.0f - 2.0f * t);
 }
 
-// ゼロベクトルを安全に扱う正規化
+// ゼロベクトルを安全に扱う正規化：長さがゼロに近い場合の例外処理
+// Boid の速度や力ベクトルの計算で数値的不安定性を回避
 inline glm::vec3 safeNormalize(const glm::vec3 &v) {
   const float lenSq = glm::dot(v, v);
   if (lenSq < kMinDirLen2) {
@@ -93,13 +101,15 @@ inline glm::vec3 safeNormalize(const glm::vec3 &v) {
 }
 
 // 軽量な乱数生成器（スレッドローカル）
+// 線形合同法による高速擬似乱数、マルチスレッド環境で独立したシード管理
 inline uint32_t nextRandom() {
   static thread_local uint32_t state = 1u;
   state = state * 1103515245u + 12345u;
   return (state >> 16) & 0x7fffu;
 }
 
-// 空いている近傍スロットを探す
+// 近傍キャッシュの空きスロット検索：ビットマスクを線形走査
+// 新しい近傍を追加する際の高速な空き領域発見
 inline int findFreeSlot(uint16_t mask, int limit) {
   for (int i = 0; i < limit; ++i) {
     if (!maskTest(mask, i)) {
@@ -109,7 +119,8 @@ inline int findFreeSlot(uint16_t mask, int limit) {
   return -1;
 }
 
-// 指定候補がすでに近傍リストに含まれているか判定
+// 重複近傍の検出：同一 Boid を複数回近傍登録することを防ぐ
+// キャッシュ整合性維持のための事前チェック機能
 inline bool containsNeighbor(uint16_t mask,
                              const std::array<int, kMaxNeighborSlots> &slots,
                              int limit, int candidate) {
@@ -121,7 +132,8 @@ inline bool containsNeighbor(uint16_t mask,
   return false;
 }
 
-// 全種のパラメータから最大の捕食者警戒半径を計算
+// 全種族パラメータから最大の捕食者警戒半径を算出
+// LBVH 近傍探索の半径パラメータ決定に使用、過不足ない探索範囲を保証
 float computeMaxPredatorAlertRadius() {
   float radius = 1.0f;
   for (const auto &params : globalSpeciesParams) {
@@ -137,7 +149,8 @@ float computeMaxPredatorAlertRadius() {
 
 namespace {
 
-// Boid同士の相互作用を指定範囲で計算する内部関数
+// Boid 相互作用計算の中核関数：指定範囲の個体について群れ行動力を算出
+// 近傍探索・キャッシュ管理・三大法則（結合・分離・整列）・捕食回避を統合実行
 void computeBoidInteractionsSpan(SoABuffers &buf, const LbvhIndex &index,
                                  int begin, int end, float dt,
                                  float maxPredatorAlertRadius) {
@@ -152,6 +165,7 @@ void computeBoidInteractionsSpan(SoABuffers &buf, const LbvhIndex &index,
     return;
   }
 
+  // 近傍候補の処理プール上限（メモリ効率と性能のバランス）
   constexpr int kMaxCandidatePool = kMaxNeighborSlots * 2;
   constexpr int kMaxPredatorCandidates = 64;
 
@@ -164,10 +178,12 @@ void computeBoidInteractionsSpan(SoABuffers &buf, const LbvhIndex &index,
 
     glm::vec3 newAcceleration(0.0f);
 
+    // 現在の Boid の近傍キャッシュと状態データへの参照取得
     auto &cohesionMemories = buf.boidCohesionMemories[gIdx];
     uint16_t &activeNeighbors = buf.boidNeighborMasks[gIdx];
     auto &neighborIndices = buf.boidNeighborIndices[gIdx];
 
+    // 近傍スロット数の動的調整：種族パラメータに基づく最適化
     const int desiredSlots =
         std::min(kMaxNeighborSlots, std::max(1, selfParams.maxNeighbors));
     if (static_cast<int>(cohesionMemories.size()) < desiredSlots) {
@@ -175,19 +191,22 @@ void computeBoidInteractionsSpan(SoABuffers &buf, const LbvhIndex &index,
     }
     const int slotCount = std::min(desiredSlots, kMaxNeighborSlots);
 
+    // 未使用スロットのクリア：メモリ安全性とキャッシュ整合性の保証
     for (int slot = slotCount; slot < kMaxNeighborSlots; ++slot) {
       maskReset(activeNeighbors, slot);
       neighborIndices[slot] = -1;
     }
 
+    // 現在 Boid の基本状態：位置・速度・向きの取得と正規化
     const glm::vec3 pos = buf.positions[gIdx];
     const glm::vec3 vel = buf.velocities[gIdx];
     const float velLen2 = glm::length2(vel);
     glm::vec3 forward = safeNormalize(vel);
     if (glm::length2(forward) < 1e-8f) {
-      forward = glm::vec3(0.0f, 0.0f, 1.0f);
+      forward = glm::vec3(0.0f, 0.0f, 1.0f); // 静止時のデフォルト向き
     }
 
+    // 近傍探索パラメータの算出：結合・分離半径から最適なクエリ範囲を決定
     const float queryRadius = std::max(
         selfParams.cohesionRange, std::max(selfParams.separationRange, 0.0f));
     const float viewRangeSq = (queryRadius > 0.0f)
@@ -196,13 +215,18 @@ void computeBoidInteractionsSpan(SoABuffers &buf, const LbvhIndex &index,
     const float halfFovRad =
         glm::radians(std::max(selfParams.fieldOfViewDeg, 0.0f) * 0.5f);
     const float cosHalfFov = std::cos(halfFovRad);
+    
+    // 群れ行動の距離閾値：分離（Separation）・結合（Cohesion）の二乗距離
     const float reSq = selfParams.separationRange * selfParams.separationRange;
     const float raSq = selfParams.cohesionRange * selfParams.cohesionRange;
-  const float dropRadiusSq =
-    (raSq > 0.0f ? raSq * kNeighborDropHysteresis : viewRangeSq);
-  const float searchRadiusLimit =
-    (raSq > 0.0f) ? glm::sqrt(dropRadiusSq) : queryRadius;
+    
+    // 近傍キャッシュ管理：ヒステリシスによる安定した近傍選択
+    const float dropRadiusSq =
+      (raSq > 0.0f ? raSq * kNeighborDropHysteresis : viewRangeSq);
+    const float searchRadiusLimit =
+      (raSq > 0.0f) ? glm::sqrt(dropRadiusSq) : queryRadius;
 
+    // 既存近傍キャッシュの検証・更新：距離・時間・種族による無効化判定
     int activeCount = 0;
     for (int slot = 0; slot < slotCount; ++slot) {
       if (!maskTest(activeNeighbors, slot)) {
@@ -213,12 +237,14 @@ void computeBoidInteractionsSpan(SoABuffers &buf, const LbvhIndex &index,
         continue;
       }
 
+      // 基本的な有効性チェック：インデックス範囲・種族一致
       const int neighborIdx = neighborIndices[slot];
       bool remove = neighborIdx < 0 || neighborIdx >= totalCount;
       if (!remove && buf.speciesIds[neighborIdx] != sid) {
-        remove = true;
+        remove = true;  // 異種族は近傍から除外
       }
 
+      // 距離ベース除外：ヒステリシス付きで遠すぎる近傍を削除
       if (!remove) {
         const glm::vec3 diff = buf.positions[neighborIdx] - pos;
         const float distSq = glm::dot(diff, diff);
@@ -227,13 +253,15 @@ void computeBoidInteractionsSpan(SoABuffers &buf, const LbvhIndex &index,
         }
       }
 
+      // 時間ベース除外：長期間維持された近傍の自動リフレッシュ（tau 時定数）
       if (!remove && slot < static_cast<int>(cohesionMemories.size())) {
         cohesionMemories[slot] += dt;
         if (cohesionMemories[slot] > selfParams.tau) {
-          remove = true;
+          remove = true;  // 時間経過による近傍の陳腐化防止
         }
       }
 
+      // 近傍スロットの更新：無効な近傍を削除または有効カウントを増加
       if (remove) {
         maskReset(activeNeighbors, slot);
         neighborIndices[slot] = -1;
@@ -604,11 +632,14 @@ void computeBoidInteractionsSpan(SoABuffers &buf, const LbvhIndex &index,
       continue;
     }
 
-    // Boids三大則（分離・整列・凝集）の計算
+    // ★ Boids 三大法則の力ベクトル累積変数
+    // Separation（分離）: 近すぎる個体から離れる力
+    // Alignment（整列）: 周囲の個体と速度を合わせる力  
+    // Cohesion（結合）: 群れの中心に向かう力
     glm::vec3 sumSeparation(0.0f);
     glm::vec3 sumAlignment(0.0f);
     glm::vec3 sumCohesion(0.0f);
-    float stressGainSum = 0.0f;
+    float stressGainSum = 0.0f;      // ストレス値の伝播計算用
     float stressWeightSum = 0.0f;
 
     const float selfStress = buf.stresses[gIdx];
@@ -645,17 +676,16 @@ void computeBoidInteractionsSpan(SoABuffers &buf, const LbvhIndex &index,
       }
       const SpeciesParams &neighborParams = globalSpeciesParams[neighborSid];
 
-      // 近傍との相対位置と距離を計算
+      // 近傍との空間関係を計算：相対位置ベクトルと距離
       const glm::vec3 diff = buf.positions[neighborIdx] - pos;
       const float distSq = glm::dot(diff, diff);
       if (distSq <= kEpsilon) {
-        continue;
+        continue; // 同一位置にある場合は処理をスキップ
       }
       const float dist = glm::sqrt(distSq);
 
-      // -----------------------------------------------
-      // 物理的衝突判定: 体の半径による押し戻し力
-      // -----------------------------------------------
+      // ★ 物理的衝突回避：体の半径による硬い反発力
+      // 個体同士が重なり合わないよう、距離に反比例した強力な押し戻し力を適用
       const float selfRadius = std::max(selfParams.bodyRadius, 0.0f);
       const float neighborRadius = std::max(neighborParams.bodyRadius, 0.0f);
       const float combinedRadius = selfRadius + neighborRadius;
@@ -667,7 +697,7 @@ void computeBoidInteractionsSpan(SoABuffers &buf, const LbvhIndex &index,
               clearanceSq > 0.0f ? std::max(combinedRadius - distSafe, 0.0f)
                                  : 0.0f;
           if (penetration > 0.0f) {
-            // 貫通量に応じた反発力を計算
+            // 貫通の深さに比例した二乗カーブで反発力を強化
             const glm::vec3 normal = diff * (1.0f / distSafe);
             const float penetrationRatio =
                 penetration / std::max(combinedRadius, 1e-5f);
@@ -698,12 +728,11 @@ void computeBoidInteractionsSpan(SoABuffers &buf, const LbvhIndex &index,
         }
       }
 
-      // -----------------------------------------------
-      // 分離力 (Separation): 近すぎる個体から離れる
-      // -----------------------------------------------
+      // ★ 分離力（Separation）：近すぎる個体から離れる反発力
+      // 距離に反比例する力で、密集を防ぎながら個体間のパーソナルスペースを維持
       float separationRange = selfParams.separationRange;
       if (separationRange <= 1e-4f) {
-        // separationRange が未設定の場合は体のサイズから推定
+        // 分離範囲が未設定の場合は体サイズから自動推定
         const float bodyDiameter = std::max(selfParams.bodyRadius * 2.0f, 0.0f);
         const float bodyLength = std::abs(selfParams.bodyHeadLength) +
                                  std::abs(selfParams.bodyTailLength);
@@ -713,15 +742,18 @@ void computeBoidInteractionsSpan(SoABuffers &buf, const LbvhIndex &index,
       if (separationRange > 1e-4f) {
         wSep = std::clamp(1.0f - (dist / separationRange), 0.0f, 1.0f);
       }
+      // 反対方向（-diff）に距離の逆数に比例した力を加える
       sumSeparation += (-diff) * (wSep / std::max(distSq, kEpsilon));
 
-      // 誘引方向の蓄積（分離範囲外かつ凝集範囲内の個体）
+      // ★ 結合指向の蓄積：分離範囲外で結合範囲内の個体への誘引
+      // 適度な距離の近傍に向かう方向を記録（後で結合力計算に使用）
       if (distSq > reSq && distSq <= raSq) {
         attractDirSum += diff * (1.0f / dist);
         ++attractDirCount;
       }
 
-      // 凝集力（近傍の平均位置に向かう）
+      // ★ 結合力（Cohesion）：群れの中心に向かう求心力
+      // 近傍の加重平均位置を計算し、そこに向かう力を生成
       float wCohesion = std::clamp(dist / std::max(selfParams.cohesionRange, 1e-4f),
                               0.0f, 1.0f);
       const float stressFactor = 1.0f + buf.stresses[gIdx] * 0.2f;
@@ -730,7 +762,8 @@ void computeBoidInteractionsSpan(SoABuffers &buf, const LbvhIndex &index,
       wCohesion *= stressFactor * cohesionThreatFactor;
       sumCohesion += buf.positions[neighborIdx] * wCohesion;
 
-      // 整列力（近傍の速度を合わせる）
+      // ★ 整列力（Alignment）：周囲と速度を合わせる協調行動
+      // 近傍の速度ベクトルを累積して平均化し、統一された移動方向を形成
       sumAlignment += buf.velocities[neighborIdx];
     }
 
@@ -754,7 +787,8 @@ void computeBoidInteractionsSpan(SoABuffers &buf, const LbvhIndex &index,
       totalSeparation = safeNormalize(sumSeparation) *
                         (selfParams.separation * separationThreatFactor);
     }
-
+    
+    // -----------------------------------------------
     // 凝集力の正規化
     // -----------------------------------------------
     glm::vec3 totalCohesion(0.0f);
@@ -822,6 +856,9 @@ void computeBoidInteractionsSpan(SoABuffers &buf, const LbvhIndex &index,
 
 } // namespace
 
+// Boid 相互作用計算のメインエントリーポイント：指定範囲での群れ行動力算出
+// LBVH 空間インデックスを活用して効率的な近傍探索を実行し、
+// 三大法則（分離・整列・結合）+ 捕食回避 + 境界回避の合成力を計算
 void computeBoidInteractionsRange(SoABuffers &buf, const LbvhIndex &index,
                                   int begin, int end, float dt) {
   const int totalCount = static_cast<int>(buf.positions.size());
@@ -838,7 +875,7 @@ void computeBoidInteractionsRange(SoABuffers &buf, const LbvhIndex &index,
   const int workItemCount = clampedEnd - clampedBegin;
   const float maxPredatorAlertRadius = computeMaxPredatorAlertRadius();
 
-  constexpr int kMinChunk = 256;
+  constexpr int kMinChunk = 64;
   const unsigned hwConcurrency =
       std::max(1u, std::thread::hardware_concurrency());
   const bool useParallel = hwConcurrency > 1 && workItemCount >= kMinChunk;
@@ -881,8 +918,9 @@ void computeBoidInteractionsRange(SoABuffers &buf, const LbvhIndex &index,
 }
 
 // -----------------------------------------------
-// 運動学的更新: 加速度から速度・位置を更新
-// -----------------------------------------------
+// Boid 運動学的更新のメインエントリーポイント：物理積分と姿勢計算
+// 相互作用で計算された加速度を基に、速度・位置・姿勢を時間発展させる
+// 速度制限・境界処理・姿勢のスムージングを統合実行
 void updateBoidKinematicsRange(SoABuffers &buf, int begin, int end, float dt) {
   const int totalCount = static_cast<int>(buf.positions.size());
   if (totalCount == 0) {
