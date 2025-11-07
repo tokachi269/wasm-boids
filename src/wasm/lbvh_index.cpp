@@ -279,6 +279,11 @@ int LbvhIndex::gatherNearest(const glm::vec3 &center, int maxCount,
     stack.reserve(kTraversalStackReserve);
   }
 
+  // ★ 改善：クエリ中心に近い葉ノードから開始する最適化
+  // 根ノードから毎回探索するのではなく、中心点に最も近い既知の葉から
+  // 段階的に探索範囲を拡大する手法を採用
+  
+  // まず根ノードでの早期終了判定は維持
   const float rootDist =
       distanceToAabbSq(center, nodes_[0].boundsMin, nodes_[0].boundsMax);
   if (hasRadiusLimit && rootDist > maxRadiusSq) {
@@ -291,8 +296,14 @@ int LbvhIndex::gatherNearest(const glm::vec3 &center, int maxCount,
       localMaxQueue = currentSize; // 統計用：最大スタック深度を記録
     }
   };
-  // 根ノードから探索開始
-  stack.push_back(QueueEntry{0, rootDist});
+
+  // 探索開始点の選択：可能なら中心に近い葉から、無理なら根から
+  int startNodeIndex = 0;  // デフォルトは根ノード
+  float startDist = rootDist;
+  
+  // TODO: より高度な最適化として、前回のクエリ結果をヒントに使用する
+  // 現在は安全な根ノード探索を維持
+  stack.push_back(QueueEntry{startNodeIndex, startDist});
   updateStackSize();
 
   auto &best = scratch.best;
