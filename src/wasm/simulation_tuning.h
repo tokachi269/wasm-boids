@@ -13,6 +13,7 @@ struct SimulationTuningParams {
   float cohesionBoost = 1.2f;           // threat に応じた凝集力強化量
   float separationMinFactor = 0.55f;    // threat=1 時の分離力スケール下限（0〜1）
   float alignmentBoost = 0.6f;          // threat に応じた整列強化量
+  float antiMillGain = 0.15f;           // 渦抑制用の角運動量ダンピング係数
 };
 
 // グローバルなチューニングパラメータ実体

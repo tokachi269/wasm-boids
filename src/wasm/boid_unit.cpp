@@ -503,9 +503,17 @@ void computeBoidInteractionsSpan(SoABuffers &buf,
       // -----------------------------------------------
       if (candidateCount < stopThreshold) {
         const float radiusLimit = searchRadiusLimit;
-        float searchRadius = std::max(selfParams.separationRange, 0.0f);
+        // 分離・整列・結合の中で最も広い半径まで一度に視野を拡張する。
+        const float maxRuleRange =
+            std::max(selfParams.cohesionRange,
+                     std::max(selfParams.alignmentRange,
+                              selfParams.separationRange));
+        float searchRadius = maxRuleRange;
         if (searchRadius <= 0.0f) {
-          searchRadius = radiusLimit * 0.25f;
+          searchRadius = std::max(selfParams.separationRange, 0.0f);
+        }
+        if (searchRadius <= 0.0f) {
+          searchRadius = radiusLimit * 0.5f;
         }
         const float minRadius = std::min(0.5f, radiusLimit);
         searchRadius = std::clamp(searchRadius, minRadius, radiusLimit);
@@ -513,7 +521,7 @@ void computeBoidInteractionsSpan(SoABuffers &buf,
         std::array<int, kMaxCandidatePool> queryIndices{};
         std::array<float, kMaxCandidatePool> queryDistSq{};
         int passes = 0;
-        while (candidateCount < candidateCapacity && passes < 6) {
+        while (candidateCount < candidateCapacity) {
           const int remaining = stopThreshold - candidateCount;
           if (remaining <= 0) {
             break;
@@ -579,6 +587,9 @@ void computeBoidInteractionsSpan(SoABuffers &buf,
           }
           searchRadius = std::min(radiusLimit, nextRadius);
           ++passes;
+          if (passes > 32) {
+            break; // 念のため無限ループを防止
+          }
         }
       }
 
@@ -966,7 +977,10 @@ void computeBoidInteractionsSpan(SoABuffers &buf,
           if (axisLen2 > 1e-8f) {
             axis2 *= (1.0f / glm::sqrt(axisLen2));
             // 最大回転角を適用してトルクを制限
-            const float rot2 = std::min(ang2, selfParams.torqueStrength * dt);
+            const float maxTurnStep = selfParams.maxTurnAngle * dt;
+            const float rotationalBudget =
+                std::max(0.0f, std::min(selfParams.torqueStrength * dt, maxTurnStep));
+            const float rot2 = std::min(ang2, rotationalBudget);
             const float rotRatio = rot2 / std::max(ang2, 1e-4f);
             totalAlignment *= rotRatio;
             torqueImpulse += axis2 * (ang2 * selfParams.torqueStrength);
@@ -1116,7 +1130,7 @@ void updateBoidKinematicsRange(SoABuffers &buf, int begin, int end, float dt) {
     // -----------------------------------------------
     // 最大旋回角の制限（ストレスと捕食者状態で調整）
     // -----------------------------------------------
-  // SpeciesParams::maxTurnAngle は 1 ステップあたりの許容回転量を表す。
+  // SpeciesParams::maxTurnAngle は 1 秒あたりの最大回転量（ラジアン）を表す。
   float maxTurnAngle = params.maxTurnAngle * stressFactor;
     if (params.isPredator && buf.predatorTargetIndices[gIdx] >= 0) {
       maxTurnAngle *= 1.5f;
@@ -1128,7 +1142,7 @@ void updateBoidKinematicsRange(SoABuffers &buf, int begin, int end, float dt) {
 
     const float dotProduct = glm::dot(oldDir, newDir);
     const float angle = std::acos(std::clamp(dotProduct, -1.0f, 1.0f));
-    const float allowedTurn = maxTurnAngle;
+    const float allowedTurn = maxTurnAngle * dt;
     if (angle > allowedTurn) {
       glm::vec3 axis = glm::cross(oldDir, newDir);
       const float axisLen2 = glm::length2(axis);

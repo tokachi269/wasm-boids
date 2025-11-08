@@ -152,6 +152,22 @@
                   v-model.number="systemSettings.alignmentBoost"
                 />
               </div>
+              <div class="setting-row">
+                <label>アンチミル係数<br />(antiMillGain):</label>
+                <input
+                  type="range"
+                  min="0"
+                  max="0.6"
+                  step="0.01"
+                  v-model.number="systemSettings.antiMillGain"
+                />
+                <input
+                  class="value-input"
+                  type="number"
+                  step="0.01"
+                  v-model.number="systemSettings.antiMillGain"
+                />
+              </div>
             </div>
           </details>
         </div>
@@ -317,6 +333,7 @@ const DEFAULT_TUNING_SETTINGS = {
   cohesionBoost: 2.0, // 脅威時の凝集力ブースト
   separationMinFactor: 1.0, // 脅威時の分離力スケール下限（0〜1）
   alignmentBoost: 1.2, // 脅威時の整列力ブースト
+  antiMillGain: 0.15, // 渦抑制用アンチミル係数
 };
 
 const flockStore = createFlockSettingsStore(
@@ -869,7 +886,7 @@ function reinitializeFlockNow() {
   }
 
   try {
-    wasmModule.callInitBoids(vector, 1, 6, 0.25);
+    wasmModule.callInitBoids(vector, 1, 4, 0.25);
   } finally {
     if (typeof vector.delete === "function") {
       vector.delete();
