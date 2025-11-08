@@ -1,16 +1,17 @@
 ﻿// Boid 個体レベルの物理・行動計算エンジン
 // 群れ行動（結合・分離・整列）、境界回避、近傍管理を実装する中核モジュール。
-// LBVH 空間インデックスと連携し、リアルタイム群集シミュレーションを実現。
+// ユニフォームグリッド空間インデックスと連携し、リアルタイム群集シミュレーションを実現。
 
 #define GLM_ENABLE_EXPERIMENTAL
 
 #include "boid_unit.h"
 
 #include "boids_buffers.h"
-#include "lbvh_index.h"
+#include "dbvh_index.h"
 #include "pool_accessor.h"
 #include "simulation_tuning.h"
 #include "species_params.h"
+#include "uniform_grid.h"
 
 #include <algorithm>
 #include <array>
@@ -31,11 +32,140 @@
 extern std::vector<SpeciesParams> globalSpeciesParams;
 
 namespace {
+struct HybridNeighborScratch {
+  std::vector<std::pair<float, int>> combined;
+  std::vector<int> fallback;
+};
+
+inline HybridNeighborScratch &neighborScratch() {
+  thread_local HybridNeighborScratch scratch;
+  if (scratch.combined.capacity() < 512) {
+    scratch.combined.reserve(512);
+  }
+  if (scratch.fallback.capacity() < 512) {
+    scratch.fallback.reserve(512);
+  }
+  return scratch;
+}
+} // namespace
+
+GridDbvhNeighborProvider::GridDbvhNeighborProvider(
+    const SoABuffers &buffers_, const UniformGridIndex &gridIndex,
+    const DbvhIndex *dbvhIndex, int fallbackThreshold, int fallbackLimit,
+    float fallbackRadiusScale, HybridNeighborStats *statsRef)
+    : buffers(buffers_), grid(gridIndex), dbvh(dbvhIndex),
+      threshold(std::max(fallbackThreshold, 0)),
+      fallbackCapacity(std::max(fallbackLimit, 0)),
+      radiusScale(std::max(fallbackRadiusScale, 1.0f)), stats(statsRef) {}
+
+int GridDbvhNeighborProvider::gatherNearest(const glm::vec3 &center,
+                                            int maxCount, float maxRadius,
+                                            int *outIndices,
+                                            float *outDistancesSq) const {
+  const int gathered =
+      grid.gatherNearest(center, maxCount, maxRadius, outIndices,
+                         outDistancesSq);
+
+  if (stats) {
+    stats->queryCount++;
+    if (threshold > 0 && gathered >= threshold) {
+      stats->overflowCount++;
+    }
+  }
+
+  if (!dbvh || threshold <= 0 || fallbackCapacity <= 0 || maxRadius <= 0.0f ||
+      gathered <= threshold) {
+    return gathered;
+  }
+
+  if (stats) {
+    stats->fallbackQueries++;
+  }
+
+  HybridNeighborScratch &scratch = neighborScratch();
+  auto &combined = scratch.combined;
+  combined.clear();
+  combined.reserve(static_cast<std::size_t>(gathered));
+  for (int i = 0; i < gathered; ++i) {
+    combined.emplace_back(outDistancesSq[i], outIndices[i]);
+  }
+
+  auto &fallback = scratch.fallback;
+  const std::size_t desiredSize = static_cast<std::size_t>(fallbackCapacity);
+  if (fallback.size() < desiredSize) {
+    fallback.resize(desiredSize);
+  }
+
+  const float queryRadius = maxRadius * radiusScale;
+  const int fetched = dbvh->gatherWithinRadius(center, queryRadius,
+                                               fallback.data(),
+                                               fallbackCapacity);
+  if (fetched <= 0) {
+    return gathered;
+  }
+
+  const float radiusSq = maxRadius * maxRadius;
+  const auto &positions = buffers.positions;
+  const std::size_t boidCount = positions.size();
+
+  auto isDuplicate = [&combined](int candidate) {
+    for (const auto &entry : combined) {
+      if (entry.second == candidate) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  for (int i = 0; i < fetched; ++i) {
+    const int candidate = fallback[static_cast<std::size_t>(i)];
+    if (candidate < 0 || candidate >= static_cast<int>(boidCount)) {
+      continue;
+    }
+    if (isDuplicate(candidate)) {
+      continue;
+    }
+    const glm::vec3 diff =
+        positions[static_cast<std::size_t>(candidate)] - center;
+    const float distSq = glm::dot(diff, diff);
+    if (distSq > radiusSq) {
+      continue;
+    }
+    combined.emplace_back(distSq, candidate);
+  }
+
+  if (combined.empty()) {
+    return 0;
+  }
+
+  std::sort(combined.begin(), combined.end(),
+            [](const auto &a, const auto &b) { return a.first < b.first; });
+
+  const int finalCount =
+      std::min(static_cast<int>(combined.size()), maxCount);
+  if (stats) {
+    const int added = std::max(0, finalCount - gathered);
+    stats->fallbackAdded += added;
+  }
+  for (int i = 0; i < finalCount; ++i) {
+    outDistancesSq[i] = combined[static_cast<std::size_t>(i)].first;
+    outIndices[i] = combined[static_cast<std::size_t>(i)].second;
+  }
+  return finalCount;
+}
+
+bool GridDbvhNeighborProvider::getLeafMembers(int boidIndex,
+                                              const int *&outIndices,
+                                              int &count) const {
+  return grid.getLeafMembers(boidIndex, outIndices, count);
+}
+
+namespace {
 
 // 計算用の小さな定数群：浮動小数点演算の安定性と近傍管理の制御パラメータ
-constexpr float kEpsilon = 1e-6f;        // ゼロ除算防止用の微小値
-constexpr float kMinDirLen2 = 1e-12f;    // 方向ベクトル正規化の最小二乗長
-constexpr int kMaxNeighborSlots = 16;    // 近傍キャッシュの最大スロット数
+constexpr float kEpsilon = 1e-6f;     // ゼロ除算防止用の微小値
+constexpr float kMinDirLen2 = 1e-12f; // 方向ベクトル正規化の最小二乗長
+constexpr int kMaxNeighborSlots = 16; // 近傍キャッシュの最大スロット数
 constexpr float kNeighborDropHysteresis = 1.15f; // 近傍除外時のヒステリシス係数
 
 // 近傍スロット管理用ビットマスク操作：高効率な存在フラグ管理
@@ -133,7 +263,7 @@ inline bool containsNeighbor(uint16_t mask,
 }
 
 // 全種族パラメータから最大の捕食者警戒半径を算出
-// LBVH 近傍探索の半径パラメータ決定に使用、過不足ない探索範囲を保証
+// グリッド近傍探索の半径パラメータ決定に使用、過不足ない探索範囲を保証
 float computeMaxPredatorAlertRadius() {
   float radius = 1.0f;
   for (const auto &params : globalSpeciesParams) {
@@ -151,7 +281,8 @@ namespace {
 
 // Boid 相互作用計算の中核関数：指定範囲の個体について群れ行動力を算出
 // 近傍探索・キャッシュ管理・三大法則（結合・分離・整列）・捕食回避を統合実行
-void computeBoidInteractionsSpan(SoABuffers &buf, const LbvhIndex &index,
+void computeBoidInteractionsSpan(SoABuffers &buf,
+                                 const GridDbvhNeighborProvider &neighbors,
                                  int begin, int end, float dt,
                                  float maxPredatorAlertRadius) {
   const int totalCount = static_cast<int>(buf.positions.size());
@@ -215,16 +346,16 @@ void computeBoidInteractionsSpan(SoABuffers &buf, const LbvhIndex &index,
     const float halfFovRad =
         glm::radians(std::max(selfParams.fieldOfViewDeg, 0.0f) * 0.5f);
     const float cosHalfFov = std::cos(halfFovRad);
-    
+
     // 群れ行動の距離閾値：分離（Separation）・結合（Cohesion）の二乗距離
     const float reSq = selfParams.separationRange * selfParams.separationRange;
     const float raSq = selfParams.cohesionRange * selfParams.cohesionRange;
-    
+
     // 近傍キャッシュ管理：ヒステリシスによる安定した近傍選択
     const float dropRadiusSq =
-      (raSq > 0.0f ? raSq * kNeighborDropHysteresis : viewRangeSq);
+        (raSq > 0.0f ? raSq * kNeighborDropHysteresis : viewRangeSq);
     const float searchRadiusLimit =
-      (raSq > 0.0f) ? glm::sqrt(dropRadiusSq) : queryRadius;
+        (raSq > 0.0f) ? glm::sqrt(dropRadiusSq) : queryRadius;
 
     // 既存近傍キャッシュの検証・更新：距離・時間・種族による無効化判定
     int activeCount = 0;
@@ -241,7 +372,7 @@ void computeBoidInteractionsSpan(SoABuffers &buf, const LbvhIndex &index,
       const int neighborIdx = neighborIndices[slot];
       bool remove = neighborIdx < 0 || neighborIdx >= totalCount;
       if (!remove && buf.speciesIds[neighborIdx] != sid) {
-        remove = true;  // 異種族は近傍から除外
+        remove = true; // 異種族は近傍から除外
       }
 
       // 距離ベース除外：ヒステリシス付きで遠すぎる近傍を削除
@@ -257,7 +388,7 @@ void computeBoidInteractionsSpan(SoABuffers &buf, const LbvhIndex &index,
       if (!remove && slot < static_cast<int>(cohesionMemories.size())) {
         cohesionMemories[slot] += dt;
         if (cohesionMemories[slot] > selfParams.tau) {
-          remove = true;  // 時間経過による近傍の陳腐化防止
+          remove = true; // 時間経過による近傍の陳腐化防止
         }
       }
 
@@ -291,8 +422,8 @@ void computeBoidInteractionsSpan(SoABuffers &buf, const LbvhIndex &index,
     // queryRadius: cohesionRange と separationRange
     // の大きい方を最大探索半径とする。
     // 実際の探索では小さい半径から段階的に拡大することで密集時の無駄を削減。
-  int candidateCapacity = 0;
-  if (needsNeighborRefresh && searchRadiusLimit > 0.0f) {
+    int candidateCapacity = 0;
+    if (needsNeighborRefresh && searchRadiusLimit > 0.0f) {
       // -----------------------------------------------
       // 候補プールのキャパシティ計算
       // -----------------------------------------------
@@ -311,7 +442,7 @@ void computeBoidInteractionsSpan(SoABuffers &buf, const LbvhIndex &index,
       int localPairCount = 0;
       const int *leafMembers = nullptr;
       int leafCount = 0;
-      if (index.getLeafMembers(gIdx, leafMembers, leafCount)) {
+  if (neighbors.getLeafMembers(gIdx, leafMembers, leafCount)) {
         for (int i = 0; i < leafCount && localPairCount < candidateCapacity;
              ++i) {
           const int neighborIdx = leafMembers[i];
@@ -368,7 +499,7 @@ void computeBoidInteractionsSpan(SoABuffers &buf, const LbvhIndex &index,
       }
 
       // -----------------------------------------------
-      // 不足している場合のみ段階的半径拡張で LBVH 探索を実行
+      // 不足している場合のみ段階的半径拡張でグリッド検索を実行
       // -----------------------------------------------
       if (candidateCount < stopThreshold) {
         const float radiusLimit = searchRadiusLimit;
@@ -390,9 +521,9 @@ void computeBoidInteractionsSpan(SoABuffers &buf, const LbvhIndex &index,
           const int maxRoom = candidateCapacity - candidateCount;
           const int requestCount = std::max(1, std::min(remaining, maxRoom));
 
-          const int fetched =
-              index.gatherNearest(pos, requestCount, searchRadius,
-                                  queryIndices.data(), queryDistSq.data());
+      const int fetched = neighbors.gatherNearest(
+        pos, requestCount, searchRadius, queryIndices.data(),
+        queryDistSq.data());
 
           for (int i = 0; i < fetched && candidateCount < candidateCapacity;
                ++i) {
@@ -503,10 +634,10 @@ void computeBoidInteractionsSpan(SoABuffers &buf, const LbvhIndex &index,
       targetTime -= dt;
 
       std::array<float, kMaxPredatorCandidates> predatorDists{};
-      // 最大警戒範囲内の獲物候補を LBVH から取得
-      const int predatorFetched = index.gatherNearest(
-          pos, kMaxPredatorCandidates, maxPredatorAlertRadius,
-          predatorCandidates.data(), predatorDists.data());
+      // 最大警戒範囲内の獲物候補をグリッドから取得
+    const int predatorFetched = neighbors.gatherNearest(
+      pos, kMaxPredatorCandidates, maxPredatorAlertRadius,
+      predatorCandidates.data(), predatorDists.data());
 
       // -----------------------------------------------
       // 獲物候補のフィルタリングと恐怖影響の付与
@@ -634,12 +765,12 @@ void computeBoidInteractionsSpan(SoABuffers &buf, const LbvhIndex &index,
 
     // ★ Boids 三大法則の力ベクトル累積変数
     // Separation（分離）: 近すぎる個体から離れる力
-    // Alignment（整列）: 周囲の個体と速度を合わせる力  
+    // Alignment（整列）: 周囲の個体と速度を合わせる力
     // Cohesion（結合）: 群れの中心に向かう力
     glm::vec3 sumSeparation(0.0f);
     glm::vec3 sumAlignment(0.0f);
     glm::vec3 sumCohesion(0.0f);
-    float stressGainSum = 0.0f;      // ストレス値の伝播計算用
+    float stressGainSum = 0.0f; // ストレス値の伝播計算用
     float stressWeightSum = 0.0f;
 
     const float selfStress = buf.stresses[gIdx];
@@ -754,8 +885,8 @@ void computeBoidInteractionsSpan(SoABuffers &buf, const LbvhIndex &index,
 
       // ★ 結合力（Cohesion）：群れの中心に向かう求心力
       // 近傍の加重平均位置を計算し、そこに向かう力を生成
-      float wCohesion = std::clamp(dist / std::max(selfParams.cohesionRange, 1e-4f),
-                              0.0f, 1.0f);
+      float wCohesion = std::clamp(
+          dist / std::max(selfParams.cohesionRange, 1e-4f), 0.0f, 1.0f);
       const float stressFactor = 1.0f + buf.stresses[gIdx] * 0.2f;
       const float cohesionThreatFactor =
           1.0f + gSimulationTuning.cohesionBoost * threatLevel;
@@ -787,7 +918,7 @@ void computeBoidInteractionsSpan(SoABuffers &buf, const LbvhIndex &index,
       totalSeparation = safeNormalize(sumSeparation) *
                         (selfParams.separation * separationThreatFactor);
     }
-    
+
     // -----------------------------------------------
     // 凝集力の正規化
     // -----------------------------------------------
@@ -857,10 +988,12 @@ void computeBoidInteractionsSpan(SoABuffers &buf, const LbvhIndex &index,
 } // namespace
 
 // Boid 相互作用計算のメインエントリーポイント：指定範囲での群れ行動力算出
-// LBVH 空間インデックスを活用して効率的な近傍探索を実行し、
+// ユニフォームグリッド空間インデックスを活用して効率的な近傍探索を実行し、
 // 三大法則（分離・整列・結合）+ 捕食回避 + 境界回避の合成力を計算
-void computeBoidInteractionsRange(SoABuffers &buf, const LbvhIndex &index,
-                                  int begin, int end, float dt) {
+void computeBoidInteractionsRange(SoABuffers &buf,
+                                  const GridDbvhNeighborProvider &neighbors,
+                                  int begin,
+                                  int end, float dt) {
   const int totalCount = static_cast<int>(buf.positions.size());
   if (totalCount == 0) {
     return;
@@ -881,8 +1014,8 @@ void computeBoidInteractionsRange(SoABuffers &buf, const LbvhIndex &index,
   const bool useParallel = hwConcurrency > 1 && workItemCount >= kMinChunk;
 
   if (!useParallel) {
-    computeBoidInteractionsSpan(buf, index, clampedBegin, clampedEnd, dt,
-                                maxPredatorAlertRadius);
+  computeBoidInteractionsSpan(buf, neighbors, clampedBegin, clampedEnd, dt,
+                maxPredatorAlertRadius);
     return;
   }
 
@@ -902,14 +1035,14 @@ void computeBoidInteractionsRange(SoABuffers &buf, const LbvhIndex &index,
   for (unsigned task = 1; task < desiredTasks; ++task) {
     const int chunkEnd = std::min(clampedEnd, chunkBegin + chunkSize);
     futures.emplace_back(pool.enqueue(
-        [chunkBegin, chunkEnd, dt, maxPredatorAlertRadius, &buf, &index]() {
-          computeBoidInteractionsSpan(buf, index, chunkBegin, chunkEnd, dt,
+        [chunkBegin, chunkEnd, dt, maxPredatorAlertRadius, &buf, &neighbors]() {
+          computeBoidInteractionsSpan(buf, neighbors, chunkBegin, chunkEnd, dt,
                                       maxPredatorAlertRadius);
         }));
     chunkBegin = chunkEnd;
   }
 
-  computeBoidInteractionsSpan(buf, index, chunkBegin, clampedEnd, dt,
+  computeBoidInteractionsSpan(buf, neighbors, chunkBegin, clampedEnd, dt,
                               maxPredatorAlertRadius);
 
   for (auto &fut : futures) {
@@ -983,7 +1116,8 @@ void updateBoidKinematicsRange(SoABuffers &buf, int begin, int end, float dt) {
     // -----------------------------------------------
     // 最大旋回角の制限（ストレスと捕食者状態で調整）
     // -----------------------------------------------
-    float maxTurnAngle = params.maxTurnAngle * stressFactor;
+  // SpeciesParams::maxTurnAngle は 1 ステップあたりの許容回転量を表す。
+  float maxTurnAngle = params.maxTurnAngle * stressFactor;
     if (params.isPredator && buf.predatorTargetIndices[gIdx] >= 0) {
       maxTurnAngle *= 1.5f;
     }
@@ -993,13 +1127,14 @@ void updateBoidKinematicsRange(SoABuffers &buf, int begin, int end, float dt) {
     }
 
     const float dotProduct = glm::dot(oldDir, newDir);
-    float angle = std::acos(std::clamp(dotProduct, -1.0f, 1.0f));
-    if (angle > maxTurnAngle) {
+    const float angle = std::acos(std::clamp(dotProduct, -1.0f, 1.0f));
+    const float allowedTurn = maxTurnAngle;
+    if (angle > allowedTurn) {
       glm::vec3 axis = glm::cross(oldDir, newDir);
       const float axisLen2 = glm::length2(axis);
       if (axisLen2 > 1e-8f) {
         axis /= glm::sqrt(axisLen2);
-        const float rot = std::min(angle, maxTurnAngle * dt);
+        const float rot = std::min(angle, allowedTurn);
         newDir = approxRotate(oldDir, axis, rot);
       }
     }

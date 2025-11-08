@@ -92,6 +92,11 @@ void syncReadToWriteBuffers() {
   BoidTree::instance().buf.syncWriteFromRead();
 }
 
+float getRecommendedGridCellSize() {
+  const float avgRange = BoidTree::instance().computeAverageNeighborRadius();
+  return std::max(10.0f, avgRange * 1.1f);
+}
+
 struct LbvhQueryStatsRaw {
   int queries;
   int nodesVisited;
@@ -102,12 +107,11 @@ struct LbvhQueryStatsRaw {
 
 const LbvhQueryStatsRaw *getLbvhQueryStatsPtr() {
   static LbvhQueryStatsRaw snapshot{};
-  const auto stats = BoidTree::instance().getLastQueryStats();
-  snapshot.queries = stats.queries;
-  snapshot.nodesVisited = stats.nodesVisited;
-  snapshot.leavesVisited = stats.leavesVisited;
-  snapshot.boidsConsidered = stats.boidsConsidered;
-  snapshot.maxQueueSize = stats.maxQueueSize;
+  snapshot.queries = 0;
+  snapshot.nodesVisited = 0;
+  snapshot.leavesVisited = 0;
+  snapshot.boidsConsidered = 0;
+  snapshot.maxQueueSize = 0;
   return &snapshot;
 }
 }

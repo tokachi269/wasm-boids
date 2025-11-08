@@ -1,92 +1,69 @@
 #pragma once
 
-#include "spatial_index.h"
 #include "boids_buffers.h"
-#include <vector>
-#include <unordered_map>
+#include "spatial_index.h"
+
+#include <cstdint>
 #include <glm/vec3.hpp>
 
-// ユニフォームグリッド（空間ハッシュ）による高速近傍探索
-// 
-// 設計方針：
-// - セル幅 = 反応半径（cohesionRange）で最適化
-// - 27セル探索（1+26近傍）による確実な近傍発見  
-// - SoA + 段階的距離計算による高効率枝刈り
-// - DBVH フォールバックとの連携を想定した軽量設計
-//
-// 利点：
-// - 毎フレーム O(N) の安定性能
-// - WASM で最も効率的な配列走査パターン
-// - 実装・デバッグが容易
-// - 密度分布に依存しない均一性能
+#include <unordered_map>
+#include <vector>
 
-class UniformGrid final : public SpatialIndex {
+// ユニフォームグリッド（空間ハッシュ）による近傍探索インデックス。
+// セル幅を一定に保ち、27 近傍セルを列挙することで Boid の局所探索を高速化する。
+class UniformGridIndex : public SpatialIndex {
 public:
-  explicit UniformGrid(float cellSize);
-  ~UniformGrid() override = default;
+  explicit UniformGridIndex(float cellSize = 50.0f);
 
-  // SpatialIndex インターフェース実装
+  // セル幅（反応半径の目安）を変更する。値が極端に小さくならないよう clamp する。
+  void setCellSize(float cellSize);
+
+  // サンプリング時の疑似乱数シードを設定する。フレームごとに更新して均等化する。
+  void setSamplingSeed(std::uint32_t seed);
+
+  // 与えられた SoA バッファからグリッドを再構築する。
+  void build(const SoABuffers &buffers);
+
+  // 近傍探索：center の周囲から最大 maxCount 件を距離昇順で取得する。
+  // maxRadius が 0 以下の場合はセル幅を基準とした動的半径を採用する。
+  int gatherNearest(const glm::vec3 &center, int maxCount, float maxRadius,
+                    int *outIndices, float *outDistancesSq) const;
+
+  // 指定 Boid が所属するセルに含まれるインデックス配列を取得する。
+  // セルが存在しない場合や無効インデックスでは false を返す。
+  bool getLeafMembers(int boidIndex, const int *&outIndices,
+                      int &count) const;
+
+  void clear();
+
   void forEachLeaf(const LeafVisitor &visitor) const override;
   void forEachLeafIntersectingSphere(const glm::vec3 &center, float radius,
                                      const LeafVisitor &visitor) const override;
 
-  // グリッド専用機能
-  void build(const SoABuffers &buffers);
-  void clear();
-  
-  // k-NN クエリ（DBVH フォールバック判定付き）
-  struct QueryResult {
-    int foundCount = 0;
-    int candidatesConsidered = 0;
-    bool usedFallback = false;
-  };
-  
-  QueryResult gatherNearest(const glm::vec3 &center, int maxCount, 
-                           float maxRadius, int *outIndices, 
-                           float *outDistancesSq,
-                           int fallbackThreshold = 256) const;
-
-  // 統計情報
-  struct GridStats {
-    int totalCells = 0;
-    int occupiedCells = 0;
-    int maxCellOccupancy = 0;
-    float avgCellOccupancy = 0.0f;
-  };
-  GridStats getStats() const;
-
 private:
   struct CellKey {
-    int x, y, z;
-    
-    bool operator==(const CellKey &other) const {
-      return x == other.x && y == other.y && z == other.z;
-    }
-  };
-  
-  struct CellKeyHash {
-    std::size_t operator()(const CellKey &key) const {
-      // FNV-1a ハッシュによる高品質な分散
-      std::size_t hash = 2166136261u;
-      hash ^= static_cast<std::size_t>(key.x);
-      hash *= 16777619u;
-      hash ^= static_cast<std::size_t>(key.y);  
-      hash *= 16777619u;
-      hash ^= static_cast<std::size_t>(key.z);
-      hash *= 16777619u;
-      return hash;
-    }
+    int x = 0;
+    int y = 0;
+    int z = 0;
   };
 
-  CellKey positionToCell(const glm::vec3 &pos) const;
-  void gatherCandidatesFromCells(const CellKey &centerCell, float maxRadiusSq,
-                                const glm::vec3 &queryPos,
-                                std::vector<int> &candidates) const;
+  struct Cell {
+    std::vector<int> indices; // セルに所属する Boid インデックス
+  };
 
-  float cellSize_;
-  float invCellSize_;
+  struct KeyHash {
+    std::size_t operator()(const CellKey &key) const noexcept;
+  };
+
+  struct KeyEq {
+    bool operator()(const CellKey &lhs, const CellKey &rhs) const noexcept;
+  };
+
+  CellKey cellFor(const glm::vec3 &position) const;
+
+  float cellSize_ = 10.0f;
+  float invCellSize_ = 1.0f / 10.0f;
   const SoABuffers *buffers_ = nullptr;
-  
-  // セル → Boid インデックス配列のマッピング
-  mutable std::unordered_map<CellKey, std::vector<int>, CellKeyHash> cells_;
+  std::uint32_t samplingSeed_ = 0;
+  std::unordered_map<CellKey, Cell, KeyHash, KeyEq> cells_;
 };

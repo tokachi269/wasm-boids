@@ -18,7 +18,7 @@
           リセット
         </button>
         <br />
-        <div class="settings tuning-settings" >
+        <div class="settings tuning-settings">
           <details class="species-section" :open="false">
             <summary class="species-header">
               <span class="species-title">Adjustment</span>
@@ -231,9 +231,10 @@ function detectDeviceProfile() {
   }
 
   // モバイルデバイスを最優先で認識
-  profile.isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
-    navigator.userAgent
-  );
+  profile.isMobile =
+    /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
+      navigator.userAgent
+    );
   if (profile.isMobile) {
     return profile;
   }
@@ -263,8 +264,9 @@ function fetchTreeStructure() {
   return wasmBridge?.exportTreeStructure() ?? null;
 }
 const deviceProfile = detectDeviceProfile();
-const useLowSpecPreset = deviceProfile.isMobile || deviceProfile.hasIntegratedGpu;
-const mobileBoidCount = useLowSpecPreset ? 6000 : 100;
+const useLowSpecPreset =
+  deviceProfile.isMobile || deviceProfile.hasIntegratedGpu;
+const mobileBoidCount = useLowSpecPreset ? 6000 : 10000;
 
 const DEFAULT_SETTINGS = [
   {
@@ -438,7 +440,7 @@ function positionStatsOverlay(element) {
   element.style.bottom = "auto";
   element.style.zIndex = "9999";
   element.style.width = "270px";
-    element.style.height = "48px";
+  element.style.height = "48px";
   element.style.pointerEvents = "auto";
   element.style.transform = "none";
 }
@@ -723,7 +725,7 @@ function initParticleSystem() {
     return;
   }
   if (!particleField) {
-  particleField = new ParticleField(useLowSpecPreset);
+    particleField = new ParticleField(useLowSpecPreset);
   }
   particleField.init(scene, renderer, camera, controls);
 }
@@ -1196,7 +1198,6 @@ let lastTime = performance.now(); // 前回のフレームのタイムスタン�
 
 function animate() {
   stats?.begin();
-
   const currentTime = performance.now();
   const deltaTime = (currentTime - lastTime) / 1000;
   lastTime = currentTime;

@@ -5,6 +5,7 @@
 #include "species_params.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <cmath>
 #include <random>
 #include <unordered_map>
@@ -13,30 +14,15 @@
 #include <glm/gtc/quaternion.hpp>
 
 // このファイルでは Boid シミュレーションの中枢となる BoidTree
-// を実装する。主な責務は 「SoA バッファ管理」「LBVH の構築・更新制御」「Boid
-// 間相互作用の計算調整」「運動学的更新」。 毎フレーム update()
-// が呼ばれ、移動量に応じて LBVH の refit/rebuild を判定し、
-// マルチスレッドで近傍計算→物理更新の順で実行する。
+// を実装する。主な責務は 「SoA バッファ管理」「ユニフォームグリッドを用いた空間インデックス更新」
+// 「Boid 間相互作用の計算調整」「運動学的更新」。 毎フレーム update()
+// が呼ばれ、グリッドの再構築→近傍計算→物理更新の順で実行する。
 
 std::vector<SpeciesParams> globalSpeciesParams;
 
 namespace {
-
-// LBVH
-// 再構築トリガー用の閾値群。「頻繁すぎる再構築を避けつつ、性能劣化も防ぐ」バランス調整。
-constexpr int kMaxFramesWithoutRebuild = 5; // フレーム間隔上限（強制再構築）
-constexpr float kMaxAccumulatedMovement = 30.0f; // 累積移動距離の上限
-constexpr float kMaxAverageDisplacementPerFrame =
-    0.25f; // 平均変位の上限（急激な動きを検知）
-constexpr float kMaxSingleFrameDisplacementSq =
-    1.0f * 1.0f;                            // 単一 Boid の最大移動²
-constexpr float kMovementEpsilonSq = 1e-6f; // 無視できる微小移動の閾値
-
-// LBVH クエリ品質監視用パラメータ。統計から木の劣化を検知し適応的に再構築する。
-constexpr float kQualityEwmaAlpha = 0.08f; // EWMA 更新係数（小さいほど安定）
-constexpr int kQualityBaselineWarmupQueries = 64; // 基準値確定に必要なクエリ数
-constexpr float kQualityNodesThresholdMultiplier = 1.5f; // 許容ノード訪問倍率
-constexpr float kQualityBoidsThresholdMultiplier = 2.1f; // 許容 Boid 評価倍率
+constexpr int kDbvhActivationOverflowSamples = 4;  // DBVH起動に必要な過負荷検知数
+constexpr int kDbvhDeactivateCooldownFrames = 180; // 過負荷解消後の維持フレーム数
 
 // Boid の進行方向から 3D 姿勢（クォータニオン）を計算するヘルパー関数。
 // 速度ベクトルを forward 軸とし、world の Y 軸を参考に right/up
@@ -74,8 +60,8 @@ BoidTree &BoidTree::instance() {
   return instance;
 }
 
-// 内部で LBVH インデックス（葉サイズ 32）を初期化する。
-BoidTree::BoidTree() : lbvhIndex_(32) {}
+// 内部でユニフォームグリッドインデックスを初期化する。
+BoidTree::BoidTree() = default;
 
 BoidTree::~BoidTree() = default;
 
@@ -112,126 +98,134 @@ void BoidTree::setRenderPointersToWriteBuffers() {
           : reinterpret_cast<uintptr_t>(buf.orientationsWrite.data());
 }
 
-// LBVH 空間インデックスを完全再構築し、統計情報をリセットする。
-// 大幅な配置変更や初期化時に呼び出され、品質劣化を解消する。
+// ユニフォームグリッドを再構築し、近傍探索用のセル割り当てを更新する。
+// 大幅な配置変更や初期化時に呼び出され、最新位置に基づくセル分布を作り直す。
 void BoidTree::rebuildSpatialIndex() {
-  lbvhIndex_.build(buf);
-  framesSinceRebuild_ = 0;
-  cumulativeDisplacementSinceRebuild_ = 0.0f;
-  maxStepDisplacementSqSinceRebuild_ = 0.0f;
-  lastAverageDisplacement_ = 0.0f;
-  resetSpatialIndexQuality();
-  lbvhDirty_ = false;
+  gridIndex_.setCellSize(gridCellSize_);
+  gridIndex_.build(buf);
+  if (dbvhEnabled_) {
+    const float baseRadius = std::max(gridCellSize_ * 0.5f, 1.0f);
+    const float velocityPadding = baseRadius * dbvhPaddingScale_;
+    dbvhIndex_.sync(buf, baseRadius, velocityPadding);
+  } else if (!dbvhIndex_.empty()) {
+    dbvhIndex_.clear();
+  }
+}
+
+// 種族パラメータを参考にセルサイズを適応調整する。
+// 最大行動半径に少し余裕を持たせ、最小セル幅を確保する。
+void BoidTree::updateGridCellSize() {
+  float target = gridCellSize_;
+  float maxRange = 0.0f;
+  for (const auto &params : globalSpeciesParams) {
+    float speciesRange = std::max(params.cohesionRange, params.alignmentRange);
+    speciesRange = std::max(speciesRange, params.separationRange);
+    speciesRange = std::max(speciesRange, params.predatorAlertRadius);
+    maxRange = std::max(maxRange, speciesRange);
+  }
+
+  if (maxRange <= 0.0f) {
+    target = std::max(10.0f, gridCellSize_);
+  } else {
+    target = std::max(10.0f, maxRange * 1.1f);
+  }
+
+  if (std::fabs(target - gridCellSize_) > 1e-3f) {
+    gridCellSize_ = target;
+    gridIndex_.setCellSize(gridCellSize_);
+  }
+}
+
+GridDbvhNeighborProvider
+BoidTree::makeNeighborProvider(HybridNeighborStats *stats) const {
+  const bool fallbackReady = dbvhEnabled_ && !dbvhIndex_.empty();
+  const DbvhIndex *fallbackIndex = fallbackReady ? &dbvhIndex_ : nullptr;
+  return GridDbvhNeighborProvider(buf, gridIndex_, fallbackIndex,
+                                  neighborFallbackThreshold_,
+                                  neighborFallbackLimit_,
+                                  neighborFallbackRadiusScale_, stats);
+}
+
+void BoidTree::updateDbvhState(const HybridNeighborStats &stats) {
+  if (stats.overflowCount >= kDbvhActivationOverflowSamples) {
+    dbvhEnabled_ = true;
+    dbvhDisableCooldown_ = kDbvhDeactivateCooldownFrames;
+    return;
+  }
+
+  if (!dbvhEnabled_) {
+    return;
+  }
+
+  if (stats.overflowCount > 0 || stats.fallbackQueries > 0) {
+    dbvhDisableCooldown_ = kDbvhDeactivateCooldownFrames;
+    return;
+  }
+
+  if (dbvhDisableCooldown_ > 0) {
+    dbvhDisableCooldown_--;
+  } else {
+    dbvhEnabled_ = false;
+  }
 }
 
 // 初期構築：最大 Boid 数を設定し、空間インデックスを作成。
 // JavaScript 側から最初に呼ばれる初期化エントリーポイント。
 void BoidTree::build(int maxPerUnit) {
   maxBoidsPerUnit = maxPerUnit;
+  updateGridCellSize();
   rebuildSpatialIndex();
   setRenderPointersToReadBuffers();
 }
 
-// 内部 LBVH インデックスへの直接アクセサー（非 const）。
-SpatialIndex &BoidTree::spatialIndex() { return lbvhIndex_; }
+// 内部ユニフォームグリッドへの直接アクセサー（非 const）。
+SpatialIndex &BoidTree::spatialIndex() { return gridIndex_; }
 
-// 内部 LBVH インデックスへの読み取り専用アクセサー。
-const SpatialIndex &BoidTree::spatialIndex() const { return lbvhIndex_; }
+// 内部ユニフォームグリッドへの読み取り専用アクセサー。
+const SpatialIndex &BoidTree::spatialIndex() const { return gridIndex_; }
 
 // 全リーフノードを順次訪問するイテレーター。デバッグや統計収集に使用。
 void BoidTree::forEachLeaf(const LeafVisitor &visitor) const {
-  lbvhIndex_.forEachLeaf(visitor);
+  gridIndex_.forEachLeaf(visitor);
 }
 
 // 指定球体と交差するリーフノードのみを訪問する空間クエリ。
 void BoidTree::forEachLeafIntersectingSphere(const glm::vec3 &center,
                                              float radius,
                                              const LeafVisitor &visitor) const {
-  lbvhIndex_.forEachLeafIntersectingSphere(center, radius, visitor);
+  gridIndex_.forEachLeafIntersectingSphere(center, radius, visitor);
 }
 
 // フレームごとのシミュレーション更新：物理計算・空間インデックス管理・描画準備。
-// dt を制限し、Boid 挙動計算、適応的インデックス再構築、統計更新を順次実行。
+// dt を制限し、近傍力計算→運動学更新→グリッド再構築の順で処理する。
 void BoidTree::update(float dt) {
   const float clampedDt = std::clamp(dt, 0.0f, 0.1f) * 5.0f;
 
   const int count = static_cast<int>(buf.positions.size());
   if (count == 0 || clampedDt <= 0.0f) {
     setRenderPointersToReadBuffers();
+    updateGridCellSize();
     rebuildSpatialIndex();
     frameCount++;
     return;
   }
 
-  bool rebuiltThisFrame = false;
-
-  // 適応的空間インデックス再構築の判定：
-  // フレーム経過数または Boid 移動量が閾値を超えたら完全再構築を実行。
-  if (lbvhDirty_) {
-    const bool exceededFrameBudget =
-        framesSinceRebuild_ >= kMaxFramesWithoutRebuild;
-    const bool exceededMotionBudget =
-        cumulativeDisplacementSinceRebuild_ >= kMaxAccumulatedMovement ||
-        maxStepDisplacementSqSinceRebuild_ >= kMaxSingleFrameDisplacementSq ||
-        lastAverageDisplacement_ >= kMaxAverageDisplacementPerFrame;
-    if (exceededFrameBudget || exceededMotionBudget) {
-      rebuildSpatialIndex();
-      rebuiltThisFrame = true;
-    }
-  }
-
-  // Phase 1: 空間インデックス更新と近傍探索による相互作用力計算
   setRenderPointersToReadBuffers();
-  lbvhIndex_.refit(buf); // LBVH バウンディングボックスを現在位置に合わせて更新
-  lbvhIndex_.resetQueryStats();
-  computeBoidInteractionsRange(buf, lbvhIndex_, 0, count, clampedDt);
-  lastQueryStats_ = lbvhIndex_.consumeQueryStats();
+  gridIndex_.setSamplingSeed(static_cast<std::uint32_t>(frameCount));
+  HybridNeighborStats neighborStats{};
+  const GridDbvhNeighborProvider neighborProvider =
+      makeNeighborProvider(&neighborStats);
+  computeBoidInteractionsRange(buf, neighborProvider, 0, count, clampedDt);
 
-  // Phase 2: 物理更新（速度・位置・姿勢）をダブルバッファに書き込み
   setRenderPointersToWriteBuffers();
   updateBoidKinematicsRange(buf, 0, count, clampedDt);
   buf.swapReadWrite(); // 読み書きバッファを入れ替えて結果を確定
-  // Phase 3: 移動統計の収集（再構築判定のため）
   setRenderPointersToReadBuffers();
-  float frameMaxStepSq = 0.0f;
-  float frameSumStepSq = 0.0f;
-  if (static_cast<int>(buf.positionsWrite.size()) >= count) {
-    for (int i = 0; i < count; ++i) {
-      const glm::vec3 delta = buf.positions[i] - buf.positionsWrite[i];
-      const float distSq = glm::dot(delta, delta);
-      frameMaxStepSq = std::max(frameMaxStepSq, distSq);
-      frameSumStepSq += distSq;
-    }
-  }
 
-  // 平均・最大移動量を算出し、空間インデックス劣化の判定材料とする
-  const float invCount = count > 0 ? 1.0f / static_cast<float>(count) : 0.0f;
-  const float frameAverageStepSq = frameSumStepSq * invCount;
-  const float frameAverageStep =
-      frameAverageStepSq > 0.0f ? std::sqrt(frameAverageStepSq) : 0.0f;
-  const bool positionsMoved = frameAverageStepSq > kMovementEpsilonSq ||
-                              frameMaxStepSq > kMovementEpsilonSq;
-
-  // 累積移動量を更新し、空間インデックスの「汚れ」状態を管理
-  if (positionsMoved) {
-    cumulativeDisplacementSinceRebuild_ += frameAverageStep;
-    maxStepDisplacementSqSinceRebuild_ =
-        std::max(maxStepDisplacementSqSinceRebuild_, frameMaxStepSq);
-    lbvhDirty_ = true;
-  }
-
-  // クエリ品質に基づく追加再構築判定（近傍探索効率の低下を検出）
-  const bool qualityWantsRebuild = shouldRebuildForQuality(lastQueryStats_);
-  if (!rebuiltThisFrame && qualityWantsRebuild) {
-    rebuildSpatialIndex();
-    rebuiltThisFrame = true;
-  }
-
-  // 統計情報の更新：再構築からの経過フレーム数と移動平均を記録
-  if (lbvhDirty_) {
-    ++framesSinceRebuild_;
-  }
-  lastAverageDisplacement_ = frameAverageStep;
+  // 次フレーム用にセルサイズを更新し、最新位置でグリッドを再構築
+  updateDbvhState(neighborStats);
+  updateGridCellSize();
+  rebuildSpatialIndex();
   frameCount++;
 }
 
@@ -295,6 +289,7 @@ void BoidTree::initializeBoids(
   buf.syncWriteFromRead();
   setRenderPointersToReadBuffers();
   initializeBoidMemories(globalSpeciesParams);
+  updateGridCellSize();
   rebuildSpatialIndex();
   frameCount = 0;
 }
@@ -432,6 +427,7 @@ void BoidTree::setFlockSize(int newSize, float posRange, float velRange) {
   initializeBoidMemories(globalSpeciesParams);
   buf.syncWriteFromRead();
   setRenderPointersToReadBuffers();
+  updateGridCellSize();
   rebuildSpatialIndex();
 }
 
@@ -506,66 +502,29 @@ void BoidTree::setGlobalSpeciesParams(const SpeciesParams &params) {
   }
 
   initializeBoidMemories(globalSpeciesParams);
+  updateGridCellSize();
   rebuildSpatialIndex();
 }
 
-// 空間インデックス品質監視統計をリセット：再構築時の初期化。
-// EWMA（指数加重移動平均）による性能監視状態をクリアする。
-void BoidTree::resetSpatialIndexQuality() {
-  queryNodesEwma_ = 0.0f;
-  queryBoidsEwma_ = 0.0f;
-  queryNodesBaseline_ = 0.0f;
-  queryBoidsBaseline_ = 0.0f;
-  querySamplesSinceRebuild_ = 0;
-  queryBaselineValid_ = false;
-}
-
-// クエリ品質統計に基づく再構築必要性判定：探索効率劣化を検出。
-// ベースライン比で性能低下が閾値を超えた場合に再構築を推奨する。
-bool BoidTree::shouldRebuildForQuality(const LbvhIndex::QueryStats &stats) {
-  if (stats.queries <= 0) {
-    return false;
+float BoidTree::computeAverageNeighborRadius() const {
+  if (globalSpeciesParams.empty()) {
+    return gridCellSize_;
   }
 
-  // 現フレームの平均訪問ノード数・検討 Boid 数を算出
-  const float invQueries = 1.0f / static_cast<float>(stats.queries);
-  const float avgNodes = static_cast<float>(stats.nodesVisited) * invQueries;
-  const float avgBoids = static_cast<float>(stats.boidsConsidered) * invQueries;
-
-  // EWMA 更新：初回または既存の移動平均に新データを反映
-  if (querySamplesSinceRebuild_ == 0) {
-    queryNodesEwma_ = avgNodes;
-    queryBoidsEwma_ = avgBoids;
-  } else {
-    queryNodesEwma_ = kQualityEwmaAlpha * avgNodes +
-                      (1.0f - kQualityEwmaAlpha) * queryNodesEwma_;
-    queryBoidsEwma_ = kQualityEwmaAlpha * avgBoids +
-                      (1.0f - kQualityEwmaAlpha) * queryBoidsEwma_;
+  float weightedRangeSum = 0.0f;
+  int totalCount = 0;
+  for (const auto &params : globalSpeciesParams) {
+    const float range = std::max(
+        std::max(params.cohesionRange, params.alignmentRange),
+        std::max(params.separationRange, params.predatorAlertRadius));
+    const int weight = std::max(params.count, 0);
+    weightedRangeSum += range * static_cast<float>(weight);
+    totalCount += weight;
   }
 
-  querySamplesSinceRebuild_ += stats.queries;
-
-  // ベースライン確立期間：十分なサンプル数まで待機
-  if (!queryBaselineValid_) {
-    if (querySamplesSinceRebuild_ >= kQualityBaselineWarmupQueries) {
-      queryBaselineValid_ = true;
-      queryNodesBaseline_ = std::max(queryNodesEwma_, 1.0f);
-      queryBoidsBaseline_ = std::max(queryBoidsEwma_, 1.0f);
-    }
-    return false;
+  if (totalCount <= 0) {
+    return gridCellSize_;
   }
 
-  // ベースライン更新：現在値が良好なら基準値を下げる（適応的調整）
-  queryNodesBaseline_ =
-      std::max(std::min(queryNodesBaseline_, queryNodesEwma_), 1.0f);
-  queryBoidsBaseline_ =
-      std::max(std::min(queryBoidsBaseline_, queryBoidsEwma_), 1.0f);
-
-  // 劣化判定：現在の EWMA がベースライン × 閾値を上回るか
-  const bool nodesDegraded =
-      queryNodesEwma_ > queryNodesBaseline_ * kQualityNodesThresholdMultiplier;
-  const bool boidsDegraded =
-      queryBoidsEwma_ > queryBoidsBaseline_ * kQualityBoidsThresholdMultiplier;
-
-  return nodesDegraded || boidsDegraded;
+  return weightedRangeSum / static_cast<float>(totalCount);
 }

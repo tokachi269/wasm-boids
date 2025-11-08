@@ -44,6 +44,7 @@ export class WasmtimeBridge {
     this.getSimulationTuningParamsHandle = this.createWrappedFunction('getSimulationTuningParams', 'object', []);
     this.setSimulationTuningParamsHandle = this.createWrappedFunction('setSimulationTuningParams', 'void', ['object']);
     this.getLbvhQueryStatsPtrHandle = this.createWrappedFunction('getLbvhQueryStatsPtr', 'number', []);
+    this.getRecommendedGridCellSizeHandle = this.createWrappedFunction('getRecommendedGridCellSize', 'number', []);
   }
 
   getSimulationTuningParams() {
@@ -52,6 +53,14 @@ export class WasmtimeBridge {
     }
     const handle = this.ensureHandle(this.getSimulationTuningParamsHandle, 'getSimulationTuningParams');
     return handle ? handle() : null;
+  }
+
+  getRecommendedGridCellSize() {
+    if (!this.wasm) {
+      return 0.0;
+    }
+    const handle = this.ensureHandle(this.getRecommendedGridCellSizeHandle, 'getRecommendedGridCellSize');
+    return handle ? handle() : 0.0;
   }
 
   setSimulationTuningParams(params) {

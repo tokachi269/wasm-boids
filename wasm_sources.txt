@@ -2,6 +2,6 @@ src/wasm/main.cpp
 src/wasm/entry.cpp
 src/wasm/boid_unit.cpp
 src/wasm/boids_tree.cpp
-src/wasm/lbvh_index.cpp
+src/wasm/uniform_grid.cpp
 src/wasm/wasm_bindings.cpp
 src/wasm/simulation_tuning.cpp

@@ -10,7 +10,8 @@
 #include "boid.h"
 #include "boid_unit.h"
 #include "boids_buffers.h"
-#include "lbvh_index.h"
+#include "dbvh_index.h"
+#include "uniform_grid.h"
 #include "species_params.h"
 #include "spatial_index.h"
 
@@ -34,8 +35,6 @@ public:
                                      const LeafVisitor &visitor) const override;
   void update(float dt = 1.0f);
 
-  LbvhIndex::QueryStats getLastQueryStats() const { return lastQueryStats_; }
-
   uintptr_t getPositionsPtr();
   uintptr_t getVelocitiesPtr();
   uintptr_t getOrientationsPtr();
@@ -44,6 +43,7 @@ public:
 
   SpeciesParams getGlobalSpeciesParams(std::string species);
   void setGlobalSpeciesParams(const SpeciesParams &params);
+  float computeAverageNeighborRadius() const;
 
   SoABuffers buf;
 
@@ -51,28 +51,25 @@ private:
   void setRenderPointersToReadBuffers();
   void setRenderPointersToWriteBuffers();
   void rebuildSpatialIndex();
-  void resetSpatialIndexQuality();
-  bool shouldRebuildForQuality(const LbvhIndex::QueryStats &stats);
+  void updateGridCellSize();
+  GridDbvhNeighborProvider makeNeighborProvider(HybridNeighborStats *stats) const;
+  void updateDbvhState(const HybridNeighborStats &stats);
 
   uintptr_t renderPositionsPtr_ = 0;
   uintptr_t renderVelocitiesPtr_ = 0;
   uintptr_t renderOrientationsPtr_ = 0;
 
   int frameCount = 0;
-  int maxBoidsPerUnit = 16;
-  LbvhIndex lbvhIndex_;
-  LbvhIndex::QueryStats lastQueryStats_{};
-  bool lbvhDirty_ = true;
-  int framesSinceRebuild_ = 0;
-  float cumulativeDisplacementSinceRebuild_ = 0.0f;
-  float maxStepDisplacementSqSinceRebuild_ = 0.0f;
-  float lastAverageDisplacement_ = 0.0f;
-  float queryNodesEwma_ = 0.0f;
-  float queryBoidsEwma_ = 0.0f;
-  float queryNodesBaseline_ = 0.0f;
-  float queryBoidsBaseline_ = 0.0f;
-  int querySamplesSinceRebuild_ = 0;
-  bool queryBaselineValid_ = false;
+  int maxBoidsPerUnit = 64;
+  float gridCellSize_ = 10.0f;
+  float neighborFallbackRadiusScale_ = 1.1f;
+  float dbvhPaddingScale_ = 2.0f;
+  int neighborFallbackThreshold_ = 32;
+  int neighborFallbackLimit_ = 128;
+  bool dbvhEnabled_ = true;
+  int dbvhDisableCooldown_ = 0;
+  UniformGridIndex gridIndex_{gridCellSize_};
+  DbvhIndex dbvhIndex_;
 };
 
 extern std::vector<SpeciesParams> globalSpeciesParams;

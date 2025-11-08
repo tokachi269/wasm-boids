@@ -45,7 +45,7 @@ set(EMCC_LINK_FLAGS
     "-sEXPORT_NAME=createBoidsModule"
     "-sENVIRONMENT=web,worker,node"
     "-sALLOW_MEMORY_GROWTH=1"
-    "-sEXPORTED_FUNCTIONS=['_main','_boidUnitMappingPtr','_speciesIdsPtr','_syncReadToWriteBuffers','_oriPtr','_setSpeciesParams','_setFlockSize','_update','_build','_posPtr','_velPtr','_boidCount','_stepSimulation','_currentFirstBoidX','_getLbvhQueryStatsPtr','_malloc','_free']"
+    "-sEXPORTED_FUNCTIONS=['_main','_boidUnitMappingPtr','_speciesIdsPtr','_syncReadToWriteBuffers','_oriPtr','_setSpeciesParams','_setFlockSize','_update','_build','_posPtr','_velPtr','_boidCount','_stepSimulation','_currentFirstBoidX','_getLbvhQueryStatsPtr','_getRecommendedGridCellSize','_malloc','_free']"
     "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAPF32','HEAP32','HEAPU8']"
     "--bind"
     "-pthread" # スレッドを有効化
@@ -75,7 +75,7 @@ set(EMCC_LINK_FLAGS_RELEASE
     "-sEXPORT_NAME=createBoidsModule"
     "-sENVIRONMENT=web,worker,node"
     "-sALLOW_MEMORY_GROWTH=1"
-    "-sEXPORTED_FUNCTIONS=['_main','_boidUnitMappingPtr','_speciesIdsPtr','_syncReadToWriteBuffers','_oriPtr','_setSpeciesParams','_setFlockSize','_update','_build','_posPtr','_velPtr','_boidCount','_stepSimulation','_currentFirstBoidX','_getLbvhQueryStatsPtr','_malloc','_free']"
+    "-sEXPORTED_FUNCTIONS=['_main','_boidUnitMappingPtr','_speciesIdsPtr','_syncReadToWriteBuffers','_oriPtr','_setSpeciesParams','_setFlockSize','_update','_build','_posPtr','_velPtr','_boidCount','_stepSimulation','_currentFirstBoidX','_getLbvhQueryStatsPtr','_getRecommendedGridCellSize','_malloc','_free']"
     "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAPF32','HEAP32','HEAPU8']"
     "--bind"
     "-pthread"
@@ -100,7 +100,8 @@ set(COMMON_SOURCES
     src/wasm/entry.cpp
     src/wasm/boid_unit.cpp
     src/wasm/boids_tree.cpp
-    src/wasm/lbvh_index.cpp
+    src/wasm/dbvh_index.cpp
+    src/wasm/uniform_grid.cpp
     src/wasm/main.cpp
     src/wasm/simulation_tuning.cpp
 )
