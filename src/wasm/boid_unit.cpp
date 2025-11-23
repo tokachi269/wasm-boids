@@ -73,175 +73,73 @@ int GridDbvhNeighborProvider::gatherNearest(const glm::vec3 &center,
     }
   }
 
-  if (!dbvh || threshold <= 0 || fallbackCapacity <= 0 || maxRadius <= 0.0f ||
-      gathered <= threshold) {
-    return gathered;
-  }
+    if (needsNeighborRefresh && searchRadiusLimit > 0.0f) {
+      // -----------------------------------------------
+      // 候補プールのキャパシティ計算
+      // -----------------------------------------------
+      const int baseCapacity = std::max(neededNeighbors, 1);
+      const int paddedCapacity =
+          std::max(baseCapacity, baseCapacity + neededNeighbors / 2);
+      candidateCapacity = std::max(
+          1, std::min(kMaxCandidatePool, std::max(paddedCapacity, slotCount)));
 
-  if (stats) {
-    stats->fallbackQueries++;
-  }
+      std::array<int, kMaxCandidatePool> queryIndices{};
+      std::array<float, kMaxCandidatePool> queryDistSq{};
 
-  HybridNeighborScratch &scratch = neighborScratch();
-  auto &combined = scratch.combined;
-  combined.clear();
-  combined.reserve(static_cast<std::size_t>(gathered));
-  for (int i = 0; i < gathered; ++i) {
-    combined.emplace_back(outDistancesSq[i], outIndices[i]);
-  }
+    const float maxRuleRange =
+      std::max({selfParams.cohesionRange, selfParams.alignmentRange,
+          selfParams.separationRange, 0.0f});
+    const float initialRadius =
+      maxRuleRange > 0.0f ? maxRuleRange : searchRadiusLimit;
+    const float baseRadius =
+      searchRadiusLimit > 0.0f ? searchRadiusLimit : queryRadius;
+    float gatherRadius = std::max(initialRadius, baseRadius);
+    if (gatherRadius <= 0.0f) {
+    gatherRadius = 1.0f;
+    }
 
-  auto &fallback = scratch.fallback;
-  const std::size_t desiredSize = static_cast<std::size_t>(fallbackCapacity);
-  if (fallback.size() < desiredSize) {
-    fallback.resize(desiredSize);
-  }
+      const int fetched = neighbors.gatherNearest(pos, candidateCapacity,
+                                                  gatherRadius, queryIndices.data(),
+                                                  queryDistSq.data());
+      for (int i = 0; i < fetched && candidateCount < candidateCapacity; ++i) {
+        const int neighborIdx = queryIndices[i];
+        const float distSq = queryDistSq[i];
+        if (neighborIdx == gIdx || neighborIdx < 0 ||
+            neighborIdx >= totalCount) {
+          continue;
+        }
+        if (buf.speciesIds[neighborIdx] != sid) {
+          continue;
+        }
+        if (distSq < kEpsilon || distSq >= dropRadiusSq) {
+          continue;
+        }
 
-  const float queryRadius = maxRadius * radiusScale;
-  const int fetched = dbvh->gatherWithinRadius(center, queryRadius,
-                                               fallback.data(),
-                                               fallbackCapacity);
-  if (fetched <= 0) {
-    return gathered;
-  }
+        const glm::vec3 diff = buf.positions[neighborIdx] - pos;
+        const float diffDot = glm::dot(forward, diff);
+        const float requiredDot = cosHalfFov * glm::sqrt(distSq);
+        if (diffDot < requiredDot) {
+          continue;
+        }
+        if (containsNeighbor(activeNeighbors, neighborIndices, slotCount,
+                             neighborIdx)) {
+          continue;
+        }
+        bool duplicate = false;
+        for (int j = 0; j < candidateCount; ++j) {
+          if (candidateIndices[j] == neighborIdx) {
+            duplicate = true;
+            break;
+          }
+        }
+        if (duplicate) {
+          continue;
+        }
 
-  const float radiusSq = maxRadius * maxRadius;
-  const auto &positions = buffers.positions;
-  const std::size_t boidCount = positions.size();
-
-  auto isDuplicate = [&combined](int candidate) {
-    for (const auto &entry : combined) {
-      if (entry.second == candidate) {
-        return true;
+        candidateDistSquared[candidateCount] = distSq;
+        candidateIndices[candidateCount] = neighborIdx;
+        ++candidateCount;
       }
-    }
-    return false;
-  };
-
-  for (int i = 0; i < fetched; ++i) {
-    const int candidate = fallback[static_cast<std::size_t>(i)];
-    if (candidate < 0 || candidate >= static_cast<int>(boidCount)) {
-      continue;
-    }
-    if (isDuplicate(candidate)) {
-      continue;
-    }
-    const glm::vec3 diff =
-        positions[static_cast<std::size_t>(candidate)] - center;
-    const float distSq = glm::dot(diff, diff);
-    if (distSq > radiusSq) {
-      continue;
-    }
-    combined.emplace_back(distSq, candidate);
-  }
-
-  if (combined.empty()) {
-    return 0;
-  }
-
-  std::sort(combined.begin(), combined.end(),
-            [](const auto &a, const auto &b) { return a.first < b.first; });
-
-  const int finalCount =
-      std::min(static_cast<int>(combined.size()), maxCount);
-  if (stats) {
-    const int added = std::max(0, finalCount - gathered);
-    stats->fallbackAdded += added;
-  }
-  for (int i = 0; i < finalCount; ++i) {
-    outDistancesSq[i] = combined[static_cast<std::size_t>(i)].first;
-    outIndices[i] = combined[static_cast<std::size_t>(i)].second;
-  }
-  return finalCount;
-}
-
-bool GridDbvhNeighborProvider::getLeafMembers(int boidIndex,
-                                              const int *&outIndices,
-                                              int &count) const {
-  return grid.getLeafMembers(boidIndex, outIndices, count);
-}
-
-namespace {
-
-// 計算用の小さな定数群：浮動小数点演算の安定性と近傍管理の制御パラメータ
-constexpr float kEpsilon = 1e-6f;     // ゼロ除算防止用の微小値
-constexpr float kMinDirLen2 = 1e-12f; // 方向ベクトル正規化の最小二乗長
-constexpr int kMaxNeighborSlots = 16; // 近傍キャッシュの最大スロット数
-constexpr float kNeighborDropHysteresis = 1.15f; // 近傍除外時のヒステリシス係数
-
-// 近傍スロット管理用ビットマスク操作：高効率な存在フラグ管理
-// 16個の近傍スロットの使用状況を単一の uint16_t で管理する仕組み
-inline bool maskTest(uint16_t mask, int slot) {
-  return ((mask >> slot) & 1u) != 0;
-}
-
-inline void maskSet(uint16_t &mask, int slot) {
-  mask |= static_cast<uint16_t>(1u << slot);
-}
-
-inline void maskReset(uint16_t &mask, int slot) {
-  mask &= static_cast<uint16_t>(~(1u << slot));
-}
-
-// 軸周りの近似回転（小角度向け高速化）
-// 三角関数を使わずに外積で近似計算し、リアルタイム性能を優先
-inline glm::vec3 approxRotate(const glm::vec3 &v, const glm::vec3 &axis,
-                              float angle) {
-  const float axisLen2 = glm::length2(axis);
-  if (axisLen2 < 1e-8f) {
-    return v;
-  }
-  const glm::vec3 normalizedAxis = axis * (1.0f / glm::sqrt(axisLen2));
-  return v + angle * glm::cross(normalizedAxis, v);
-}
-
-// 方向ベクトルからロールゼロのクォータニオンを生成
-// Boid の姿勢表現で、前方向は指定、ロール（Z軸回転）は無しの標準姿勢を作る
-inline glm::quat dirToQuatRollZero(const glm::vec3 &forward) {
-  glm::vec3 f = glm::normalize(forward);
-  glm::vec3 up(0.0f, 1.0f, 0.0f);
-  if (std::fabs(glm::dot(f, up)) > 0.99f) {
-    up = glm::vec3(1.0f, 0.0f, 0.0f);
-  }
-  glm::vec3 right = glm::normalize(glm::cross(up, f));
-  up = glm::cross(f, right);
-  glm::mat3 basis(right, up, f);
-  return glm::quat_cast(basis);
-}
-
-// イージング関数群：滑らかな値変化のためのカーブ計算
-// Boid の行動変化や境界反応で急激な変化を避けるために使用
-inline float easeOut(float t) { return t * t * (3.0f - 2.0f * t); }
-
-inline float smoothStep(float edge0, float edge1, float x) {
-  if (edge0 == edge1) {
-    return x < edge0 ? 0.0f : 1.0f;
-  }
-  const float t = std::clamp((x - edge0) / (edge1 - edge0), 0.0f, 1.0f);
-  return t * t * (3.0f - 2.0f * t);
-}
-
-// ゼロベクトルを安全に扱う正規化：長さがゼロに近い場合の例外処理
-// Boid の速度や力ベクトルの計算で数値的不安定性を回避
-inline glm::vec3 safeNormalize(const glm::vec3 &v) {
-  const float lenSq = glm::dot(v, v);
-  if (lenSq < kMinDirLen2) {
-    return glm::vec3(0.0f);
-  }
-  return v * glm::inversesqrt(lenSq);
-}
-
-// 軽量な乱数生成器（スレッドローカル）
-// 線形合同法による高速擬似乱数、マルチスレッド環境で独立したシード管理
-inline uint32_t nextRandom() {
-  static thread_local uint32_t state = 1u;
-  state = state * 1103515245u + 12345u;
-  return (state >> 16) & 0x7fffu;
-}
-
-// 近傍キャッシュの空きスロット検索：ビットマスクを線形走査
-// 新しい近傍を追加する際の高速な空き領域発見
-inline int findFreeSlot(uint16_t mask, int limit) {
-  for (int i = 0; i < limit; ++i) {
     if (!maskTest(mask, i)) {
       return i;
     }
@@ -435,162 +333,64 @@ void computeBoidInteractionsSpan(SoABuffers &buf,
           1, std::min(kMaxCandidatePool, std::max(paddedCapacity, slotCount)));
 
       // -----------------------------------------------
-      // まず同一葉ノード内から候補を収集し、不足分のみ広域探索する
+      // 空間インデックスから直接候補を収集（ユニット境界を跨いで取得）
       // -----------------------------------------------
-      const int stopThreshold = std::max(neededNeighbors, 1);
-      std::array<std::pair<float, int>, kMaxCandidatePool> localPairs{};
-      int localPairCount = 0;
-      const int *leafMembers = nullptr;
-      int leafCount = 0;
-  if (neighbors.getLeafMembers(gIdx, leafMembers, leafCount)) {
-        for (int i = 0; i < leafCount && localPairCount < candidateCapacity;
-             ++i) {
-          const int neighborIdx = leafMembers[i];
-          if (neighborIdx == gIdx || neighborIdx < 0 ||
-              neighborIdx >= totalCount) {
-            continue;
-          }
-          if (buf.speciesIds[neighborIdx] != sid) {
-            continue;
-          }
-          if (containsNeighbor(activeNeighbors, neighborIndices, slotCount,
-                               neighborIdx)) {
-            continue;
-          }
-          const glm::vec3 diff = buf.positions[neighborIdx] - pos;
-          const float distSq = glm::dot(diff, diff);
-          if (distSq < kEpsilon || distSq >= dropRadiusSq) {
-            continue;
-          }
-          const float diffDot = glm::dot(forward, diff);
-          const float requiredDot = cosHalfFov * glm::sqrt(distSq);
-          if (diffDot < requiredDot) {
-            continue;
-          }
+      std::array<int, kMaxCandidatePool> queryIndices{};
+      std::array<float, kMaxCandidatePool> queryDistSq{};
 
-          bool duplicate = false;
-          for (int j = 0; j < localPairCount; ++j) {
-            if (localPairs[j].second == neighborIdx) {
-              duplicate = true;
-              break;
-            }
-          }
-          if (duplicate) {
-            continue;
-          }
-          localPairs[localPairCount++] = std::make_pair(distSq, neighborIdx);
-        }
-
-        if (localPairCount > 1) {
-          std::sort(
-              localPairs.begin(), localPairs.begin() + localPairCount,
-              [](const auto &a, const auto &b) { return a.first < b.first; });
-        }
-
-        for (int i = 0;
-             i < localPairCount && candidateCount < candidateCapacity; ++i) {
-          candidateDistSquared[candidateCount] = localPairs[i].first;
-          candidateIndices[candidateCount] = localPairs[i].second;
-          ++candidateCount;
-          if (candidateCount >= stopThreshold) {
-            break;
-          }
-        }
+      const float maxRuleRange =
+          std::max({selfParams.cohesionRange, selfParams.alignmentRange,
+                    selfParams.separationRange, 0.0f});
+      const float initialRadius =
+          maxRuleRange > 0.0f ? maxRuleRange : searchRadiusLimit;
+      const float baseRadius =
+          searchRadiusLimit > 0.0f ? searchRadiusLimit : queryRadius;
+      float gatherRadius = std::max(initialRadius, baseRadius);
+      if (gatherRadius <= 0.0f) {
+        gatherRadius = 1.0f;
       }
 
-      // -----------------------------------------------
-      // 不足している場合のみ段階的半径拡張でグリッド検索を実行
-      // -----------------------------------------------
-      if (candidateCount < stopThreshold) {
-        const float radiusLimit = searchRadiusLimit;
-        // 分離・整列・結合の中で最も広い半径まで一度に視野を拡張する。
-        const float maxRuleRange =
-            std::max(selfParams.cohesionRange,
-                     std::max(selfParams.alignmentRange,
-                              selfParams.separationRange));
-        float searchRadius = maxRuleRange;
-        if (searchRadius <= 0.0f) {
-          searchRadius = std::max(selfParams.separationRange, 0.0f);
-        }
-        if (searchRadius <= 0.0f) {
-          searchRadius = radiusLimit * 0.5f;
-        }
-        const float minRadius = std::min(0.5f, radiusLimit);
-        searchRadius = std::clamp(searchRadius, minRadius, radiusLimit);
-
-        std::array<int, kMaxCandidatePool> queryIndices{};
-        std::array<float, kMaxCandidatePool> queryDistSq{};
-        int passes = 0;
-        while (candidateCount < candidateCapacity) {
-          const int remaining = stopThreshold - candidateCount;
-          if (remaining <= 0) {
-            break;
-          }
-          const int maxRoom = candidateCapacity - candidateCount;
-          const int requestCount = std::max(1, std::min(remaining, maxRoom));
-
       const int fetched = neighbors.gatherNearest(
-        pos, requestCount, searchRadius, queryIndices.data(),
-        queryDistSq.data());
+          pos, candidateCapacity, gatherRadius, queryIndices.data(),
+          queryDistSq.data());
+      for (int i = 0; i < fetched && candidateCount < candidateCapacity; ++i) {
+        const int neighborIdx = queryIndices[i];
+        const float distSq = queryDistSq[i];
+        if (neighborIdx == gIdx || neighborIdx < 0 ||
+            neighborIdx >= totalCount) {
+          continue;
+        }
+        if (buf.speciesIds[neighborIdx] != sid) {
+          continue;
+        }
+        if (distSq < kEpsilon || distSq >= dropRadiusSq) {
+          continue;
+        }
 
-          for (int i = 0; i < fetched && candidateCount < candidateCapacity;
-               ++i) {
-            const int neighborIdx = queryIndices[i];
-            const float distSq = queryDistSq[i];
-            if (neighborIdx == gIdx || neighborIdx < 0 ||
-                neighborIdx >= totalCount) {
-              continue;
-            }
-            if (buf.speciesIds[neighborIdx] != sid) {
-              continue;
-            }
-            if (distSq < kEpsilon || distSq >= dropRadiusSq) {
-              continue;
-            }
-
-            const glm::vec3 diff = buf.positions[neighborIdx] - pos;
-            const float diffDot = glm::dot(forward, diff);
-            const float requiredDot = cosHalfFov * glm::sqrt(distSq);
-            if (diffDot < requiredDot) {
-              continue;
-            }
-            if (containsNeighbor(activeNeighbors, neighborIndices, slotCount,
-                                 neighborIdx)) {
-              continue;
-            }
-            bool duplicate = false;
-            for (int j = 0; j < candidateCount; ++j) {
-              if (candidateIndices[j] == neighborIdx) {
-                duplicate = true;
-                break;
-              }
-            }
-            if (duplicate) {
-              continue;
-            }
-
-            candidateDistSquared[candidateCount] = distSq;
-            candidateIndices[candidateCount] = neighborIdx;
-            ++candidateCount;
-            if (candidateCount >= stopThreshold) {
-              break;
-            }
-          }
-
-          if (candidateCount >= stopThreshold || searchRadius >= radiusLimit) {
+        const glm::vec3 diff = buf.positions[neighborIdx] - pos;
+        const float diffDot = glm::dot(forward, diff);
+        const float requiredDot = cosHalfFov * glm::sqrt(distSq);
+        if (diffDot < requiredDot) {
+          continue;
+        }
+        if (containsNeighbor(activeNeighbors, neighborIndices, slotCount,
+                             neighborIdx)) {
+          continue;
+        }
+        bool duplicate = false;
+        for (int j = 0; j < candidateCount; ++j) {
+          if (candidateIndices[j] == neighborIdx) {
+            duplicate = true;
             break;
           }
-
-          float nextRadius = searchRadius * 1.5f;
-          if (nextRadius <= searchRadius + 1e-3f) {
-            nextRadius = searchRadius + 1.0f;
-          }
-          searchRadius = std::min(radiusLimit, nextRadius);
-          ++passes;
-          if (passes > 32) {
-            break; // 念のため無限ループを防止
-          }
         }
+        if (duplicate) {
+          continue;
+        }
+
+        candidateDistSquared[candidateCount] = distSq;
+        candidateIndices[candidateCount] = neighborIdx;
+        ++candidateCount;
       }
 
       if (candidateCount > 1) {

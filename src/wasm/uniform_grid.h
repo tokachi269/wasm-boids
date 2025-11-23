@@ -61,8 +61,8 @@ private:
 
   CellKey cellFor(const glm::vec3 &position) const;
 
-  float cellSize_ = 1.0f;
-  float invCellSize_ = 1.0f / 1.0f;
+  float cellSize_ = 10.0f;
+  float invCellSize_ = 1.0f / 10.0f;
   const SoABuffers *buffers_ = nullptr;
   std::uint32_t samplingSeed_ = 0;
   std::unordered_map<CellKey, Cell, KeyHash, KeyEq> cells_;
