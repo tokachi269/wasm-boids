@@ -122,25 +122,37 @@ int UniformGridIndex::gatherNearest(const glm::vec3 &center, int maxCount,
 
   const CellKey centerCell = cellFor(center);
 
-  for (int dz = -maxLayer; dz <= maxLayer; ++dz) {
-    for (int dy = -maxLayer; dy <= maxLayer; ++dy) {
-      for (int dx = -maxLayer; dx <= maxLayer; ++dx) {
-        const CellKey key{centerCell.x + dx, centerCell.y + dy, centerCell.z + dz};
-        const auto it = cells_.find(key);
-        if (it == cells_.end()) {
-          continue;
-        }
-        const auto &indices = it->second.indices;
-        const int count = static_cast<int>(indices.size());
-        const bool needsSampling = count > kCellSampleLimit;
+  bool reachedCapacity = false;
+  for (int layer = 0; layer <= maxLayer && !reachedCapacity; ++layer) {
+    for (int dz = -layer; dz <= layer && !reachedCapacity; ++dz) {
+      for (int dy = -layer; dy <= layer && !reachedCapacity; ++dy) {
+        for (int dx = -layer; dx <= layer; ++dx) {
+          if (layer > 0 && std::abs(dx) < layer && std::abs(dy) < layer &&
+              std::abs(dz) < layer) {
+            continue; // 内側セルは既に処理済み
+          }
 
-        if (!needsSampling) {
-          for (int boidIndex : indices) {
-            const glm::vec3 &pos =
-                positions[static_cast<std::size_t>(boidIndex)];
-            const glm::vec3 diff = pos - center;
-            const float distSq = glm::dot(diff, diff);
-            if (distSq <= baseRadiusSq) {
+          const CellKey key{centerCell.x + dx, centerCell.y + dy,
+                            centerCell.z + dz};
+          const auto it = cells_.find(key);
+          if (it == cells_.end()) {
+            continue;
+          }
+
+          const auto &indices = it->second.indices;
+          const int count = static_cast<int>(indices.size());
+          const bool needsSampling = count > kCellSampleLimit;
+
+          if (!needsSampling) {
+            for (int boidIndex : indices) {
+              const glm::vec3 &pos =
+                  positions[static_cast<std::size_t>(boidIndex)];
+              const glm::vec3 diff = pos - center;
+              const float distSq = glm::dot(diff, diff);
+              if (distSq > baseRadiusSq) {
+                continue;
+              }
+
               if (heap.size() < static_cast<std::size_t>(maxCount)) {
                 heap.push_back(Candidate{distSq, boidIndex});
                 std::push_heap(heap.begin(), heap.end(),
@@ -148,8 +160,10 @@ int UniformGridIndex::gatherNearest(const glm::vec3 &center, int maxCount,
                                   const Candidate &rhs) {
                                  return lhs.distanceSq < rhs.distanceSq;
                                });
-              } else if (!heap.empty() &&
-                         distSq < heap.front().distanceSq) {
+                continue;
+              }
+
+              if (!heap.empty() && distSq < heap.front().distanceSq) {
                 std::pop_heap(heap.begin(), heap.end(),
                               [](const Candidate &lhs,
                                  const Candidate &rhs) {
@@ -163,60 +177,63 @@ int UniformGridIndex::gatherNearest(const glm::vec3 &center, int maxCount,
                                });
               }
             }
+          } else {
+            auto &samples = scratch.samples;
+            samples.clear();
+            samples.reserve(kCellSampleLimit);
+
+            const int sampleCount = std::min(kCellSampleLimit, count);
+            samples.resize(sampleCount);
+
+            std::uint32_t state = cellSeed(samplingSeed_, centerCell.x + dx,
+                                           centerCell.y + dy,
+                                           centerCell.z + dz);
+
+            for (int i = 0; i < sampleCount; ++i) {
+              samples[static_cast<std::size_t>(i)] = indices[i];
+            }
+            for (int i = sampleCount; i < count; ++i) {
+              const std::uint32_t r = lcgStep(state) % (i + 1);
+              if (static_cast<int>(r) < sampleCount) {
+                samples[static_cast<std::size_t>(r)] = indices[i];
+              }
+            }
+
+            for (int boidIndex : samples) {
+              const glm::vec3 &pos =
+                  positions[static_cast<std::size_t>(boidIndex)];
+              const glm::vec3 diff = pos - center;
+              const float distSq = glm::dot(diff, diff);
+              if (distSq > baseRadiusSq) {
+                continue;
+              }
+
+              if (heap.size() < static_cast<std::size_t>(maxCount)) {
+                heap.push_back(Candidate{distSq, boidIndex});
+                std::push_heap(heap.begin(), heap.end(),
+                               [](const Candidate &lhs, const Candidate &rhs) {
+                                 return lhs.distanceSq < rhs.distanceSq;
+                               });
+                continue;
+              }
+
+              if (!heap.empty() && distSq < heap.front().distanceSq) {
+                std::pop_heap(heap.begin(), heap.end(),
+                              [](const Candidate &lhs, const Candidate &rhs) {
+                                return lhs.distanceSq < rhs.distanceSq;
+                              });
+                heap.back() = Candidate{distSq, boidIndex};
+                std::push_heap(heap.begin(), heap.end(),
+                               [](const Candidate &lhs, const Candidate &rhs) {
+                                 return lhs.distanceSq < rhs.distanceSq;
+                               });
+              }
+            }
           }
-          continue;
-        }
 
-        // Reservoir sampling でセル上限数のみ走査（公平性を保ちつつ負荷を制限）
-        auto &samples = scratch.samples;
-        samples.clear();
-        samples.reserve(kCellSampleLimit);
-
-        const int sampleCount = std::min(kCellSampleLimit, count);
-        samples.resize(sampleCount);
-
-    std::uint32_t state =
-      cellSeed(samplingSeed_, centerCell.x + dx, centerCell.y + dy,
-           centerCell.z + dz);
-
-        for (int i = 0; i < sampleCount; ++i) {
-          samples[static_cast<std::size_t>(i)] = indices[i];
-        }
-        for (int i = sampleCount; i < count; ++i) {
-          const std::uint32_t r = lcgStep(state) % (i + 1);
-          if (static_cast<int>(r) < sampleCount) {
-            samples[static_cast<std::size_t>(r)] = indices[i];
-          }
-        }
-
-        for (int boidIndex : samples) {
-          const glm::vec3 &pos =
-              positions[static_cast<std::size_t>(boidIndex)];
-          const glm::vec3 diff = pos - center;
-          const float distSq = glm::dot(diff, diff);
-          if (distSq > baseRadiusSq) {
-            continue;
-          }
-
-          if (heap.size() < static_cast<std::size_t>(maxCount)) {
-            heap.push_back(Candidate{distSq, boidIndex});
-            std::push_heap(heap.begin(), heap.end(),
-                           [](const Candidate &lhs, const Candidate &rhs) {
-                             return lhs.distanceSq < rhs.distanceSq;
-                           });
-            continue;
-          }
-
-          if (!heap.empty() && distSq < heap.front().distanceSq) {
-            std::pop_heap(heap.begin(), heap.end(),
-                          [](const Candidate &lhs, const Candidate &rhs) {
-                            return lhs.distanceSq < rhs.distanceSq;
-                          });
-            heap.back() = Candidate{distSq, boidIndex};
-            std::push_heap(heap.begin(), heap.end(),
-                           [](const Candidate &lhs, const Candidate &rhs) {
-                             return lhs.distanceSq < rhs.distanceSq;
-                           });
+          if (heap.size() >= static_cast<std::size_t>(maxCount)) {
+            reachedCapacity = true;
+            break;
           }
         }
       }

@@ -357,6 +357,27 @@ void computeBoidInteractionsSpan(SoABuffers &buf,
     const float searchRadiusLimit =
         (raSq > 0.0f) ? glm::sqrt(dropRadiusSq) : queryRadius;
 
+    const int *leafMembersPtr = nullptr;
+    int leafMemberCount = 0;
+    const bool hasLeafMembers =
+        neighbors.getLeafMembers(gIdx, leafMembersPtr, leafMemberCount);
+    auto isInLeaf = [&](int candidate) -> bool {
+      if (!hasLeafMembers) {
+        return false;
+      }
+      for (int i = 0; i < leafMemberCount; ++i) {
+        if (leafMembersPtr[i] == candidate) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    std::array<float, kMaxNeighborSlots> neighborDistSqCache{};
+    neighborDistSqCache.fill(std::numeric_limits<float>::infinity());
+    std::array<uint8_t, kMaxNeighborSlots> neighborSameCellCache{};
+    neighborSameCellCache.fill(0u);
+
     // 既存近傍キャッシュの検証・更新：距離・時間・種族による無効化判定
     int activeCount = 0;
     for (int slot = 0; slot < slotCount; ++slot) {

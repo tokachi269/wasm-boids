@@ -129,7 +129,7 @@ void BoidTree::updateGridCellSize() {
   } else {
     target = std::max(10.0f, maxRange * 1.1f);
   }
-
+  target = 3.0f;
   if (std::fabs(target - gridCellSize_) > 1e-3f) {
     gridCellSize_ = target;
     gridIndex_.setCellSize(gridCellSize_);
