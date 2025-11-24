@@ -773,7 +773,6 @@ void computeBoidInteractionsSpan(SoABuffers &buf,
     glm::vec3 sumAlignment(0.0f);
     glm::vec3 sumCohesion(0.0f);
     float cohesionWeightSum = 0.0f; // 重み付き平均を取るための合計ウェイト
-    float cohesionWeightSum = 0.0f;
     float stressGainSum = 0.0f; // ストレス値の伝播計算用
     float stressWeightSum = 0.0f;
 
