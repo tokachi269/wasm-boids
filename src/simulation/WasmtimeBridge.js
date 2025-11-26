@@ -74,6 +74,7 @@ export class WasmtimeBridge {
       cohesionBoost: toNumber(params.cohesionBoost, 2.0),
       separationMinFactor: toNumber(params.separationMinFactor, 1.0),
       alignmentBoost: toNumber(params.alignmentBoost, 1.2),
+      fastAttractStrength: toNumber(params.fastAttractStrength, 1.0),
     });
   }
 

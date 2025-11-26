@@ -80,7 +80,8 @@ value_object<SimulationTuningParams>("SimulationTuningParams")
     .field("escapeStrengthPerThreat", &SimulationTuningParams::escapeStrengthPerThreat)
     .field("cohesionBoost", &SimulationTuningParams::cohesionBoost)
     .field("separationMinFactor", &SimulationTuningParams::separationMinFactor)
-    .field("alignmentBoost", &SimulationTuningParams::alignmentBoost);
+    .field("alignmentBoost", &SimulationTuningParams::alignmentBoost)
+    .field("fastAttractStrength", &SimulationTuningParams::fastAttractStrength);
 
     class_<Boid>("Boid")
         .constructor<>()

@@ -18,7 +18,7 @@
           リセット
         </button>
         <br />
-        <div class="settings tuning-settings" >
+        <div class="settings tuning-settings">
           <details class="species-section" :open="false">
             <summary class="species-header">
               <span class="species-title">Adjustment</span>
@@ -152,31 +152,74 @@
                   v-model.number="systemSettings.alignmentBoost"
                 />
               </div>
+              <div class="setting-row">
+                <label>補助凝集強度<br />(fastAttractStrength):</label>
+                <input
+                  type="range"
+                  min="0"
+                  max="3"
+                  step="0.05"
+                  v-model.number="systemSettings.fastAttractStrength"
+                />
+                <input
+                  class="value-input"
+                  type="number"
+                  step="0.05"
+                  v-model.number="systemSettings.fastAttractStrength"
+                />
+              </div>
+              <div class="setting-row">
+                <label>アンチミル係数<br />(antiMillGain):</label>
+                <input
+                  type="range"
+                  min="0"
+                  max="0.6"
+                  step="0.01"
+                  v-model.number="systemSettings.antiMillGain"
+                />
+                <input
+                  class="value-input"
+                  type="number"
+                  step="0.01"
+                  v-model.number="systemSettings.antiMillGain"
+                />
+              </div>
             </div>
           </details>
         </div>
-        <div>
-          <label>
-            <input type="checkbox" v-model="showUnits" />
-            Unit可視化
-          </label>
-          <label style="margin-left: 1em">
-            <input type="checkbox" v-model="showUnitSpheres" />
-            スフィアのみ表示
-          </label>
-          <label style="margin-left: 1em">
-            <input type="checkbox" v-model="showUnitLines" />
-            線のみ表示
-          </label>
-          <label style="margin-left: 1em">
-            <input type="checkbox" v-model="showUnitColors" />
-            Unit色分け
-          </label>
-          <label style="margin-left: 1em">
-            表示レイヤ下限:
-            <input type="range" min="1" max="20" v-model="unitLayer" />
-            {{ unitLayer }}
-          </label>
+        <br />
+        <div class="settings tuning-settings debug-settings">
+          <details class="species-section" :open="false">
+            <summary class="species-header">
+              <span class="species-title">Debug</span>
+            </summary>
+            <div class="species-content debug-content">
+              <label class="debug-checkbox">
+                <input
+                  type="checkbox"
+                  v-model="debugControls.enableFogPipeline"
+                />
+                フォグ/SSAO/ブルームを有効化
+              </label>
+              <label class="debug-checkbox">
+                <input type="checkbox" v-model="debugControls.enableShadows" />
+                影描画を有効化
+              </label>
+              <label class="debug-checkbox">
+                <input
+                  type="checkbox"
+                  v-model="debugControls.enableTailAnimation"
+                />
+                尾びれアニメーションを有効化
+              </label>
+            </div>
+            <div>
+              <label style="margin-left: 1em">
+                <input type="checkbox" v-model="showUnitColors" />
+                Unit色分け
+              </label>
+            </div>
+          </details>
         </div>
       </details>
       <div class="info">
@@ -194,7 +237,7 @@
 </template>
 
 <script setup>
-import { inject, onMounted, ref, watch, toRaw } from "vue";
+import { inject, onMounted, reactive, ref, watch, toRaw } from "vue";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import Settings from "./components/Settings.vue";
@@ -213,6 +256,10 @@ if (!wasmModule) {
 
 const wasmBridge = wasmModule ? new WasmtimeBridge(wasmModule) : null;
 
+if (typeof window !== "undefined" && wasmBridge) {
+  window.readLbvhStats = () => wasmBridge.getLbvhQueryStatsSnapshot();
+}
+
 // const getUnitCount = wasmModule.cwrap('getUnitCount', 'number', []);
 // const getUnitParentIndicesPtr = wasmModule.cwrap('getUnitParentIndicesPtr', 'number', []);
 
@@ -227,9 +274,10 @@ function detectDeviceProfile() {
   }
 
   // モバイルデバイスを最優先で認識
-  profile.isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
-    navigator.userAgent
-  );
+  profile.isMobile =
+    /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
+      navigator.userAgent
+    );
   if (profile.isMobile) {
     return profile;
   }
@@ -259,7 +307,8 @@ function fetchTreeStructure() {
   return wasmBridge?.exportTreeStructure() ?? null;
 }
 const deviceProfile = detectDeviceProfile();
-const useLowSpecPreset = deviceProfile.isMobile || deviceProfile.hasIntegratedGpu;
+const useLowSpecPreset =
+  deviceProfile.isMobile || deviceProfile.hasIntegratedGpu;
 const mobileBoidCount = useLowSpecPreset ? 6000 : 10000;
 
 const DEFAULT_SETTINGS = [
@@ -311,6 +360,8 @@ const DEFAULT_TUNING_SETTINGS = {
   cohesionBoost: 2.0, // 脅威時の凝集力ブースト
   separationMinFactor: 1.0, // 脅威時の分離力スケール下限（0〜1）
   alignmentBoost: 1.2, // 脅威時の整列力ブースト
+  antiMillGain: 0.15, // 渦抑制用アンチミル係数
+  fastAttractStrength: 1.0, // 近傍不足時の補助凝集強度（0で無効）
 };
 
 const flockStore = createFlockSettingsStore(
@@ -402,6 +453,8 @@ const backgroundAudio = ref(null);
 let scene, camera, renderer, controls;
 let fogPipeline = null; // 深度フォグパイプライン
 let particleField = null; // 背景パーティクルフィールド
+let dirLight = null; // ディレクショナルライトの参照
+let groundMesh = null; // 地面メッシュの参照
 
 const paused = ref(false);
 
@@ -414,6 +467,13 @@ const unitLayer = ref(1);
 
 let unitSpheres = []; // デバッグ用スフィアメッシュ
 let unitLines = []; // デバッグ用ラインメッシュ
+
+// GPU 負荷計測用に主要機能を切り替えるデバッグトグル群
+const debugControls = reactive({
+  enableFogPipeline: !deviceProfile.isMobile,
+  enableShadows: true,
+  enableTailAnimation: true,
+});
 
 let maxDepth = 1;
 let stats = null; // stats-gl パフォーマンス表示
@@ -434,7 +494,7 @@ function positionStatsOverlay(element) {
   element.style.bottom = "auto";
   element.style.zIndex = "9999";
   element.style.width = "270px";
-    element.style.height = "48px";
+  element.style.height = "48px";
   element.style.pointerEvents = "auto";
   element.style.transform = "none";
 }
@@ -463,6 +523,79 @@ function handleKeydown(e) {
   }
 }
 
+function applyTailAnimationDebugState() {
+  const enabled = debugControls.enableTailAnimation ? 1 : 0;
+  if (tailAnimation?.uniforms?.uTailEnable) {
+    tailAnimation.uniforms.uTailEnable.value = enabled;
+  }
+}
+
+function applyShadowDebugState() {
+  const enabled = debugControls.enableShadows;
+  if (renderer) {
+    renderer.shadowMap.enabled = enabled;
+  }
+  if (dirLight) {
+    dirLight.castShadow = enabled;
+    if (dirLight.shadow) {
+      dirLight.shadow.autoUpdate = enabled;
+    }
+  }
+  if (groundMesh) {
+    groundMesh.receiveShadow = enabled;
+  }
+  if (instancedMeshHigh) {
+    instancedMeshHigh.castShadow = enabled;
+    instancedMeshHigh.receiveShadow = enabled;
+  }
+  if (instancedMeshLow) {
+    instancedMeshLow.castShadow = enabled;
+    instancedMeshLow.receiveShadow = enabled;
+  }
+  const predatorMeshes =
+    typeof boidInstancing.getPredatorMeshes === "function"
+      ? boidInstancing.getPredatorMeshes()
+      : [];
+  for (const mesh of predatorMeshes) {
+    if (!mesh) {
+      continue;
+    }
+    mesh.traverse?.((child) => {
+      if (child.isMesh) {
+        child.castShadow = enabled;
+        child.receiveShadow = enabled;
+      }
+    });
+  }
+}
+
+function rebuildFogPipeline() {
+  if (!renderer || !scene || !camera) {
+    if (!debugControls.enableFogPipeline && fogPipeline) {
+      fogPipeline.dispose();
+      fogPipeline = null;
+    }
+    return;
+  }
+
+  const supportsPostProcess = renderer.capabilities?.isWebGL2;
+  const shouldEnable = Boolean(
+    debugControls.enableFogPipeline && supportsPostProcess
+  );
+
+  if (shouldEnable) {
+    if (!fogPipeline) {
+      fogPipeline = new FogPipeline(heightFogConfig);
+    }
+    const size = new THREE.Vector2();
+    renderer.getSize(size);
+    fogPipeline.init(renderer, scene, camera, size.x, size.y);
+  } else if (fogPipeline) {
+    fogPipeline.dispose();
+    fogPipeline = null;
+  }
+}
+
 function initThreeJS() {
   const width = window.innerWidth;
   const height = window.innerHeight;
@@ -484,8 +617,8 @@ function initThreeJS() {
   renderer.toneMappingExposure = 0.8;
   renderer.setPixelRatio(window.devicePixelRatio); // 高DPI対応
   renderer.setSize(width, height);
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap; // 影を柔らかく
+  renderer.shadowMap.enabled = debugControls.enableShadows;
+  renderer.shadowMap.type = THREE.PCFShadowMap; // 影を柔らかく
 
   glContext = renderer.getContext();
 
@@ -502,11 +635,11 @@ function initThreeJS() {
   const groundGeo = new THREE.PlaneGeometry(300, 300);
   const groundMat = createFadeOutGroundMaterial();
   groundMat.depthTest = true;
-  const ground = new THREE.Mesh(groundGeo, groundMat);
-  ground.rotation.x = -Math.PI / 2;
-  ground.position.y = -10;
-  ground.receiveShadow = true; // 影を受ける
-  scene.add(ground);
+  groundMesh = new THREE.Mesh(groundGeo, groundMat);
+  groundMesh.rotation.x = -Math.PI / 2;
+  groundMesh.position.y = -10;
+  groundMesh.receiveShadow = true; // 影を受ける
+  scene.add(groundMesh);
 
   // ライト
   const ambientLight = new THREE.AmbientLight(
@@ -516,10 +649,7 @@ function initThreeJS() {
   scene.add(ambientLight);
 
   // 太陽光（やや暖色のDirectionalLight）
-  const dirLight = new THREE.DirectionalLight(
-    toHex(OCEAN_COLORS.SUN_LIGHT),
-    20
-  ); // 暖色＆強め
+  dirLight = new THREE.DirectionalLight(toHex(OCEAN_COLORS.SUN_LIGHT), 20); // 暖色＆強め
   dirLight.position.set(300, 500, 200); // 高い位置から照らす
   dirLight.castShadow = true;
 
@@ -529,23 +659,18 @@ function initThreeJS() {
   dirLight.shadow.camera.top = 100;
   dirLight.shadow.camera.bottom = -100;
   dirLight.shadow.camera.near = 1;
-  dirLight.shadow.camera.far = 1000;
+  dirLight.shadow.camera.far = 400;
 
-  dirLight.shadow.mapSize.width = 1024;
-  dirLight.shadow.mapSize.height = 1024;
+  dirLight.shadow.mapSize.width = 768;
+  dirLight.shadow.mapSize.height = 768;
   dirLight.shadow.bias = -0.01;
   dirLight.shadow.normalBias = 0.01;
 
   scene.add(dirLight);
   initParticleSystem();
-  if (!deviceProfile.isMobile) {
-    fogPipeline?.dispose();
-    fogPipeline = new FogPipeline(heightFogConfig);
-    fogPipeline.init(renderer, scene, camera, width, height);
-  } else if (fogPipeline) {
-    fogPipeline.dispose();
-    fogPipeline = null;
-  }
+  rebuildFogPipeline();
+  applyShadowDebugState();
+  applyTailAnimationDebugState();
   // ウィンドウリサイズ対応
   window.addEventListener("resize", onWindowResize);
 }
@@ -587,8 +712,11 @@ const IDENTITY_QUATERNION = [0, 0, 0, 1]; // 非表示インスタンスに適�
 const SIN_LUT_SIZE = 256; // 尾びれアニメ用サイン LUT サイズ
 const sinCosLutTexture = createSinCosLutTexture(SIN_LUT_SIZE);
 // LOD距離閾値（平方距離）: 近距離はハイポリ、中距離はLOD+アニメ、遠距離はLOD静止
-const LOD_NEAR_DISTANCE_SQ = 4; // 2m以内はメインモデル
-const LOD_MID_DISTANCE_SQ = 25; // 5m以内はLODモデル＋アニメ
+const LOD_DISTANCE_PRESET = deviceProfile.isMobile
+  ? { nearSq: 1.5, midSq: 9 } // モバイルは近距離のみハイLODにして描画負荷を抑える
+  : { nearSq: 4, midSq: 25 }; // PC は従来値
+const LOD_NEAR_DISTANCE_SQ = LOD_DISTANCE_PRESET.nearSq;
+const LOD_MID_DISTANCE_SQ = LOD_DISTANCE_PRESET.midSq;
 const tailAnimation = {
   uniforms: {
     uTailTime: { value: 0 }, // 時間（波形生成用）
@@ -719,7 +847,7 @@ function initParticleSystem() {
     return;
   }
   if (!particleField) {
-  particleField = new ParticleField(useLowSpecPreset);
+    particleField = new ParticleField(useLowSpecPreset);
   }
   particleField.init(scene, renderer, camera, controls);
 }
@@ -863,7 +991,7 @@ function reinitializeFlockNow() {
   }
 
   try {
-    wasmModule.callInitBoids(vector, 1, 6, 0.25);
+    wasmModule.callInitBoids(vector, 1, 4, 0.25);
   } finally {
     if (typeof vector.delete === "function") {
       vector.delete();
@@ -948,6 +1076,8 @@ function initInstancedBoids(count) {
   if (typeof boidInstancing.ensurePredatorMeshes === "function") {
     boidInstancing.ensurePredatorMeshes(predatorCount);
   }
+
+  applyShadowDebugState();
 
   if (instancedMeshHigh?.instanceColor) {
     instancedMeshHigh.instanceColor.needsUpdate = true;
@@ -1192,7 +1322,6 @@ let lastTime = performance.now(); // 前回のフレームのタイムスタン�
 
 function animate() {
   stats?.begin();
-
   const currentTime = performance.now();
   const deltaTime = (currentTime - lastTime) / 1000;
   lastTime = currentTime;
@@ -1248,11 +1377,18 @@ function animate() {
     instancedMeshLow.instanceColor
   ) {
     const unitMappings = wasmBridge?.getUnitMappings(count);
+    const highCount = updateInfo?.highCount ?? visibleCount;
+    const lowCount = updateInfo?.lowCount ?? visibleCount;
+    const highMap = updateInfo?.highInstanceToBoid ?? null;
+    const lowMap = updateInfo?.lowInstanceToBoid ?? null;
+
     if (unitMappings) {
-      for (let i = 0; i < visibleCount; i++) {
+      // High LOD 側（packed instance index）
+      for (let inst = 0; inst < highCount; inst++) {
+        const boidIndex = highMap ? highMap[inst] : inst;
         let unitId = -1;
         for (let j = 0; j < unitMappings.length; j += 2) {
-          if (unitMappings[j] === i) {
+          if (unitMappings[j] === boidIndex) {
             unitId = unitMappings[j + 1];
             break;
           }
@@ -1263,9 +1399,28 @@ function animate() {
             ? new THREE.Color().setHSL((unitId % 100) / 100, 0.8, 0.6)
             : new THREE.Color(1, 0, 0);
 
-        instancedMeshHigh.setColorAt(i, color);
-        instancedMeshLow.setColorAt(i, color);
+        instancedMeshHigh.setColorAt(inst, color);
       }
+
+      // Low LOD 側（packed instance index）
+      for (let inst = 0; inst < lowCount; inst++) {
+        const boidIndex = lowMap ? lowMap[inst] : inst;
+        let unitId = -1;
+        for (let j = 0; j < unitMappings.length; j += 2) {
+          if (unitMappings[j] === boidIndex) {
+            unitId = unitMappings[j + 1];
+            break;
+          }
+        }
+
+        const color =
+          unitId >= 0
+            ? new THREE.Color().setHSL((unitId % 100) / 100, 0.8, 0.6)
+            : new THREE.Color(1, 0, 0);
+
+        instancedMeshLow.setColorAt(inst, color);
+      }
+
       instancedMeshHigh.instanceColor.needsUpdate = true;
       instancedMeshLow.instanceColor.needsUpdate = true;
     }
@@ -1275,8 +1430,13 @@ function animate() {
     instancedMeshLow.instanceColor
   ) {
     const whiteColor = new THREE.Color(1, 1, 1);
-    for (let i = 0; i < visibleCount; i++) {
+    const highCount = updateInfo?.highCount ?? visibleCount;
+    const lowCount = updateInfo?.lowCount ?? visibleCount;
+
+    for (let i = 0; i < highCount; i++) {
       instancedMeshHigh.setColorAt(i, whiteColor);
+    }
+    for (let i = 0; i < lowCount; i++) {
       instancedMeshLow.setColorAt(i, whiteColor);
     }
     instancedMeshHigh.instanceColor.needsUpdate = true;
@@ -1404,6 +1564,27 @@ onMounted(() => {
   window.addEventListener("keydown", handleKeydown);
 });
 
+watch(
+  () => debugControls.enableFogPipeline,
+  () => {
+    rebuildFogPipeline();
+  }
+);
+
+watch(
+  () => debugControls.enableShadows,
+  () => {
+    applyShadowDebugState();
+  }
+);
+
+watch(
+  () => debugControls.enableTailAnimation,
+  () => {
+    applyTailAnimationDebugState();
+  }
+);
+
 // グローバル調整値の変更を監視し、wasm 側へ逐次反映する。
 watch(
   systemSettings,
@@ -1514,10 +1695,18 @@ watch([showUnitSpheres, showUnitLines], ([newSpheres, newLines]) => {
 
 .settings {
   margin-bottom: 20px;
+  pointer-events: none;
 }
 
-.info {
-  margin-top: 20px;
+.settings {
+  margin-bottom: 20px;
+  pointer-events: none;
+  display: inline-block;
+}
+
+.settings > * {
+  pointer-events: auto;
+  display: inline-block;
 }
 
 .three-container {

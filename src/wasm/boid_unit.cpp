@@ -512,6 +512,8 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
         }
       }
       if (cnt > 0) {
+        const float longRangeCohesionScale =
+            glm::clamp(gSimulationTuning.fastAttractStrength, 0.0f, 1.0f);
         // ストレス状態に応じた段階的動作制御
         float currentStress = buf->stresses[idxA];
         float cohesionMultiplier = 1.0f;
@@ -531,13 +533,15 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
             (sumVel / float(cnt) - buf->velocities[idxA]) *
             globalSpeciesParams[sidA].alignment;
         buf->accelerations[idxA] +=
-            (sumPos / float(cnt) - buf->positions[idxA]) *
-            globalSpeciesParams[sidA].cohesion * cohesionMultiplier; // 凝集強化
+          (sumPos / float(cnt) - buf->positions[idxA]) *
+          (globalSpeciesParams[sidA].cohesion * cohesionMultiplier *
+           longRangeCohesionScale); // 凝集強化
         buf->accelerations[idxA] += sep * globalSpeciesParams[sidA].separation;
 
         // 再結集中の速度向上を後で適用するため、ストレス情報を保持
+        float scaledSpeedBoost = 1.0f + (speedMultiplier - 1.0f) * longRangeCohesionScale;
         buf->stresses[idxA] =
-            glm::max(buf->stresses[idxA], speedMultiplier - 1.0f);
+          glm::max(buf->stresses[idxA], scaledSpeedBoost - 1.0f);
       }
     }
   }
@@ -903,7 +907,10 @@ void BoidUnit::computeBoidInteraction(float dt) {
     //    - toAdd = maxNeighbors - activeCount
     //    - 部分ソート (nth_element) で上位toAdd件を取得
     // -------------------------------------------------------
-    int toAdd = globalSpeciesParams[sid].maxNeighbors - activeNeighbors.count();
+    int toAdd = globalSpeciesParams[sid].maxNeighbors - activeCount;
+    if (toAdd < 0) {
+      toAdd = 0;
+    }
     if (toAdd > 0 && !candidates.empty()) {
       if ((int)candidates.size() > toAdd) {
         std::nth_element(candidates.begin(), candidates.begin() + toAdd,
@@ -938,26 +945,52 @@ void BoidUnit::computeBoidInteraction(float dt) {
     //      - φᵢ < 1 なら吸引 ON, タイマー τ をリセット
     //      - φᵢ = 1 なら τ カウントダウン → 0 で OFF
     // -------------------------------------------------------
-    const int neighborCount = static_cast<int>(activeNeighbors.count());
-    const float phi =
-        float(neighborCount) / float(globalSpeciesParams[sid].maxNeighbors);
-    if (phi < 1.0f) {
-      // 群れの縁に出た場合は吸引ONでタイマーリセット
-      buf->isAttracting[gIdx] = 1;
-      buf->attractTimers[gIdx] = globalSpeciesParams[sid].tau;
-    } else if (buf->isAttracting[gIdx]) {
-      // 内部に戻った場合はタイマーカウントダウン
-      buf->attractTimers[gIdx] -= dt;
-      if (buf->attractTimers[gIdx] <= 0.0f) {
-        buf->isAttracting[gIdx] = 0;
-        buf->attractTimers[gIdx] = 0.0f;
+    const size_t neighborSlots =
+        std::min(indices.size(), cohesionMemories.size());
+    int neighborCount = 0;
+    for (size_t i = 0; i < neighborSlots; ++i) {
+      if (!activeNeighbors.test(i)) {
+        continue;
       }
+      if (cohesionMemories[i] <= 0.0f) {
+        continue;
+      }
+      ++neighborCount;
+    }
+
+    if (neighborCount == 0) {
+      buf->isAttracting[gIdx] = 0;
+      buf->attractTimers[gIdx] = 0.0f;
+      continue;
+    }
+
+    const int maxNeighbors = globalSpeciesParams[sid].maxNeighbors;
+    const float phi =
+        maxNeighbors > 0 ? float(neighborCount) / float(maxNeighbors) : 1.0f;
+
+    if (gSimulationTuning.fastAttractStrength > 0.001f) {
+      if (phi < 1.0f) {
+        // 群れの縁に出た場合は吸引ONでタイマーリセット
+        buf->isAttracting[gIdx] = 1;
+        buf->attractTimers[gIdx] = globalSpeciesParams[sid].tau;
+      } else if (buf->isAttracting[gIdx]) {
+        // 内部に戻った場合はタイマーカウントダウン
+        buf->attractTimers[gIdx] -= dt;
+        if (buf->attractTimers[gIdx] <= 0.0f) {
+          buf->isAttracting[gIdx] = 0;
+          buf->attractTimers[gIdx] = 0.0f;
+        }
+      }
+    } else {
+      buf->isAttracting[gIdx] = 0;
+      buf->attractTimers[gIdx] = 0.0f;
     }
 
     // -------------------------------------------------------
     // 5-B. Fast-start 吸引項の加算 (isAttracting==1 の間)
     // -------------------------------------------------------
-    if (buf->isAttracting[gIdx]) {
+    if (buf->isAttracting[gIdx] &&
+        gSimulationTuning.fastAttractStrength > 0.001f) {
       glm::vec3 dirSum(0.0f);
       int dirCnt = 0;
 
@@ -990,9 +1023,10 @@ void BoidUnit::computeBoidInteraction(float dt) {
 
       if (dirCnt > 0) {
         glm::vec3 avgDir = glm::normalize(dirSum / float(dirCnt));
+        float attractScale =
+          gSimulationTuning.fastAttractStrength * globalSpeciesParams[sid].lambda;
         glm::vec3 desiredVel = avgDir * globalSpeciesParams[sid].maxSpeed;
-        glm::vec3 attractAcc =
-            (desiredVel - vel) * globalSpeciesParams[sid].lambda;
+        glm::vec3 attractAcc = (desiredVel - vel) * attractScale;
         buf->accelerations[gIdx] += attractAcc;
       }
     }
@@ -1009,16 +1043,14 @@ void BoidUnit::computeBoidInteraction(float dt) {
       glm::vec3 sumSep = glm::vec3(0.0f);
       glm::vec3 sumAlign = glm::vec3(0.0f);
       glm::vec3 sumCoh = glm::vec3(0.0f);
-      float invN =
-          1.0f /
-          float(neighborCount); // activeNeighbors内の立っているビットを探索
-      for (size_t i = 0; i < indices.size() && i < cohesionMemories.size();
-           ++i) {
-        if (!activeNeighbors.test(i))
+      for (size_t i = 0; i < neighborSlots; ++i) {
+        if (!activeNeighbors.test(i)) {
           continue;
+        }
 
-        if (cohesionMemories[i] <= 0.0f)
+        if (cohesionMemories[i] <= 0.0f) {
           continue;
+        }
 
         int gNeighbor = indices[i];
         glm::vec3 diff = buf->positions[gNeighbor] - pos;
@@ -1136,6 +1168,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
 
         sumAlign += buf->velocities[gNeighbor];
       }
+      float invN = 1.0f / float(neighborCount);
       if (stressWeightSum > 0.0f) {
         float propagatedStress = stressGainSum / stressWeightSum;
         float delta = propagatedStress - selfStress;

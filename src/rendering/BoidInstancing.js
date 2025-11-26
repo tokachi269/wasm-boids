@@ -119,305 +119,249 @@ export class BoidInstancing {
   }
 
   /**
-   * シミュレーション出力を三重バッファへ書き込み、LOD ごとにインスタンスを切り替える。
-   */
-  update({
-    count,
-    positions,
-    orientations,
-    velocities,
-    cameraPosition,
-    predatorCount = 0,
-  }) {
-    if (!this.instancedMeshHigh || !this.instancedMeshLow || !this.bufferSetHigh || !this.bufferSetLow) {
-      return { visibleCount: 0 };
+ * シミュレーション出力を三重バッファへ書き込み、LOD ごとにインスタンスを切り替える。
+ *
+ * NOTE:
+ *  - 以前は High/Low を両方 count 個描画し、非表示側を hiddenPosition へ退避していました。
+ *    その方法だと GPU は常に「High+Low 両方」を処理します（頂点処理/影/ポストプロセスの前段が倍）。
+ *  - ここでは「各 LOD を詰めて書き込み、mesh.count を High/Low で分ける」ことで
+ *    GPU の実処理インスタンス数を減らします。
+ *
+ * 互換のため、App.vue 側で色付けを行う用途に「instanceIndex → boidIndex」の対応表も返します。
+ */
+update({
+  count,
+  positions,
+  orientations,
+  velocities,
+  cameraPosition,
+  predatorCount = 0,
+}) {
+  if (!this.instancedMeshHigh || !this.instancedMeshLow || !this.bufferSetHigh || !this.bufferSetLow) {
+    return { visibleCount: 0, lodFlags: null };
+  }
+  if (!positions || !orientations) {
+    return { visibleCount: 0, lodFlags: null };
+  }
+
+  const currentIndex = this.bufferCursor;
+  const nextIndex = (currentIndex + 1) % this.tripleBufferSize;
+
+  this.ensureTailRuntimeBuffers(count);
+  this.ensureTailSeedCapacity(count);
+  const lodFlags = this.ensureLodFlagBuffer(count);
+
+  const highPosAttr = this.bufferSetHigh.pos[currentIndex];
+  const highQuatAttr = this.bufferSetHigh.quat[currentIndex];
+  const highTailParamsAttr = this.bufferSetHigh.tailParams[currentIndex];
+  const highTailPhaseAttr = this.bufferSetHigh.tailPhase[currentIndex];
+  const lowPosAttr = this.bufferSetLow.pos[currentIndex];
+  const lowQuatAttr = this.bufferSetLow.quat[currentIndex];
+  const lowTailParamsAttr = this.bufferSetLow.tailParams[currentIndex];
+  const lowTailPhaseAttr = this.bufferSetLow.tailPhase[currentIndex];
+
+  const highPosArray = highPosAttr.array;
+  const highQuatArray = highQuatAttr.array;
+  const highTailParamsArray = highTailParamsAttr.array;
+  const highTailPhaseArray = highTailPhaseAttr.array;
+  const lowPosArray = lowPosAttr.array;
+  const lowQuatArray = lowQuatAttr.array;
+  const lowTailParamsArray = lowTailParamsAttr.array;
+  const lowTailPhaseArray = lowTailPhaseAttr.array;
+
+  let highTransformTouched = false;
+  let lowTransformTouched = false;
+  let highTailTouched = false;
+  let lowTailTouched = false;
+  let highTailPhaseTouched = false;
+  let lowTailPhaseTouched = false;
+
+  const camX = cameraPosition?.x ?? 0;
+  const camY = cameraPosition?.y ?? 0;
+  const camZ = cameraPosition?.z ?? 0;
+
+  // 捕食者は末尾に詰めている想定（C++ 側の出力仕様に合わせる）
+  const predatorStartIndex = predatorCount > 0 ? Math.max(0, count - predatorCount) : count;
+  if (this.scene && this.predatorModel) {
+    if (this.ensurePredatorMeshes(predatorCount)) {
+      this.predatorMeshCountCache = predatorCount;
     }
-    if (!positions || !orientations) {
-      return { visibleCount: 0 };
+    for (const mesh of this.predatorMeshes) {
+      mesh.visible = false;
     }
+  }
 
-    this.ensureTailRuntimeBuffers(count);
-    const lodFlags = this.ensureLodFlagBuffer(count);
+  const prevVel = this.previousVelocities;
+  const tailSeeds = this.tailPhaseSeeds;
 
-    const currentIndex = this.bufferCursor;
-    const nextIndex = (currentIndex + 1) % this.tripleBufferSize;
+  // LOD を詰めて書き込むための write index
+  let highWrite = 0;
+  let lowWrite = 0;
 
-    const highPosAttr = this.bufferSetHigh.pos[currentIndex];
-    const highQuatAttr = this.bufferSetHigh.quat[currentIndex];
-    const highTailParamsAttr = this.bufferSetHigh.tailParams[currentIndex];
-    const lowPosAttr = this.bufferSetLow.pos[currentIndex];
-    const lowQuatAttr = this.bufferSetLow.quat[currentIndex];
-    const lowTailParamsAttr = this.bufferSetLow.tailParams[currentIndex];
+  // instanceIndex → boidIndex の対応表（色付け等で使用）
+  if (!this.highInstanceToBoid || this.highInstanceToBoid.length < count) {
+    this.highInstanceToBoid = new Uint32Array(count);
+    this.lowInstanceToBoid = new Uint32Array(count);
+  }
 
-    const highPosArray = highPosAttr.array;
-    const highQuatArray = highQuatAttr.array;
-    const highTailParamsArray = highTailParamsAttr.array;
-    const lowPosArray = lowPosAttr.array;
-    const lowQuatArray = lowQuatAttr.array;
-    const lowTailParamsArray = lowTailParamsAttr.array;
+  for (let i = 0; i < count; i++) {
+    const basePos = i * 3;
+    const baseQuat = i * 4;
 
-    let highTransformTouched = false;
-    let lowTransformTouched = false;
-    let highTailTouched = false;
-    let lowTailTouched = false;
+    const px = positions[basePos];
+    const py = positions[basePos + 1];
+    const pz = positions[basePos + 2];
 
-    const camX = cameraPosition?.x ?? 0;
-    const camY = cameraPosition?.y ?? 0;
-    const camZ = cameraPosition?.z ?? 0;
+    const qx = orientations[baseQuat];
+    const qy = orientations[baseQuat + 1];
+    const qz = orientations[baseQuat + 2];
+    const qw = orientations[baseQuat + 3];
 
-    const predatorStartIndex = predatorCount > 0 ? Math.max(0, count - predatorCount) : count;
-    if (this.scene && this.predatorModel) {
-      if (this.ensurePredatorMeshes(predatorCount)) {
-        this.predatorMeshCountCache = predatorCount;
-      }
-      for (const mesh of this.predatorMeshes) {
-        mesh.visible = false;
-      }
-    }
-
-    const hiddenPos = this.hiddenPosition;
-    const idQuat = this.identityQuaternion;
-    const prevVel = this.previousVelocities;
-
-    for (let i = 0; i < count; i++) {
-      const basePos = i * 3;
-      const baseQuat = i * 4;
-      const tailIndex = i * 3;
-
-      const px = positions[basePos];
-      const py = positions[basePos + 1];
-      const pz = positions[basePos + 2];
-
-      const dx = px - camX;
-      const dy = py - camY;
-      const dz = pz - camZ;
-      // 高負荷を避けるため距離で LOD を切り替える
-      const distSq = dx * dx + dy * dy + dz * dz;
-      const isNear = distSq < this.lodNearDistanceSq;
-      const isMid = !isNear && distSq < this.lodMidDistanceSq;
-      const animateTail = isNear || isMid;
-
-      const qx = orientations[baseQuat];
-      const qy = orientations[baseQuat + 1];
-      const qz = orientations[baseQuat + 2];
-      const qw = orientations[baseQuat + 3];
-
-      const isPredator = i >= predatorStartIndex && predatorCount > 0;
-      if (isPredator) {
-        const meshIndex = i - predatorStartIndex;
-        const predatorMesh = this.predatorMeshes[meshIndex];
+    // 捕食者は別メッシュで描画する
+    if (i >= predatorStartIndex) {
+      if (this.scene && this.predatorModel) {
+        const predatorLocalIndex = i - predatorStartIndex;
+        const predatorMesh = this.predatorMeshes[predatorLocalIndex];
         if (predatorMesh) {
           predatorMesh.visible = true;
           predatorMesh.position.set(px, py, pz);
           predatorMesh.quaternion.set(qx, qy, qz, qw);
         }
-
-        // 捕食者は別メッシュで描画するためインスタンス側は非表示にする
-        if (
-          highPosArray[basePos] !== hiddenPos ||
-          highPosArray[basePos + 1] !== hiddenPos ||
-          highPosArray[basePos + 2] !== hiddenPos ||
-          highQuatArray[baseQuat] !== idQuat[0] ||
-          highQuatArray[baseQuat + 1] !== idQuat[1] ||
-          highQuatArray[baseQuat + 2] !== idQuat[2] ||
-          highQuatArray[baseQuat + 3] !== idQuat[3]
-        ) {
-          highPosArray[basePos] = hiddenPos;
-          highPosArray[basePos + 1] = hiddenPos;
-          highPosArray[basePos + 2] = hiddenPos;
-          highQuatArray[baseQuat] = idQuat[0];
-          highQuatArray[baseQuat + 1] = idQuat[1];
-          highQuatArray[baseQuat + 2] = idQuat[2];
-          highQuatArray[baseQuat + 3] = idQuat[3];
-          highTransformTouched = true;
-        }
-
-        if (
-          lowPosArray[basePos] !== hiddenPos ||
-          lowPosArray[basePos + 1] !== hiddenPos ||
-          lowPosArray[basePos + 2] !== hiddenPos ||
-          lowQuatArray[baseQuat] !== idQuat[0] ||
-          lowQuatArray[baseQuat + 1] !== idQuat[1] ||
-          lowQuatArray[baseQuat + 2] !== idQuat[2] ||
-          lowQuatArray[baseQuat + 3] !== idQuat[3]
-        ) {
-          lowPosArray[basePos] = hiddenPos;
-          lowPosArray[basePos + 1] = hiddenPos;
-          lowPosArray[basePos + 2] = hiddenPos;
-          lowQuatArray[baseQuat] = idQuat[0];
-          lowQuatArray[baseQuat + 1] = idQuat[1];
-          lowQuatArray[baseQuat + 2] = idQuat[2];
-          lowQuatArray[baseQuat + 3] = idQuat[3];
-          lowTransformTouched = true;
-        }
-
-        if (highTailParamsArray[tailIndex] !== 0 || highTailParamsArray[tailIndex + 1] !== 0 || highTailParamsArray[tailIndex + 2] !== 0) {
-          highTailParamsArray[tailIndex] = 0;
-          highTailParamsArray[tailIndex + 1] = 0;
-          highTailParamsArray[tailIndex + 2] = 0;
-          highTailTouched = true;
-        }
-        if (lowTailParamsArray[tailIndex] !== 0 || lowTailParamsArray[tailIndex + 1] !== 0 || lowTailParamsArray[tailIndex + 2] !== 0) {
-          lowTailParamsArray[tailIndex] = 0;
-          lowTailParamsArray[tailIndex + 1] = 0;
-          lowTailParamsArray[tailIndex + 2] = 0;
-          lowTailTouched = true;
-        }
-
-        if (lodFlags) {
-          lodFlags[i] = 0;
-        }
-        if (prevVel) {
-          prevVel[basePos] = 0;
-          prevVel[basePos + 1] = 0;
-          prevVel[basePos + 2] = 0;
-        }
-        continue;
       }
-
-      const vx = velocities ? velocities[basePos] : 0;
-      const vy = velocities ? velocities[basePos + 1] : 0;
-      const vz = velocities ? velocities[basePos + 2] : 0;
-      const speed = Math.hypot(vx, vy, vz);
-      const prevVx = prevVel ? prevVel[basePos] : 0;
-      const prevVy = prevVel ? prevVel[basePos + 1] : 0;
-      const prevVz = prevVel ? prevVel[basePos + 2] : 0;
-      const prevLen = Math.hypot(prevVx, prevVy, prevVz);
-
-      let turnAmount = 0;
-      if (prevLen > 1e-5 && speed > 1e-5) {
-        // 前フレームからの向きの差異を Y 軸回転量として近似
-        const crossY = prevVz * vx - prevVx * vz;
-        const dot = prevVx * vx + prevVy * vy + prevVz * vz;
-        turnAmount = Math.atan2(crossY, dot);
-      }
-
-      const tailSpeedValue = animateTail ? speed : 0;
-      const tailTurnValue = animateTail ? turnAmount : 0;
-      const driveValue = animateTail ? 1 : 0;
-
-      if (isNear) {
-        highPosArray[basePos] = px;
-        highPosArray[basePos + 1] = py;
-        highPosArray[basePos + 2] = pz;
-        highQuatArray[baseQuat] = qx;
-        highQuatArray[baseQuat + 1] = qy;
-        highQuatArray[baseQuat + 2] = qz;
-        highQuatArray[baseQuat + 3] = qw;
-        highTransformTouched = true;
-
-        if (
-          lowPosArray[basePos] !== hiddenPos ||
-          lowPosArray[basePos + 1] !== hiddenPos ||
-          lowPosArray[basePos + 2] !== hiddenPos ||
-          lowQuatArray[baseQuat] !== idQuat[0] ||
-          lowQuatArray[baseQuat + 1] !== idQuat[1] ||
-          lowQuatArray[baseQuat + 2] !== idQuat[2] ||
-          lowQuatArray[baseQuat + 3] !== idQuat[3]
-        ) {
-          lowPosArray[basePos] = hiddenPos;
-          lowPosArray[basePos + 1] = hiddenPos;
-          lowPosArray[basePos + 2] = hiddenPos;
-          lowQuatArray[baseQuat] = idQuat[0];
-          lowQuatArray[baseQuat + 1] = idQuat[1];
-          lowQuatArray[baseQuat + 2] = idQuat[2];
-          lowQuatArray[baseQuat + 3] = idQuat[3];
-          lowTransformTouched = true;
-        }
-
-        highTailParamsArray[tailIndex] = tailSpeedValue;
-        highTailParamsArray[tailIndex + 1] = tailTurnValue;
-        highTailParamsArray[tailIndex + 2] = driveValue;
-        highTailTouched = true;
-
-        if (
-          lowTailParamsArray[tailIndex] !== 0 ||
-          lowTailParamsArray[tailIndex + 1] !== 0 ||
-          lowTailParamsArray[tailIndex + 2] !== 0
-        ) {
-          lowTailParamsArray[tailIndex] = 0;
-          lowTailParamsArray[tailIndex + 1] = 0;
-          lowTailParamsArray[tailIndex + 2] = 0;
-          lowTailTouched = true;
-        }
-      } else {
-        lowPosArray[basePos] = px;
-        lowPosArray[basePos + 1] = py;
-        lowPosArray[basePos + 2] = pz;
-        lowQuatArray[baseQuat] = qx;
-        lowQuatArray[baseQuat + 1] = qy;
-        lowQuatArray[baseQuat + 2] = qz;
-        lowQuatArray[baseQuat + 3] = qw;
-        lowTransformTouched = true;
-
-        if (
-          highPosArray[basePos] !== hiddenPos ||
-          highPosArray[basePos + 1] !== hiddenPos ||
-          highPosArray[basePos + 2] !== hiddenPos ||
-          highQuatArray[baseQuat] !== idQuat[0] ||
-          highQuatArray[baseQuat + 1] !== idQuat[1] ||
-          highQuatArray[baseQuat + 2] !== idQuat[2] ||
-          highQuatArray[baseQuat + 3] !== idQuat[3]
-        ) {
-          highPosArray[basePos] = hiddenPos;
-          highPosArray[basePos + 1] = hiddenPos;
-          highPosArray[basePos + 2] = hiddenPos;
-          highQuatArray[baseQuat] = idQuat[0];
-          highQuatArray[baseQuat + 1] = idQuat[1];
-          highQuatArray[baseQuat + 2] = idQuat[2];
-          highQuatArray[baseQuat + 3] = idQuat[3];
-          highTransformTouched = true;
-        }
-
-        lowTailParamsArray[tailIndex] = tailSpeedValue;
-        lowTailParamsArray[tailIndex + 1] = tailTurnValue;
-        lowTailParamsArray[tailIndex + 2] = driveValue;
-        lowTailTouched = true;
-
-        if (
-          highTailParamsArray[tailIndex] !== 0 ||
-          highTailParamsArray[tailIndex + 1] !== 0 ||
-          highTailParamsArray[tailIndex + 2] !== 0
-        ) {
-          highTailParamsArray[tailIndex] = 0;
-          highTailParamsArray[tailIndex + 1] = 0;
-          highTailParamsArray[tailIndex + 2] = 0;
-          highTailTouched = true;
-        }
-      }
-
       if (lodFlags) {
-        lodFlags[i] = isNear ? 1 : 2;
+        lodFlags[i] = 0;
       }
-
-      if (prevVel) {
-        prevVel[basePos] = vx;
-        prevVel[basePos + 1] = vy;
-        prevVel[basePos + 2] = vz;
-      }
+      continue;
     }
 
-    const visibleCount = predatorCount > 0 ? Math.max(0, count - predatorCount) : count;
-    this.instancedMeshHigh.count = visibleCount;
-    this.instancedMeshLow.count = visibleCount;
+    const dx = px - camX;
+    const dy = py - camY;
+    const dz = pz - camZ;
+    // 高負荷を避けるため距離で LOD を切り替える
+    const distSq = dx * dx + dy * dy + dz * dz;
+    const isNear = distSq < this.lodNearDistanceSq;
+    const isMid = !isNear && distSq < this.lodMidDistanceSq;
+    const animateTail = isNear || isMid;
 
-    this.applyBufferSet(this.instancedMeshHigh, this.bufferSetHigh, currentIndex);
-    this.applyBufferSet(this.instancedMeshLow, this.bufferSetLow, currentIndex);
+    // 尾びれアニメ用の簡易パラメータ
+    const vx = velocities ? velocities[basePos] : 0;
+    const vy = velocities ? velocities[basePos + 1] : 0;
+    const vz = velocities ? velocities[basePos + 2] : 0;
 
-    highPosAttr.needsUpdate = highTransformTouched;
-    highQuatAttr.needsUpdate = highTransformTouched;
-    lowPosAttr.needsUpdate = lowTransformTouched;
-    lowQuatAttr.needsUpdate = lowTransformTouched;
-    highTailParamsAttr.needsUpdate = highTailTouched;
-    lowTailParamsAttr.needsUpdate = lowTailTouched;
+    const speed = Math.hypot(vx, vy, vz);
+    const prevVx = prevVel ? prevVel[basePos] : 0;
+    const prevVy = prevVel ? prevVel[basePos + 1] : 0;
+    const prevVz = prevVel ? prevVel[basePos + 2] : 0;
+    const prevLen = Math.hypot(prevVx, prevVy, prevVz);
 
-    this.bufferCursor = nextIndex;
+    let turnAmount = 0;
+    if (prevLen > 1e-5 && speed > 1e-5) {
+      // 前フレームからの向きの差異を Y 軸回転量として近似
+      const crossY = prevVz * vx - prevVx * vz;
+      const dot = prevVx * vx + prevVy * vy + prevVz * vz;
+      turnAmount = Math.atan2(crossY, dot);
+    }
 
-    return {
-      visibleCount,
-      lodFlags,
-    };
+    const tailSpeedValue = animateTail ? speed : 0;
+    const tailTurnValue = animateTail ? turnAmount : 0;
+    const driveValue = animateTail ? 1 : 0;
+
+    if (isNear) {
+      // High 側に詰めて書く
+      const writeIndex = highWrite;
+      const outPos = writeIndex * 3;
+      const outQuat = writeIndex * 4;
+      const outTail = writeIndex * 3;
+
+      highPosArray[outPos] = px;
+      highPosArray[outPos + 1] = py;
+      highPosArray[outPos + 2] = pz;
+      highQuatArray[outQuat] = qx;
+      highQuatArray[outQuat + 1] = qy;
+      highQuatArray[outQuat + 2] = qz;
+      highQuatArray[outQuat + 3] = qw;
+      highTailParamsArray[outTail] = tailSpeedValue;
+      highTailParamsArray[outTail + 1] = tailTurnValue;
+      highTailParamsArray[outTail + 2] = driveValue;
+      // フレームごとにパックし直しても同一個体の揺れ位相が変化しないよう、Boid 固有シードを保持する
+      // tailPhase 属性も Boid 固有シードで詰め直し、LOD 切り替え時の位相ジャンプを防ぐ
+      const seedValue = tailSeeds && i < tailSeeds.length ? tailSeeds[i] : 0;
+      highTailPhaseArray[writeIndex] = seedValue;
+
+      this.highInstanceToBoid[writeIndex] = i;
+      highWrite++;
+
+      highTransformTouched = true;
+      highTailTouched = true;
+      highTailPhaseTouched = true;
+    } else {
+      // Low 側に詰めて書く
+      const writeIndex = lowWrite;
+      const outPos = writeIndex * 3;
+      const outQuat = writeIndex * 4;
+      const outTail = writeIndex * 3;
+
+      lowPosArray[outPos] = px;
+      lowPosArray[outPos + 1] = py;
+      lowPosArray[outPos + 2] = pz;
+      lowQuatArray[outQuat] = qx;
+      lowQuatArray[outQuat + 1] = qy;
+      lowQuatArray[outQuat + 2] = qz;
+      lowQuatArray[outQuat + 3] = qw;
+      lowTailParamsArray[outTail] = tailSpeedValue;
+      lowTailParamsArray[outTail + 1] = tailTurnValue;
+      lowTailParamsArray[outTail + 2] = driveValue;
+      const seedValue = tailSeeds && i < tailSeeds.length ? tailSeeds[i] : 0;
+      lowTailPhaseArray[writeIndex] = seedValue;
+
+      this.lowInstanceToBoid[writeIndex] = i;
+      lowWrite++;
+
+      lowTransformTouched = true;
+      lowTailTouched = true;
+      lowTailPhaseTouched = true;
+    }
+
+    if (lodFlags) {
+      lodFlags[i] = isNear ? 1 : 2;
+    }
+
+    if (prevVel) {
+      prevVel[basePos] = vx;
+      prevVel[basePos + 1] = vy;
+      prevVel[basePos + 2] = vz;
+    }
   }
+
+  const visibleCount = predatorCount > 0 ? Math.max(0, count - predatorCount) : count;
+
+  // ★ここが本丸：High/Low の描画インスタンス数を分ける
+  this.instancedMeshHigh.count = highWrite;
+  this.instancedMeshLow.count = lowWrite;
+
+  this.applyBufferSet(this.instancedMeshHigh, this.bufferSetHigh, currentIndex);
+  this.applyBufferSet(this.instancedMeshLow, this.bufferSetLow, currentIndex);
+
+  highPosAttr.needsUpdate = highTransformTouched;
+  highQuatAttr.needsUpdate = highTransformTouched;
+  lowPosAttr.needsUpdate = lowTransformTouched;
+  lowQuatAttr.needsUpdate = lowTransformTouched;
+  highTailParamsAttr.needsUpdate = highTailTouched;
+  lowTailParamsAttr.needsUpdate = lowTailTouched;
+  highTailPhaseAttr.needsUpdate = highTailPhaseTouched;
+  lowTailPhaseAttr.needsUpdate = lowTailPhaseTouched;
+
+  this.bufferCursor = nextIndex;
+
+  return {
+    visibleCount,
+    lodFlags,
+    highCount: highWrite,
+    lowCount: lowWrite,
+    highInstanceToBoid: this.highInstanceToBoid,
+    lowInstanceToBoid: this.lowInstanceToBoid,
+  };
+}
 
   forEachInstancingMaterial(callback) {
     for (const material of this.instancingMaterials) {
@@ -622,6 +566,23 @@ export class BoidInstancing {
       this.previousLodFlags = new Uint8Array(count);
     }
     return this.previousLodFlags;
+  }
+
+  ensureTailSeedCapacity(count) {
+    if (count <= 0) {
+      return;
+    }
+    const currentLength = this.tailPhaseSeeds ? this.tailPhaseSeeds.length : 0;
+    if (!this.tailPhaseSeeds || currentLength < count) {
+      const next = new Float32Array(count);
+      if (this.tailPhaseSeeds && currentLength > 0) {
+        next.set(this.tailPhaseSeeds.subarray(0, currentLength));
+      }
+      for (let i = currentLength; i < count; i++) {
+        next[i] = Math.random() * Math.PI * 2;
+      }
+      this.tailPhaseSeeds = next;
+    }
   }
 
   ensureBodyCoordAttribute(geometry) {

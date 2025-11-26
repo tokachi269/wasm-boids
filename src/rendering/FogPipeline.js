@@ -64,8 +64,8 @@ export class FogPipeline {
     this.composer.addPass(ssaoPass);
 
     // ハイライトを強調するブルーム
-    const bloomStrength = 1.5;   // ブルームの強さ
-    const bloomRadius = 0.4;     // 発光の広がり
+    const bloomStrength = 1.0;   // ブルームの強さ
+    const bloomRadius = 0.25;     // 発光の広がり
     const bloomThreshold = 0.85; // ブルームを適用する輝度
     const bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), bloomStrength, bloomRadius, bloomThreshold);
     this.composer.addPass(bloomPass);
