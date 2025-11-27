@@ -1042,7 +1042,8 @@ void BoidUnit::computeBoidInteraction(float dt) {
 
       glm::vec3 sumSep = glm::vec3(0.0f);
       glm::vec3 sumAlign = glm::vec3(0.0f);
-      glm::vec3 sumCoh = glm::vec3(0.0f);
+      glm::vec3 sumCohDir = glm::vec3(0.0f); // 相対ベクトルで凝集を計算
+      float wCohSum = 0.0f; // 凝集重みの総和
       for (size_t i = 0; i < neighborSlots; ++i) {
         if (!activeNeighbors.test(i)) {
           continue;
@@ -1155,16 +1156,19 @@ void BoidUnit::computeBoidInteraction(float dt) {
         wSep = glm::clamp(wSep, 0.0f, 1.0f);
         sumSep += (diff * wSep) * (-1.0f);
 
-    float wCoh = glm::clamp(dist / globalSpeciesParams[sid].cohesionRange,
-                0.0f, 1.0f);
-    // stress に応じて凝集強度を増加（再結集フェーズ強化）
-    float stressFactor = 1.0f + selfStress * 0.2f;
-    // threat レベルに応じた凝集ブースト（逃避中も群れを保つ）
-    float cohesionThreatFactor =
-      1.0f + gSimulationTuning.cohesionBoost * threatLevel;
-    wCoh *= stressFactor * cohesionThreatFactor;
+        // 凝集の重み計算：近いほど強い（距離の正規化を反転）
+        float t = glm::clamp(dist / globalSpeciesParams[sid].cohesionRange, 0.0f, 1.0f);
+        float wCoh = 1.0f - t; // 近いほど強い（0=遠い、1=近い）
+        // stress に応じて凝集強度を増加（再結集フェーズ強化）
+        float stressFactor = 1.0f + selfStress * 0.2f;
+        // threat レベルに応じた凝集ブースト（逃避中も群れを保つ）
+        float cohesionThreatFactor =
+            1.0f + gSimulationTuning.cohesionBoost * threatLevel;
+        wCoh *= stressFactor * cohesionThreatFactor;
 
-        sumCoh += buf->positions[gNeighbor] * wCoh;
+        // 相対ベクトル（diff）を重み付きで加算（世界座標を使わない）
+        sumCohDir += diff * wCoh;
+        wCohSum += wCoh;
 
         sumAlign += buf->velocities[gNeighbor];
       }
@@ -1192,14 +1196,15 @@ void BoidUnit::computeBoidInteraction(float dt) {
                            separationThreatFactor);
       }
 
-      // 凝集の最終ベクトル
-      glm::vec3 avgCohPos = sumCoh * invN;
+      // 凝集の最終ベクトル（重みの総和で正規化、原点依存なし）
       glm::vec3 totalCohesion = glm::vec3(0.0f);
-      glm::vec3 cohDir = avgCohPos - pos;
-      float cohLen2 = glm::length2(cohDir);
-      if (cohLen2 > EPS) {
-        totalCohesion = (cohDir * (1.0f / glm::sqrt(cohLen2))) *
-                        globalSpeciesParams[sid].cohesion;
+      if (wCohSum > EPS) {
+        glm::vec3 cohDir = sumCohDir / wCohSum; // 重み付き平均方向
+        float cohLen2 = glm::length2(cohDir);
+        if (cohLen2 > EPS) {
+          totalCohesion = (cohDir * (1.0f / glm::sqrt(cohLen2))) *
+                          globalSpeciesParams[sid].cohesion;
+        }
       }
 
       // 整列の最終ベクトル
@@ -1257,6 +1262,24 @@ void BoidUnit::computeBoidInteraction(float dt) {
       // --- 最終的な加速度をバッファに書き込み ---
       buf->accelerations[gIdx] +=
           totalSeparation + totalAlignment + totalCohesion;
+
+      // --- 動的中心への吸引（回転種のみ有効） ---
+      if (globalSpeciesParams[sid].centerAttractStrength > EPS) {
+        // 種族全体の中心座標を使用（フレーム開始時にキャッシュ済み）
+        if (sid >= 0 && sid < static_cast<int>(buf->speciesCenters.size()) &&
+            buf->speciesCounts[sid] > 0) {
+          glm::vec3 dynamicCenter = buf->speciesCenters[sid];
+          glm::vec3 toCenter = dynamicCenter - pos;
+          float centerDist2 = glm::length2(toCenter);
+          if (centerDist2 > EPS) {
+            // 中心への吸引力を加算（距離に比例、暴走防止のため正規化）
+            float centerDist = glm::sqrt(centerDist2);
+            glm::vec3 centerDir = toCenter / centerDist;
+            buf->accelerations[gIdx] += centerDir *
+                                        globalSpeciesParams[sid].centerAttractStrength;
+          }
+        }
+      }
     }
   }
 }

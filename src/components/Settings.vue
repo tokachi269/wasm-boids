@@ -197,6 +197,28 @@
       />
     </div>
     <div class="setting-row">
+      <label>中心吸引強度<br>(Center Attract):</label>
+      <input type="range" v-model.number="settings.centerAttractStrength" min="0" max="3" step="0.05" />
+      <span 
+        v-if="!editingCenterAttractStrength" 
+        class="editable-value" 
+        @click="startEditCenterAttractStrength"
+        title="クリックして編集"
+      >{{ settings.centerAttractStrength }}</span>
+      <input 
+        v-if="editingCenterAttractStrength"
+        type="number" 
+        v-model.number="settings.centerAttractStrength" 
+        min="0" 
+        max="3"
+        step="0.05"
+        class="value-input"
+        @blur="stopEditCenterAttractStrength"
+        @keyup.enter="stopEditCenterAttractStrength"
+        ref="centerAttractStrengthInput"
+      />
+    </div>
+    <div class="setting-row">
       <label>最大速度<br>(Max Speed):</label>
       <input type="range" v-model.number="settings.maxSpeed" min="0.1" max="2" step="0.01" />
       <span 
@@ -393,6 +415,7 @@ const editingTorqueStrength = ref(false);
 const editingLambda = ref(false);
 const editingTau = ref(false);
 const editingPredatorAlertRadius = ref(false);
+const editingCenterAttractStrength = ref(false);
 
 // 入力フィールドのref
 const countInput = ref(null);
@@ -410,6 +433,7 @@ const torqueStrengthInput = ref(null);
 const lambdaInput = ref(null);
 const tauInput = ref(null);
 const predatorAlertRadiusInput = ref(null);
+const centerAttractStrengthInput = ref(null);
 
 const countDraft = ref(settings.count ?? 0);
 
@@ -521,6 +545,15 @@ async function startEditPredatorAlertRadius() {
   }
 }
 
+async function startEditCenterAttractStrength() {
+  editingCenterAttractStrength.value = true;
+  await nextTick();
+  if (centerAttractStrengthInput.value) {
+    centerAttractStrengthInput.value.focus();
+    centerAttractStrengthInput.value.select();
+  }
+}
+
 async function startEditMaxSpeed() {
   editingMaxSpeed.value = true;
   await nextTick();
@@ -610,6 +643,10 @@ function stopEditAlignmentRange() {
 
 function stopEditPredatorAlertRadius() {
   editingPredatorAlertRadius.value = false;
+}
+
+function stopEditCenterAttractStrength() {
+  editingCenterAttractStrength.value = false;
 }
 
 function stopEditMaxSpeed() {

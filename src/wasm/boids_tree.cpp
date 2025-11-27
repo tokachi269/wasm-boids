@@ -456,6 +456,27 @@ BoidUnit *BoidTree::findParent(BoidUnit *node, BoidUnit *target) {
 }
 
 void BoidTree::update(float dt) {
+  // 種族ごとの中心座標をフレーム開始時に1回だけ計算（キャッシュ）
+  const size_t numSpecies = globalSpeciesParams.size();
+  buf.speciesCenters.resize(numSpecies, glm::vec3(0.0f));
+  buf.speciesCounts.resize(numSpecies, 0);
+
+  // 全Boidをスキャンして種族ごとに位置を集計
+  for (size_t i = 0; i < buf.positions.size(); ++i) {
+    int sid = buf.speciesIds[i];
+    if (sid >= 0 && sid < static_cast<int>(numSpecies)) {
+      buf.speciesCenters[sid] += buf.positions[i];
+      buf.speciesCounts[sid]++;
+    }
+  }
+
+  // 平均を計算して中心座標を確定
+  for (size_t sid = 0; sid < numSpecies; ++sid) {
+    if (buf.speciesCounts[sid] > 0) {
+      buf.speciesCenters[sid] /= static_cast<float>(buf.speciesCounts[sid]);
+    }
+  }
+
   // 木構造全体を再帰的に更新
   if (root) {
     try {

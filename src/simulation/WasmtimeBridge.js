@@ -124,6 +124,7 @@ export class WasmtimeBridge {
         bodyRadius: toNumber(raw.bodyRadius, 0.035),
         predatorAlertRadius: toNumber(raw.predatorAlertRadius, 1.0),
         isPredator: Boolean(raw.isPredator),
+        centerAttractStrength: toNumber(raw.centerAttractStrength, 0.0),
       });
     });
     return vector;

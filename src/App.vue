@@ -329,6 +329,7 @@ const DEFAULT_SETTINGS = [
     lambda: 0.62, // 速度調整係数
     tau: 1.0, // 記憶時間スケール
     predatorAlertRadius: 1.0, // 捕食者を察知する距離
+    centerAttractStrength: 0.5, // 群れの動的中心への吸引強度（回転形成用）
   },
   {
     species: "Predator",

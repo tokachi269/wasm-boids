@@ -70,7 +70,8 @@ value_object<SpeciesParams>("SpeciesParams")
     .field("bodyTailLength", &SpeciesParams::bodyTailLength)
     .field("bodyRadius", &SpeciesParams::bodyRadius)
     .field("predatorAlertRadius", &SpeciesParams::predatorAlertRadius)
-    .field("isPredator", &SpeciesParams::isPredator);
+    .field("isPredator", &SpeciesParams::isPredator)
+    .field("centerAttractStrength", &SpeciesParams::centerAttractStrength);
 
 value_object<SimulationTuningParams>("SimulationTuningParams")
     .field("threatDecay", &SimulationTuningParams::threatDecay)

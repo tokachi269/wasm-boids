@@ -38,6 +38,10 @@ struct SoABuffers {
       boidCohesionMemories;                         // dt累積（-1.0fで未使用）
   std::vector<std::bitset<16>> boidActiveNeighbors; // 使用中slotのインデックス
 
+  // 種族ごとの中心座標キャッシュ（フレームごとに1回計算）
+  std::vector<glm::vec3> speciesCenters;
+  std::vector<int> speciesCounts;
+
   void reserveAll(std::size_t n) {
     positions.reserve(n);
     positionsWrite.reserve(n);
@@ -57,6 +61,7 @@ struct SoABuffers {
     predatorThreats.reserve(n);
     boidCohesionMemories.reserve(n);
     boidActiveNeighbors.reserve(n);
+    // speciesCentersは種族数分だけなので個別管理
   }
 
   // Boid 数に合わせてフラグをクリア/サイズ調整
@@ -79,6 +84,7 @@ struct SoABuffers {
     predatorThreats.resize(n, 0.0f);
     boidCohesionMemories.resize(n);
     boidActiveNeighbors.resize(n);
+    // speciesCentersは種族数に応じて動的に確保
   }
 
   // 書き込みバッファを読み取りバッファから同期（初期化時用）

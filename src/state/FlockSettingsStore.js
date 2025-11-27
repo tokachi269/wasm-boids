@@ -22,6 +22,7 @@ const DEFAULT_SPECIES_FALLBACK = {
   predatorAlertRadius: 1,
   isPredator: false,
   speciesId: 0,
+  centerAttractStrength: 0.0,
 };
 
 /**
@@ -207,6 +208,7 @@ function sanitizeSpeciesEntry(entry = {}, fallback = DEFAULT_SPECIES_FALLBACK) {
   result.tau = toFinite(merged.tau, base.tau ?? 0);
   result.velocityEpsilon = Math.max(0, toFinite(merged.velocityEpsilon, base.velocityEpsilon ?? 0.0001));
   result.predatorAlertRadius = Math.max(0, toFinite(merged.predatorAlertRadius, base.predatorAlertRadius ?? 1));
+  result.centerAttractStrength = Math.max(0, toFinite(merged.centerAttractStrength, base.centerAttractStrength ?? 0));
 
   const speciesName = typeof merged.species === 'string' ? merged.species.trim() : '';
   result.species = speciesName || base.species || DEFAULT_SPECIES_FALLBACK.species;
