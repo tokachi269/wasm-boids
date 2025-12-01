@@ -1,20 +1,126 @@
 #include "boid_unit.h"
+
+#include "boids_buffers.h"
 #include "boids_tree.h"
 #include "pool_accessor.h"
 #include "simulation_tuning.h"
 #include "spatial_query.h"
+
 #include <algorithm>
+#include <cstddef>
 #include <cmath>
 #include <future>
 #include <glm/glm.hpp>
 #include <glm/gtc/random.hpp>
-#include <glm/gtx/norm.hpp>
 #include <glm/gtx/quaternion.hpp>
 #include <glm/gtx/rotate_vector.hpp>
 #include <glm/gtx/string_cast.hpp>
 #include <stack>
 #include <utility>
 #include <vector>
+
+namespace {
+
+constexpr float kLeafDensityMinRadius = 0.25f;
+constexpr std::size_t kCandidateCacheLimit = 16384; // thread-local reuse上限
+constexpr std::size_t kPredatorCacheLimit = 2048;
+
+float computeLeafDensityValue(const BoidUnit *leaf) {
+  if (!leaf) {
+    return 0.0f;
+  }
+  float minRadius = kLeafDensityMinRadius;
+  if (leaf->speciesId >= 0 &&
+      leaf->speciesId < static_cast<int>(globalSpeciesParams.size())) {
+    minRadius = glm::max(
+        kLeafDensityMinRadius,
+        globalSpeciesParams[leaf->speciesId].separationRange * 0.25f);
+  }
+  const float safeRadius = glm::max(leaf->radius, minRadius);
+  const float volume = safeRadius * safeRadius * safeRadius + 1e-3f;
+  return static_cast<float>(glm::max<std::size_t>(leaf->indices.size(), 1)) /
+         volume;
+}
+
+void refreshLeafDensityDirection(BoidUnit *leaf) {
+  if (!leaf) {
+    return;
+  }
+  const int sid = leaf->speciesId;
+  if (sid < 0 || sid >= static_cast<int>(globalSpeciesParams.size())) {
+    leaf->densityDir = glm::vec3(0.00001f);
+    leaf->densityDirStrength = 0.0f;
+    return;
+  }
+
+  const float cohesionRange = globalSpeciesParams[sid].cohesionRange;
+  const float localMin = leaf->radius * 2.0f;
+  const float localMax = leaf->radius * 4.0f;
+  const float baseRange = std::max(std::min(cohesionRange, localMax), localMin);
+  const float searchRadius = std::max(baseRange, 0.5f);
+  const float searchRadiusSq = searchRadius * searchRadius;
+
+  const float selfDensity = computeLeafDensityValue(leaf);
+  glm::vec3 gradient(0.0f);
+  float totalWeight = 0.0f;
+
+  BoidTree::instance().forEachLeafIntersectingSphere(
+      leaf->center, searchRadius, [&](const SpatialLeaf &leafInfo) {
+        const BoidUnit *other = leafInfo.node;
+        if (!other || other == leaf) {
+          return;
+        }
+        if (other->speciesId != sid) {
+          return;
+        }
+
+        glm::vec3 delta = other->center - leaf->center;
+        float distSq = glm::length2(delta);
+        if (distSq < 1e-6f || distSq > searchRadiusSq) {
+          return;
+        }
+
+        float dist = glm::sqrt(distSq);
+        if (dist <= 1e-6f) {
+          return;
+        }
+
+        glm::vec3 dir = delta * (1.0f / dist);
+        float otherDensity = computeLeafDensityValue(other);
+        float densityDelta = glm::max(otherDensity - selfDensity, 0.0f);
+        if (densityDelta <= 1e-5f) {
+          return;
+        }
+
+        float kernel = 1.0f / (1.0f + dist);
+        float weight = densityDelta * kernel;
+        gradient += dir * weight;
+        totalWeight += weight;
+      });
+
+  if (totalWeight > 0.0f) {
+    float gradLen2 = glm::length2(gradient);
+    if (gradLen2 > 1e-6f) {
+      glm::vec3 newDir = gradient * (1.0f / glm::sqrt(gradLen2));
+      if (leaf->densityDirStrength > 0.0f) {
+        glm::vec3 blended = glm::mix(leaf->densityDir, newDir, 0.35f);
+        float blendLen2 = glm::length2(blended);
+        if (blendLen2 > 1e-6f) {
+          blended *= 1.0f / glm::sqrt(blendLen2);
+          newDir = blended;
+        }
+      }
+      leaf->densityDir = newDir;
+      leaf->densityDirStrength = glm::clamp(totalWeight, 0.05f, 2.0f);
+      return;
+    }
+  }
+
+  leaf->densityDir = glm::vec3(0.0f);
+  leaf->densityDirStrength = 0.0f;
+}
+
+} // namespace
 
 bool BoidUnit::isBoidUnit() const { return children.empty(); }
 
@@ -150,52 +256,53 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
         glm::vec3 chaseAcc = desiredVel - velocity;
         acceleration += chaseAcc;
       }
-  } else if (unit->buf->stresses[gIdx] > 0.1f ||
-         glm::length(unit->buf->predatorInfluences[gIdx]) > 0.001f) {
-    // -----------------------------------------------
-    // 逃避挙動: 捕食者からの影響を逃走加速度に変換
-    // -----------------------------------------------
-    float currentStress = unit->buf->stresses[gIdx];
-    glm::vec3 storedInfluence = unit->buf->predatorInfluences[gIdx];
-    float predatorInfluenceMagnitude = glm::length(storedInfluence);
+    } else if (unit->buf->stresses[gIdx] > 0.1f ||
+               glm::length(unit->buf->predatorInfluences[gIdx]) > 0.001f) {
+      // -----------------------------------------------
+      // 逃避挙動: 捕食者からの影響を逃走加速度に変換
+      // -----------------------------------------------
+      float currentStress = unit->buf->stresses[gIdx];
+      glm::vec3 storedInfluence = unit->buf->predatorInfluences[gIdx];
+      float predatorInfluenceMagnitude = glm::length(storedInfluence);
 
-    // threatState は applyPredatorSweep で蓄積した恐怖レベル (0-1)。
-    float threatState = unit->buf->predatorThreats[gIdx];
-    // 直接の影響が強い場合は threatState を補強（0-1 に正規化して混ぜる）。
-    float influenceThreat = glm::clamp(predatorInfluenceMagnitude * 0.15f, 0.0f, 1.0f);
-    threatState = glm::max(threatState, influenceThreat);
-    float threatLevel = glm::clamp(threatState, 0.0f, 1.0f);
+      // threatState は applyPredatorSweep で蓄積した恐怖レベル (0-1)。
+      float threatState = unit->buf->predatorThreats[gIdx];
+      // 直接の影響が強い場合は threatState を補強（0-1 に正規化して混ぜる）。
+      float influenceThreat =
+          glm::clamp(predatorInfluenceMagnitude * 0.15f, 0.0f, 1.0f);
+      threatState = glm::max(threatState, influenceThreat);
+      float threatLevel = glm::clamp(threatState, 0.0f, 1.0f);
 
-    // 逃避方向のブレンド比率を計算（最大 maxEscapeWeight まで）
-    float escapeWeight = glm::clamp(
-      gSimulationTuning.threatGain * threatLevel, 0.0f,
-      gSimulationTuning.maxEscapeWeight);
+      // 逃避方向のブレンド比率を計算（最大 maxEscapeWeight まで）
+      float escapeWeight = glm::clamp(
+          gSimulationTuning.threatGain * threatLevel, 0.0f,
+          gSimulationTuning.maxEscapeWeight);
 
-    // 逃避加速度を計算（捕食者から遠ざかる方向）
-    glm::vec3 escapeForce = storedInfluence;
-    if (predatorInfluenceMagnitude > 0.001f) {
-    glm::vec3 fleeDir = storedInfluence / predatorInfluenceMagnitude;
-    float fleeStrength = gSimulationTuning.baseEscapeStrength +
-               gSimulationTuning.escapeStrengthPerThreat *
-                 threatLevel;
-    escapeForce = fleeDir * fleeStrength;
+      // 逃避加速度を計算（捕食者から遠ざかる方向）
+      glm::vec3 escapeForce = storedInfluence;
+      if (predatorInfluenceMagnitude > 0.001f) {
+        glm::vec3 fleeDir = storedInfluence / predatorInfluenceMagnitude;
+        float fleeStrength = gSimulationTuning.baseEscapeStrength +
+                             gSimulationTuning.escapeStrengthPerThreat *
+                                 threatLevel;
+        escapeForce = fleeDir * fleeStrength;
+      }
+
+      // 通常加速度と逃避加速度を escapeWeight でブレンド
+      acceleration = acceleration * (1.0f - escapeWeight) +
+                     escapeForce * escapeWeight;
+
+      // threat レベルを時間経過で減衰
+      float decayedThreat =
+          glm::max(threatState - gSimulationTuning.threatDecay * dt, 0.0f);
+      unit->buf->predatorThreats[gIdx] = decayedThreat;
+    } else {
+      // ストレスも影響もない場合は threat を徐々に減衰
+      unit->buf->predatorThreats[gIdx] =
+          glm::max(unit->buf->predatorThreats[gIdx] -
+                       gSimulationTuning.threatDecay * dt,
+                   0.0f);
     }
-
-    // 通常加速度と逃避加速度を escapeWeight でブレンド
-    acceleration =
-      acceleration * (1.0f - escapeWeight) + escapeForce * escapeWeight;
-
-    // threat レベルを時間経過で減衰
-    float decayedThreat =
-      glm::max(threatState - gSimulationTuning.threatDecay * dt, 0.0f);
-    unit->buf->predatorThreats[gIdx] = decayedThreat;
-  } else {
-    // ストレスも影響もない場合は threat を徐々に減衰
-    unit->buf->predatorThreats[gIdx] =
-      glm::max(unit->buf->predatorThreats[gIdx] -
-             gSimulationTuning.threatDecay * dt,
-           0.0f);
-  }
     float currentStress = unit->buf->stresses[gIdx];
     float stressFactor = 1.0f;
 
@@ -670,6 +777,31 @@ void BoidUnit::computeBoidInteraction(float dt) {
   // 空間インデックス向けの境界情報を毎フレーム更新
   computeBoundingSphere();
 
+  const int globalFrame = BoidTree::instance().frameCount;
+  constexpr int LEAF_DENSITY_STRIDE = 6;
+  // Lazy: このフレームで必要になった時だけ更新・キャッシュ確定
+  glm::vec3 cachedLeafDensityDir = densityDir;
+  float cachedLeafDensityStrength = densityDirStrength;
+  bool leafDensityReady = false;
+
+  auto ensureLeafDensity = [&]() {
+    if (leafDensityReady) {
+      return;
+    }
+
+    const bool densityExpired =
+        (globalFrame - densityDirFrame) > LEAF_DENSITY_STRIDE * 4;
+
+    if (((globalFrame + id) % LEAF_DENSITY_STRIDE) == 0 || densityExpired) {
+      refreshLeafDensityDirection(this);
+      densityDirFrame = globalFrame;
+    }
+
+    cachedLeafDensityDir = densityDir;
+    cachedLeafDensityStrength = densityDirStrength;
+    leafDensityReady = true;
+  };
+
   glm::vec3 separation;
   glm::vec3 alignment;
   glm::vec3 cohesion;
@@ -691,7 +823,9 @@ void BoidUnit::computeBoidInteraction(float dt) {
   // 非ゼロ判定用イプシロン
   constexpr float EPS =
       1e-8f; // 候補距離を入れてソート/部分ソートするための領域
-  std::vector<std::pair<float, int>> candidates;
+  // thread_local で確保コストを抑えつつ再利用。上限超過時は後段で縮小する。
+  static thread_local std::vector<std::pair<float, int>> candidates;
+  static thread_local std::vector<int> predatorTargetCandidates;
   if (candidates.capacity() < indices.size()) {
     candidates.reserve(indices.size());
   }
@@ -713,6 +847,9 @@ void BoidUnit::computeBoidInteraction(float dt) {
     pos = buf->positions[gIdx];
     vel = buf->velocities[gIdx];
     const SpeciesParams &selfParams = globalSpeciesParams[sid];
+    const float baseCohesionStrength = glm::max(selfParams.cohesion, 0.0f);
+    const float returnStrength = glm::max(selfParams.densityReturnStrength, 0.0f);
+    const float densityGain = glm::clamp(returnStrength * 0.15f, 0.0f, 8.0f);
     glm::quat selfOrientation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
     if (static_cast<size_t>(gIdx) < buf->orientations.size()) {
       selfOrientation = buf->orientations[gIdx];
@@ -739,7 +876,6 @@ void BoidUnit::computeBoidInteraction(float dt) {
     candidates.clear();
     if (globalSpeciesParams[sid].isPredator) {
       // スレッドごとにバッファを共有して動的確保コストを抑える
-      static thread_local std::vector<int> predatorTargetCandidates;
       int &tgtIdx = buf->predatorTargetIndices[gIdx];
       float &tgtTime = buf->predatorTargetTimers[gIdx];
       // 毎フレームクールダウンを減算（ターゲット消失時も進行）
@@ -756,6 +892,9 @@ void BoidUnit::computeBoidInteraction(float dt) {
       if (targetInvalid) {
         tgtIdx = -1;
         predatorTargetCandidates.clear();
+        if (predatorTargetCandidates.capacity() < kPredatorCacheLimit) {
+          predatorTargetCandidates.reserve(kPredatorCacheLimit);
+        }
         const float targetSearchRadius = 100.0f; // 旧来ロジックの探索半径を維持
 
         // SpatialIndex を通じて周辺の非捕食者を直接収集
@@ -935,12 +1074,56 @@ void BoidUnit::computeBoidInteraction(float dt) {
     if (neighborCount == 0) {
       buf->isAttracting[gIdx] = 0;
       buf->attractTimers[gIdx] = 0.0f;
+
+      bool appliedLeafGuidance = false;
+      if (densityGain > 1e-4f) {
+        ensureLeafDensity();
+        if (cachedLeafDensityStrength > 1e-3f) {
+          const float dirScale =
+              glm::clamp(cachedLeafDensityStrength, 0.25f, 1.5f);
+          buf->accelerations[gIdx] += cachedLeafDensityDir *
+                                      (baseCohesionStrength * dirScale * densityGain);
+          appliedLeafGuidance = true;
+        }
+      }
+
+      if (!appliedLeafGuidance) {
+        if (sid >= 0 && sid < static_cast<int>(buf->speciesCenters.size()) &&
+            buf->speciesCounts[sid] > 0) {
+          glm::vec3 toCenter = buf->speciesCenters[sid] - pos;
+          const float centerLen2 = glm::length2(toCenter);
+          if (centerLen2 > EPS) {
+            glm::vec3 centerDir = toCenter * (1.0f / glm::sqrt(centerLen2));
+            buf->accelerations[gIdx] += centerDir * (baseCohesionStrength * 0.35f);
+            appliedLeafGuidance = true;
+          }
+        }
+      }
+
       continue;
     }
 
     const int maxNeighbors = globalSpeciesParams[sid].maxNeighbors;
     const float phi =
         maxNeighbors > 0 ? float(neighborCount) / float(maxNeighbors) : 1.0f;
+
+    // densityGain が高いほど薄い領域を早めに検出して引き戻す。
+    const float phiThreshold =
+      glm::clamp(0.45f + densityGain * 0.04f, 0.5f, 0.85f);
+    const float thinLinear = phiThreshold > 1e-5f
+                   ? glm::clamp((phiThreshold - phi) / phiThreshold, 0.0f, 1.0f)
+                   : 0.0f;
+    // 二乗で立ち上がりを強め、薄い方向への移動を明確に抑制する。
+    const float thinScale = thinLinear * thinLinear;
+    if (densityGain > 1e-4f && thinScale > 0.0f) {
+      ensureLeafDensity();
+      if (cachedLeafDensityStrength > 1e-3f) {
+        const float dirScale =
+            glm::clamp(cachedLeafDensityStrength, 0.2f, 1.2f);
+        buf->accelerations[gIdx] += cachedLeafDensityDir *
+                                    (baseCohesionStrength * thinScale * dirScale * densityGain);
+      }
+    }
 
     if (gSimulationTuning.fastAttractStrength > 0.001f) {
       if (phi < 1.0f) {
@@ -961,49 +1144,26 @@ void BoidUnit::computeBoidInteraction(float dt) {
     }
 
     // -------------------------------------------------------
-    // 5-B. Fast-start 吸引項の加算 (isAttracting==1 の間)
+    // Fast Attract 最適化: 近傍ループ結果の再利用
     // -------------------------------------------------------
-    if (buf->isAttracting[gIdx] &&
-        gSimulationTuning.fastAttractStrength > 0.001f) {
-      glm::vec3 dirSum(0.0f);
-      int dirCnt = 0;
-
-      const float reSq = globalSpeciesParams[sid].separationRange *
-                         globalSpeciesParams[sid].separationRange;
-      const float raSq = globalSpeciesParams[sid].cohesionRange *
-                         globalSpeciesParams[sid].cohesionRange;
-
-      for (size_t i = 0; i < indices.size(); ++i) {
-        if (i == index)
-          continue;
-
-        int gNeighbor = indices[i];
-        // インデックス境界確認
-        if (gNeighbor >= static_cast<int>(buf->positions.size())) {
-          continue;
-        }
-
-        glm::vec3 diff = buf->positions[gNeighbor] - pos;
-        float distSq = glm::dot(diff, diff);
-
-        if (distSq > reSq && distSq <= raSq) {
-          float dist = glm::sqrt(distSq);
-          if (dist > EPS) {
-            dirSum += diff / dist;
-            ++dirCnt;
-          }
-        }
-      }
-
-      if (dirCnt > 0) {
-        glm::vec3 avgDir = glm::normalize(dirSum / float(dirCnt));
-        float attractScale =
-          gSimulationTuning.fastAttractStrength * globalSpeciesParams[sid].lambda;
-        glm::vec3 desiredVel = avgDir * globalSpeciesParams[sid].maxSpeed;
-        glm::vec3 attractAcc = (desiredVel - vel) * attractScale;
-        buf->accelerations[gIdx] += attractAcc;
-      }
-    }
+    // 従来は別途空間クエリを実行していたが、既存の近傍走査で
+    // 得られた距離・方向情報を流用することで計算コストを大幅削減。
+    // 群れの縁にいるボイドの吸引処理を効率的に実装。
+    const bool enableFastAttract =
+        buf->isAttracting[gIdx] &&
+        gSimulationTuning.fastAttractStrength > 0.001f;
+    const float fastAttractSeparation =
+        enableFastAttract ? globalSpeciesParams[sid].separationRange : 0.0f;
+    const float fastAttractCohesion = enableFastAttract
+                                          ? glm::max(globalSpeciesParams[sid].cohesionRange,
+                                                     fastAttractSeparation + 0.1f)
+                                          : 0.0f;
+    const float fastAttractSeparationSq =
+        fastAttractSeparation * fastAttractSeparation;
+    const float fastAttractCohesionSq =
+        fastAttractCohesion * fastAttractCohesion;
+    glm::vec3 fastAttractDirSum(0.00001f);  // 吸引方向の累積ベクトル
+    int fastAttractDirCount = 0;        // 吸引対象カウント
 
     if (neighborCount > 0) {
       // 近傍のストレスを集約し、逃走の波を伝搬させる。
@@ -1030,6 +1190,15 @@ void BoidUnit::computeBoidInteraction(float dt) {
         int gNeighbor = indices[i];
         glm::vec3 diff = buf->positions[gNeighbor] - pos;
         float distSq = glm::dot(diff, diff);
+        if (enableFastAttract && distSq > fastAttractSeparationSq &&
+            distSq < fastAttractCohesionSq && distSq > EPS) {
+          // Fast attract 方向データ収集: 追加クエリ不要の効率実装
+          // 分離範囲外かつ凝集範囲内の近傍から吸引方向を算出し、
+          // メインの群集力学計算と並行して処理することで性能向上を実現。
+          float invDist = glm::inversesqrt(distSq);
+          fastAttractDirSum += diff * invDist;
+          fastAttractDirCount += 1;
+        }
         int neighborSid = buf->speciesIds[gNeighbor];
         const SpeciesParams &neighborParams = globalSpeciesParams[neighborSid];
 
@@ -1147,6 +1316,36 @@ void BoidUnit::computeBoidInteraction(float dt) {
 
         sumAlign += buf->velocities[gNeighbor];
       }
+
+      // -------------------------------------------------------
+      // 葉ユニット重心による局所的な結合補助
+      // -------------------------------------------------------
+      // 近傍メモリの制限で neighborCount が少なくても、同じ葉に属する
+      // 個体の中心方向を弱く加算し、原点ではなく局所クラスタへ戻す。
+      const int leafPopulation = static_cast<int>(indices.size());
+      if (leafPopulation > 1) {
+        float scatterFactor = glm::clamp(1.0f - phi, 0.0f, 1.0f);
+        if (scatterFactor > 1e-4f) {
+          glm::vec3 sumAll = center * static_cast<float>(leafPopulation);
+          glm::vec3 avgOthers =
+              (sumAll - pos) / static_cast<float>(leafPopulation - 1);
+          glm::vec3 toLeafCenter = avgOthers - pos;
+          float centerVecLen2 = glm::length2(toLeafCenter);
+          if (centerVecLen2 > EPS) {
+            float normalizedDist = 0.0f;
+            if (radius > 1e-4f) {
+              normalizedDist = glm::clamp(
+                  glm::sqrt(centerVecLen2) / glm::max(radius, 1e-3f), 0.0f,
+                  1.5f);
+            }
+            float centerWeight =
+                scatterFactor * glm::mix(0.08f, 0.35f, normalizedDist);
+            sumCohDir += toLeafCenter * centerWeight;
+            wCohSum += centerWeight;
+          }
+        }
+      }
+
       float invN = 1.0f / float(neighborCount);
       if (stressWeightSum > 0.0f) {
         float propagatedStress = stressGainSum / stressWeightSum;
@@ -1177,8 +1376,10 @@ void BoidUnit::computeBoidInteraction(float dt) {
         glm::vec3 cohDir = sumCohDir / wCohSum; // 重み付き平均方向
         float cohLen2 = glm::length2(cohDir);
         if (cohLen2 > EPS) {
+          const float edgeFactor =
+              1.0f + glm::clamp(1.0f - phi, 0.0f, 1.0f); // 外縁ほど強化
           totalCohesion = (cohDir * (1.0f / glm::sqrt(cohLen2))) *
-                          globalSpeciesParams[sid].cohesion;
+                          (globalSpeciesParams[sid].cohesion * edgeFactor);
         }
       }
 
@@ -1194,6 +1395,58 @@ void BoidUnit::computeBoidInteraction(float dt) {
         totalAlignment = (aliDir * (1.0f / glm::sqrt(aliLen2))) *
                          (globalSpeciesParams[sid].alignment *
                           alignmentThreatFactor);
+      }
+
+      // -------------------------------------------------------
+      // 薄い領域からの引き戻しと進行方向の抑制
+      // -------------------------------------------------------
+      if (densityGain > 1e-4f && thinScale > 0.0f) {
+        ensureLeafDensity();
+        if (cachedLeafDensityStrength > 1e-3f) {
+          const float thinWeight = thinScale * densityGain * (1.0f - threatLevel);
+          if (thinWeight > 1e-4f) {
+            const float denseDirScale =
+                glm::clamp(cachedLeafDensityStrength, 0.3f, 1.5f);
+            totalCohesion += cachedLeafDensityDir *
+                             (baseCohesionStrength * thinWeight *
+                              denseDirScale * 0.6f);
+            totalAlignment += cachedLeafDensityDir *
+                              (globalSpeciesParams[sid].alignment *
+                               thinWeight * 0.35f);
+
+            float velLen2 = glm::length2(vel);
+            if (velLen2 > EPS) {
+              glm::vec3 forwardDir = vel * (1.0f / glm::sqrt(velLen2));
+              float denseDot = glm::dot(forwardDir, cachedLeafDensityDir);
+              if (denseDot < 0.0f) {
+                float resist = (-denseDot) * thinWeight * denseDirScale;
+                buf->accelerations[gIdx] +=
+                    cachedLeafDensityDir * (baseCohesionStrength * resist);
+              }
+            }
+          }
+        }
+      }
+
+      // -------------------------------------------------------
+      // Fast Attract 加速度適用: 収集データからの最終計算
+      // -------------------------------------------------------
+      if (enableFastAttract && fastAttractDirCount > 0) {
+        // 近傍走査で収集した方向ベクトルから平均方向を算出し、
+        // 群れ復帰のための吸引加速度として適用。
+        // 既存データ活用により追加の空間探索コストを回避。
+        glm::vec3 avgDir = fastAttractDirSum / float(fastAttractDirCount);
+        float avgLen2 = glm::length2(avgDir);
+        if (avgLen2 > EPS) {
+          avgDir *= 1.0f / glm::sqrt(avgLen2);
+          const float attractScale =
+              gSimulationTuning.fastAttractStrength *
+              globalSpeciesParams[sid].lambda;
+          const glm::vec3 desiredVel =
+              avgDir * globalSpeciesParams[sid].maxSpeed;
+          const glm::vec3 attractAcc = (desiredVel - vel) * attractScale;
+          buf->accelerations[gIdx] += attractAcc;
+        }
       }
 
       // --- 回転トルクによる向き補正（alignment方向へ向ける） ---
@@ -1238,24 +1491,19 @@ void BoidUnit::computeBoidInteraction(float dt) {
       buf->accelerations[gIdx] +=
           totalSeparation + totalAlignment + totalCohesion;
 
-      // --- 動的中心への吸引（回転種のみ有効） ---
-      if (globalSpeciesParams[sid].centerAttractStrength > EPS) {
-        // 種族全体の中心座標を使用（フレーム開始時にキャッシュ済み）
-        if (sid >= 0 && sid < static_cast<int>(buf->speciesCenters.size()) &&
-            buf->speciesCounts[sid] > 0) {
-          glm::vec3 dynamicCenter = buf->speciesCenters[sid];
-          glm::vec3 toCenter = dynamicCenter - pos;
-          float centerDist2 = glm::length2(toCenter);
-          if (centerDist2 > EPS) {
-            // 中心への吸引力を加算（距離に比例、暴走防止のため正規化）
-            float centerDist = glm::sqrt(centerDist2);
-            glm::vec3 centerDir = toCenter / centerDist;
-            buf->accelerations[gIdx] += centerDir *
-                                        globalSpeciesParams[sid].centerAttractStrength;
-          }
-        }
-      }
     }
+  }
+
+  // 大型クラスタ計算後に thread_local バッファの肥大化を抑制
+  if (candidates.capacity() > kCandidateCacheLimit) {
+    candidates.clear();
+    std::vector<std::pair<float, int>>().swap(candidates);
+    candidates.reserve(kCandidateCacheLimit);
+  }
+  if (predatorTargetCandidates.capacity() > kPredatorCacheLimit) {
+    predatorTargetCandidates.clear();
+    std::vector<int>().swap(predatorTargetCandidates);
+    predatorTargetCandidates.reserve(kPredatorCacheLimit);
   }
 }
 
@@ -1276,7 +1524,7 @@ bool BoidUnit::needsSplit(float splitRadius, float directionVarThresh,
 
   // 方向のバラつき判定
   if (indices.size() > 1) {
-    glm::vec3 avg = glm::vec3(0.0f);
+    glm::vec3 avg = glm::vec3(0.00001f);
     for (int gIdx : indices)
       avg += glm::normalize(buf->velocities[gIdx]);
     avg /= static_cast<float>(indices.size());
@@ -1424,7 +1672,7 @@ std::vector<BoidUnit *> BoidUnit::splitByClustering(int numClusters) {
     }
 
     // 中心を再計算
-    std::vector<glm::vec3> newCenters(numClusters, glm::vec3(0.0f));
+    std::vector<glm::vec3> newCenters(numClusters, glm::vec3(0.00001f));
     std::vector<int> counts(numClusters, 0);
     for (size_t i = 0; i < indices.size(); ++i) {
       int gI = indices[i];

@@ -315,21 +315,21 @@ const DEFAULT_SETTINGS = [
   {
     species: "Boids", // 種族名
     count: mobileBoidCount, // 群れの数（スマホなら6000、PCなら10000）
-    cohesion: 38, // 凝集
-    cohesionRange: 30, // 凝集範囲
-    separation: 8, // 分離
-    separationRange: 0.6, // 分離範囲
-    alignment: 19, // 整列
-    alignmentRange: 6, // 整列範囲
-    maxSpeed: 0.26, // 最大速度
-    maxTurnAngle: 0.25, // 最大旋回角
+    cohesion: 24.1, // 凝集
+    cohesionRange: 5, // 凝集範囲
+    separation: 3.4, // 分離
+    separationRange: 0.4, // 分離範囲
+    alignment: 17.05, // 整列
+    alignmentRange: 2, // 整列範囲
+    maxSpeed: 0.33, // 最大速度
+    maxTurnAngle: 0.233, // 最大旋回角
     maxNeighbors: 6, // 最大近傍数
-    horizontalTorque: 0.019, // 水平化トルク
-    torqueStrength: 10, // 回転トルク強度
-    lambda: 0.62, // 速度調整係数
-    tau: 1.0, // 記憶時間スケール
+    horizontalTorque: 0.02, // 水平化トルク
+    torqueStrength: 4.487, // 回転トルク強度
+    lambda: 0.801, // 速度調整係数
+    tau: 0.1, // 記憶時間スケール
     predatorAlertRadius: 1.0, // 捕食者を察知する距離
-    centerAttractStrength: 0.5, // 群れの動的中心への吸引強度（回転形成用）
+    densityReturnStrength: 0.0, // 疎密に応じて群れへ戻す調整用強度
   },
   {
     species: "Predator",

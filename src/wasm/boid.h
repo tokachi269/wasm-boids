@@ -1,5 +1,4 @@
 #pragma once
-#include <unordered_map>
 #include <glm/glm.hpp>
 
 struct Boid {
@@ -9,9 +8,6 @@ struct Boid {
   int id = 0;
   float stress = 0.0f;
   int speciesId = 0;
-
-  // 近傍BoidのIDとその経過時間（τ管理）
-  std::unordered_map<int, float> cohesionMemory;
 
   bool attractionEnabled = false;
   float attractionStartTime = -1.0f;

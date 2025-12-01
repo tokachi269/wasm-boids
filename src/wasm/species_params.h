@@ -26,5 +26,5 @@ struct SpeciesParams {
   float bodyRadius = 0.035f;    // 直径0.07mの半径
   float predatorAlertRadius = 1.0f; // 捕食者を察知して逃避を始める距離（種ごとに設定可能）
   bool isPredator = false; // この種が捕食者かどうか
-  float centerAttractStrength = 0.0f; // 群れの動的中心への吸引強度（回転種のみ>0）
+  float densityReturnStrength = 0.0f; // 群れの疎密勾配に沿って群れへ戻る強度
 };

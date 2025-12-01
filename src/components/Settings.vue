@@ -197,25 +197,25 @@
       />
     </div>
     <div class="setting-row">
-      <label>中心吸引強度<br>(Center Attract):</label>
-      <input type="range" v-model.number="settings.centerAttractStrength" min="0" max="3" step="0.05" />
+      <label>密度復帰強度<br>(Density Return):</label>
+      <input type="range" v-model.number="settings.densityReturnStrength" min="0" max="80" step="0.5" />
       <span 
-        v-if="!editingCenterAttractStrength" 
+        v-if="!editingDensityReturnStrength" 
         class="editable-value" 
-        @click="startEditCenterAttractStrength"
+        @click="startEditDensityReturnStrength"
         title="クリックして編集"
-      >{{ settings.centerAttractStrength }}</span>
+      >{{ settings.densityReturnStrength }}</span>
       <input 
-        v-if="editingCenterAttractStrength"
+        v-if="editingDensityReturnStrength"
         type="number" 
-        v-model.number="settings.centerAttractStrength" 
+        v-model.number="settings.densityReturnStrength" 
         min="0" 
-        max="3"
-        step="0.05"
+        max="120"
+        step="0.5"
         class="value-input"
-        @blur="stopEditCenterAttractStrength"
-        @keyup.enter="stopEditCenterAttractStrength"
-        ref="centerAttractStrengthInput"
+        @blur="stopEditDensityReturnStrength"
+        @keyup.enter="stopEditDensityReturnStrength"
+        ref="densityReturnStrengthInput"
       />
     </div>
     <div class="setting-row">
@@ -415,7 +415,7 @@ const editingTorqueStrength = ref(false);
 const editingLambda = ref(false);
 const editingTau = ref(false);
 const editingPredatorAlertRadius = ref(false);
-const editingCenterAttractStrength = ref(false);
+const editingDensityReturnStrength = ref(false);
 
 // 入力フィールドのref
 const countInput = ref(null);
@@ -433,7 +433,7 @@ const torqueStrengthInput = ref(null);
 const lambdaInput = ref(null);
 const tauInput = ref(null);
 const predatorAlertRadiusInput = ref(null);
-const centerAttractStrengthInput = ref(null);
+const densityReturnStrengthInput = ref(null);
 
 const countDraft = ref(settings.count ?? 0);
 
@@ -545,12 +545,12 @@ async function startEditPredatorAlertRadius() {
   }
 }
 
-async function startEditCenterAttractStrength() {
-  editingCenterAttractStrength.value = true;
+async function startEditDensityReturnStrength() {
+  editingDensityReturnStrength.value = true;
   await nextTick();
-  if (centerAttractStrengthInput.value) {
-    centerAttractStrengthInput.value.focus();
-    centerAttractStrengthInput.value.select();
+  if (densityReturnStrengthInput.value) {
+    densityReturnStrengthInput.value.focus();
+    densityReturnStrengthInput.value.select();
   }
 }
 
@@ -645,8 +645,8 @@ function stopEditPredatorAlertRadius() {
   editingPredatorAlertRadius.value = false;
 }
 
-function stopEditCenterAttractStrength() {
-  editingCenterAttractStrength.value = false;
+function stopEditDensityReturnStrength() {
+  editingDensityReturnStrength.value = false;
 }
 
 function stopEditMaxSpeed() {

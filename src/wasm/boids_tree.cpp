@@ -1,4 +1,4 @@
-#include <string>
+﻿#include <string>
 #define GLM_ENABLE_EXPERIMENTAL
 #include "boids_tree.h"
 #include "platform_utils.h"
@@ -672,10 +672,6 @@ void BoidTree::setFlockSize(int newSize, float posRange, float velRange) {
     buf.boidCohesionMemories.resize(newSize);
     buf.boidActiveNeighbors.resize(newSize);
 
-    // cohesionMemories は erase で縮小
-    for (int i = newSize; i < current; ++i) {
-      buf.cohesionMemories.erase(i);
-    }
   }
   // 個体を増やす
   else if (newSize > current) {
@@ -703,7 +699,6 @@ void BoidTree::setFlockSize(int newSize, float posRange, float velRange) {
       buf.speciesIds.push_back(0);
       buf.orientations.push_back(glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
       buf.orientationsWrite.push_back(glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
-      buf.cohesionMemories[i] = std::unordered_map<int, float>();
       buf.predatorTargetIndices.push_back(-1);
       buf.predatorTargetTimers.push_back(0.0f);
     }

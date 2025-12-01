@@ -53,23 +53,24 @@ std::vector<SpeciesParams> NativeSimulation::getDefaultSettings() const {
   boids.species = "Boids";
   boids.count = boidCount;
   boids.speciesId = 0;
-  boids.cohesion = 30.0f;
-  boids.separation = 8.0f;
-  boids.alignment = 17.0f;
+  boids.cohesion = 35.0f;
+  boids.separation = 0.5f;
+  boids.alignment = 20.0f;
   boids.maxSpeed = 0.26f;
   boids.minSpeed = 0.0f;
   boids.maxTurnAngle = 0.25f;
   boids.separationRange = 0.6f;
-  boids.alignmentRange = 6.0f;
-  boids.cohesionRange = 30.0f;
-  boids.maxNeighbors = 6;
-  boids.lambda = 0.62f;
-  boids.tau = 1.5f;
-  boids.horizontalTorque = 0.019f;
+  boids.alignmentRange = 7.0f;
+  boids.cohesionRange = 11.0f;
+  boids.maxNeighbors = 4;
+  boids.lambda = 1.0f;
+  boids.tau = 1.0f;
+  boids.horizontalTorque = 0.02f;
   boids.torqueStrength = 10.0f;
   boids.fieldOfViewDeg = 180.0f;
   boids.predatorAlertRadius = 1.0f;
   boids.isPredator = false;
+  boids.densityReturnStrength = 50.0f;
   
   defaults.push_back(boids);
 

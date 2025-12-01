@@ -3,26 +3,26 @@ import { reactive, computed, toRaw } from 'vue';
 const STORAGE_KEY = 'boids_settings';
 const DEFAULT_SPECIES_FALLBACK = {
   species: 'Species',
-  count: 0,
-  cohesion: 20,
-  cohesionRange: 30,
-  separation: 5,
-  separationRange: 1,
-  alignment: 10,
-  alignmentRange: 6,
-  maxSpeed: 0.3,
+  count: 10000,
+  cohesion: 24.1,
+  cohesionRange: 5,
+  separation: 3.4,
+  separationRange: 0.4,
+  alignment: 17.05,
+  alignmentRange: 2,
+  maxSpeed: 0.33,
   minSpeed: 0,
-  maxTurnAngle: 0.2,
+  maxTurnAngle: 0.233,
   maxNeighbors: 6,
   horizontalTorque: 0.02,
-  torqueStrength: 5,
-  lambda: 0.5,
-  tau: 1.5,
+  torqueStrength: 4.487,
+  lambda: 0.801,
+  tau: 0.1,
   velocityEpsilon: 0.0001,
   predatorAlertRadius: 1,
   isPredator: false,
   speciesId: 0,
-  centerAttractStrength: 0.0,
+  densityReturnStrength: 0.0,
 };
 
 /**
@@ -208,7 +208,10 @@ function sanitizeSpeciesEntry(entry = {}, fallback = DEFAULT_SPECIES_FALLBACK) {
   result.tau = toFinite(merged.tau, base.tau ?? 0);
   result.velocityEpsilon = Math.max(0, toFinite(merged.velocityEpsilon, base.velocityEpsilon ?? 0.0001));
   result.predatorAlertRadius = Math.max(0, toFinite(merged.predatorAlertRadius, base.predatorAlertRadius ?? 1));
-  result.centerAttractStrength = Math.max(0, toFinite(merged.centerAttractStrength, base.centerAttractStrength ?? 0));
+  const baseReturnStrength = base.densityReturnStrength ?? base.centerAttractStrength ?? 0;
+  const mergedReturnStrength =
+    merged.densityReturnStrength ?? merged.centerAttractStrength ?? baseReturnStrength;
+  result.densityReturnStrength = Math.max(0, toFinite(mergedReturnStrength, baseReturnStrength));
 
   const speciesName = typeof merged.species === 'string' ? merged.species.trim() : '';
   result.species = speciesName || base.species || DEFAULT_SPECIES_FALLBACK.species;

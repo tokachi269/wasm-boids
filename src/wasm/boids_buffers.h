@@ -1,9 +1,10 @@
+#pragma once
+
 #include "boid.h"
 #include <bitset>
 #include <boost/align/aligned_allocator.hpp>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
-#include <unordered_map>
 #include <vector>
 
 template <typename T> using A16 = boost::alignment::aligned_allocator<T, 16>;
@@ -30,11 +31,12 @@ struct SoABuffers {
   std::vector<float>
       predatorTargetTimers; // 捕食者の捕食対象ターゲット残時間 (秒)
 
-  std::unordered_map<int, std::unordered_map<int, float>> cohesionMemories;
   std::vector<float> predatorThreats; // 捕食圧の蓄積値（0-1）
 
   // 各BoidのcohesionMemoriesとactiveNeighbors（SOA形式）
-  std::vector<std::vector<float>>
+    // WebAssembly では unordered_map の破棄が深い再帰になりがちなので、近傍キャッシュは
+    // フラットな vector で管理してスタック消費を抑える。
+    std::vector<std::vector<float>>
       boidCohesionMemories;                         // dt累積（-1.0fで未使用）
   std::vector<std::bitset<16>> boidActiveNeighbors; // 使用中slotのインデックス
 
