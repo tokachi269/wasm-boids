@@ -27,11 +27,27 @@ if (typeof window === 'undefined') {
             return;
         }
 
+        // GitHub Pages 等の環境では、固定ファイル名の JS/WASM が強くキャッシュされ、
+        // 「wasm_boids.js は新しいが wasm_boids.wasm が古い」という不整合が起きることがあります。
+        // その場合 Emscripten が `Cannot call unknown function ...` で abort するため、
+        // この2つだけは常にリロードしてキャッシュ不整合を避けます。
+        let isWasmBoidsRuntimeAsset = false;
+        try {
+            const url = new URL(r.url);
+            const pathname = url.pathname;
+            isWasmBoidsRuntimeAsset = pathname.endsWith('/static/js/wasm_boids.js') || pathname.endsWith('/static/js/wasm_boids.wasm');
+        } catch (_) {
+            isWasmBoidsRuntimeAsset = false;
+        }
+
         const request = (coepCredentialless && r.mode === "no-cors")
             ? new Request(r, {
                 credentials: "omit",
+                cache: isWasmBoidsRuntimeAsset ? "reload" : r.cache,
             })
-            : r;
+            : (isWasmBoidsRuntimeAsset
+                ? new Request(r, { cache: "reload" })
+                : r);
         event.respondWith(
             fetch(request)
                 .then((response) => {
@@ -47,6 +63,13 @@ if (typeof window === 'undefined') {
                         newHeaders.set("Cross-Origin-Resource-Policy", "cross-origin");
                     }
                     newHeaders.set("Cross-Origin-Opener-Policy", "same-origin");
+
+                    // キャッシュを抑制して、JS/WASM の不整合を避ける。
+                    if (isWasmBoidsRuntimeAsset) {
+                        newHeaders.set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+                        newHeaders.set("Pragma", "no-cache");
+                        newHeaders.set("Expires", "0");
+                    }
 
                     return new Response(response.body, {
                         status: response.status,
