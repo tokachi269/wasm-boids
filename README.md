@@ -1,213 +1,311 @@
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/tokachi269/wasm-boids)
+# wasm-boids
 
 [Demo](https://tokachi269.github.io/wasm-boids/)
 
-<img width="1471" height="1193" alt="Image" src="https://github.com/user-attachments/assets/7d597a84-e659-4b84-bad3-bd4237db115f" />
-
-# wasm-boids 🐟️  
-
-本プロジェクトは、**階層的Boidアルゴリズム（Hierarchical Boid Algorithm）**と、**魚群の回転運動に関する生物学的モデル**を組み合わせたリアルタイムシミュレーションです。  
-C++とThree.jsをWebAssembly (WASM) を介して連携し、大規模な魚群の群れ行動（整列・分離・凝集・回避・回転）をブラウザ上で再現します。
+本リポジトリは、ブラウザ上で動作する大規模Boids（群れ行動）シミュレーションです。
+計算は C++（WebAssembly）で行い、描画は Three.js（InstancedMesh）に寄せています。
 
 ---
 
-## プロジェクトの目的
+## 構成
 
-- **生物的な振る舞いを尊重**  
-  魚の実際の「視界」「回転トルク」「近傍記憶」などの局所ルールを使用して、群れ行動を構築します。
+### フロントエンド（Vue + Three.js）
 
-- **大規模シミュレーション対応**  
-  Boidを階層的に管理する木構造（BoidTree）を使用し、数千〜数万体規模の処理を可能にします。C++で計算し、Three.jsで描画に集中します。
+- `src/App.vue`: UI/レンダリング/デバッグ表示の統合
+- `src/components/Settings.vue`: 種族パラメータの編集UI
+- `src/rendering/*`: InstancedMesh・フォグ・粒子
+- `src/simulation/WasmtimeBridge.js`: WASMバッファのビュー取得と step 呼び出し
 
-- **回転群れの発生を確認**  
-  「回転トルク」「視界の非対称性」「密度スクリーニング」を取り入れ、群れがどのように回転構造を形成するかを確認します。
 
----
+### シミュレーション（C++ / WASM）
 
-## 主な特徴
-
-- **階層的Boid木構造 (BoidTree)**  
-  Boidを空間的に分割し、葉ノードでは詳細な相互作用、中間ノードでは代表値を使用して処理を最適化します。これにより、パフォーマンスを維持しつつ大量のBoidを扱えます。
-
-- **回転ルールの適用**  
-  魚群で観察される回転トルクや視界制限をBoid単位で適用し、非対称な配置から自然な回転構造が現れるようにします。魚種ごとに異なる回転パターンを設定可能です。
-
-- **WebAssembly × Three.jsでの描画**  
-  C++側で位置・速度・加速度を計算し、WebAssemblyを通じて効率的にブラウザに渡します。Three.jsの`InstancedMesh`を使用して、数千体の魚を描画します。
-
-- **パラメータのリアルタイム調整**  
-  GUIスライダーで分離・整列・凝集・視界角度などのパラメータを調整可能。変更は即座にWASMに反映されます。
+- `src/wasm/boids_tree.cpp`: 空間階層（BoidTree）、種族エンベロープ、クラスター推定
+- `src/wasm/boid_unit.cpp`: 個体更新（近傍相互作用、捕食者、旋回制限など）
+- `src/wasm/species_params.h`: 種族パラメータ
+- `src/wasm/simulation_tuning.*`: システム調整値（逃避など）
 
 ---
 
-## ディレクトリ構成
+## データ設計（性能前提）
+
+### SoA（Structure of Arrays）
+
+位置・速度・姿勢・speciesId などは配列として保持し、キャッシュ効率とバッファ転送の単純さを優先します。
+
+### 読み/書きバッファの分離
+
+フレーム内で「読んだ値を即座に上書きしない」ために read/write を分け、ステップ完了後に swap します。
+これにより、近傍参照がフレーム途中で破綻しにくくなります。
+
+---
+
+## アルゴリズム概要（深掘り）
+
+この章は、主に `src/wasm/boids_tree.cpp` と `src/wasm/boid_unit.cpp` の現行実装に合わせて説明します。
+Boidsの基本3規則（分離・整列・凝集）自体の説明は最小限にし、「大規模化のために何をどう近似/分割しているか」を中心に書きます。
+
+### 1) 空間階層（BoidTree / BoidUnit）
+
+Boids を直接全探索すると $O(N^2)$ になるため、個体群を「空間的な塊（unit）」として扱い、木構造で管理します。
+
+- 木は再帰的に分割して構築します。
+- 葉（BoidUnit）はインデックス集合を持ち、葉の中で詳細計算を行います。
+- 内部ノードは「子の包絡球（中心/半径）」などの代表量を持ち、探索や近似のために使います。
+
+更新中は、木を辿りながら候補を集め、葉での詳細計算に落とし込みます。
+
+#### BoidUnitが持つ代表量（近似の核）
+
+葉/内部ノード（どちらも `BoidUnit`）は、少なくとも次の代表量を持ちます。
+
+- `center` / `radius`: バウンディング球。空間探索の枝刈りに使います。
+- `averageVelocity`: 速度の代表値。遠方ユニットの影響の粗い評価に使えます。
+- `indices`: 葉の場合は「含まれる個体インデックス配列」。ここをSoAバッファへ引き当てて詳細計算します。
+
+ポイントは「空間クエリの単位」を個体ではなくユニットにすることで、探索回数とメモリアクセスの局所性を改善することです。
+
+### 2) フレームパイプライン（概略）
+
+概ね次の処理順で 1 ステップを進めます。
+
+1. `dt` のサニタイズ（NaN/Inf などの伝播防止）
+2. 個体更新（`updateRecursive`）
+   - 近傍相互作用（分離・整列・凝集）
+   - 捕食者の影響、ストレス/逃避などの補助項
+   - 旋回制限、水平化トルク、速度クランプ
+   - 書き込みバッファへ反映
+3. 読み/書きバッファの swap
+4. デバッグ用集計（間引き）
+   - 種族エンベロープ（中心/半径/個体数）
+   - 小クラスター推定、さらに「群れクラスター」推定
+5. 木構造の再構築/調整
+   - 定期的に `build()` で再構築
+   - さらに葉キャッシュを使って、分割/結合を少量ずつ進める
+
+処理の対応関係が追えるように、擬似コードにすると次のイメージです（厳密な実装の全分岐は省略）。
 
 ```text
-wasm-boids/
-├── src/
-│   ├── wasm/                      # C++ ソース (WASM ビルド対象)
-│   │   ├── boid_unit.*            # BoidUnit の挙動・近傍計算
-│   │   ├── boids_tree.*           # BoidTree (階層的木構造管理)
-│   │   ├── species_params.h       # 群れ行動パラメータ定義
-│   │   ├── entry.*                # extern "C" バインディング用インターフェース
-│   │   └── wasm_bindings.cpp      # Emscripten バインディング定義
-│   ├── main.js                    # Vue.js アプリのエントリーポイント
-│   ├── App.vue                    # メインレイアウト＆GUIコントロール
-│   └── components/                # Vue コンポーネント
-│       └── Settings.vue           # 設定用 GUI コンポーネント
-├── public/                        # 静的アセット (index.html, favicon, etc.)
-├── package.json                   # npm スクリプト＆依存パッケージ定義
-├── vue.config.js                  # Vue CLI 設定 (WASM 読み込み設定)
-└── CMakeLists.txt                 # CMake ビルド設定
+BoidTree::update(dt):
+   if frameCount % 4 == 0:
+      updateSpeciesEnvelopes()
+
+   if root:
+      setRenderPointersToReadBuffers()
+      root.updateRecursive(clamp(dt, 0, 0.1) * 5)
+      if dt > 0:
+         setRenderPointersToWriteBuffers()
+         swapReadWrite()
+         setRenderPointersToReadBuffers()
+   else:
+      setRenderPointersToReadBuffers()
+
+   clusterDt += dt
+   if frameCount % 3 == 0:
+      updateSpeciesClusters(clusterDt)
+      updateSpeciesSchoolClusters(clusterDt)
+      clusterDt = 0
+
+   if frameCount % 15 == 0:
+      leafCache = collectLeaves()
+      splitIndex = 0; mergeIndex = 0
+
+   if frameCount % 10 == 0:
+      build()
+      leafCache.clear()  // ポインタ無効化対策
+      splitIndex = 0; mergeIndex = 0
+
+   trySplitUpTo(12)
+   tryMergeUpTo(12)
 ```
+
+#### 実装上の間引き（重い処理は毎フレームやらない）
+
+現行実装では、デバッグ集計や木の調整は間引きます（数字は `boids_tree.cpp` の定数）。
+
+- 種族エンベロープ更新: 4フレームに1回（`kEnvelopeUpdateStride = 4`）
+- 小/大クラスター更新: 3フレームに1回（`kClusterUpdateStride = 3`）
+   - ただしEMAの時間スケールを維持するため、`dt` は蓄積してからまとめて渡します
+- 葉ノードの再収集（split/mergeの対象集め）: 15フレームに1回
+- 木の再構築（`build()`）: 10フレームに1回（`kTreeRebuildStride = 10`）
+
+この「毎フレーム必須なもの（物理/挙動）」と「多少遅れても見た目が破綻しないもの（デバッグ/再構築）」の分離が、ブラウザ上での安定性に効きます。
+
+#### split/merge を“少量ずつ”進める理由
+
+木を頻繁に完全再構築すると安定しますが重いので、完全再構築は間引きつつ、合間に局所調整として split/merge を少量ずつ進めます。
+
+- 15フレームごとに葉一覧（leafCache）を収集し、そこから分割/結合候補を順に処理します
+- 1フレームで処理する候補数に上限（例: 12件）を付け、スパイク（瞬間的な重さ）を避けます
+
+注意点として、`build()` はノードをプールへ返却して再利用します。
+そのため、再構築前に集めた `leafCache` はポインタが無効化されうるので、再構築直後に必ずクリアして安全性を保っています。
+
+#### 分割判定/結合判定の目安
+
+分割/結合は `BoidUnit::needsSplit()` / `BoidUnit::canMergeWith()` が基準です。
+引数はコード上でのデフォルト値（例: `splitRadius=40` / `mergeDist=60` など）で、概ね次を見ています。
+
+- split: ユニット半径が大きい、または向き/密度のばらつきが大きい、かつユニット内個体数が多い
+- merge: ユニット同士が近い、速度が十分揃っている、半径が過大でない、かつ合算個体数が上限以内
+
+（直近の修正として、異なる `speciesId` のユニットが結合しないように制限しています。）
+
+### 3) 近傍探索（球交差クエリ + 葉内詳細）
+
+葉の中では `indices` を使って個体同士の詳細相互作用を計算します。
+一方で「影響範囲に入る別の葉」を拾う時は、木のバウンディング球で枝刈りしながら走査します。
+
+`BoidTree` は球交差クエリを提供しており、用途によっては「必要数が揃ったら探索を止める」こともできます。
+
+- `forEachLeafIntersectingSphere(...)`: 交差する葉を列挙
+- `forEachLeafIntersectingSphereCancelable(...)`: 途中で打ち切れる版（必要数が集まれば十分な用途向け）
+
+Cancelable版は反復DFSで走査し、探索スタックを `thread_local` で再利用してアロケーション負荷を抑えています。
+
+#### 葉内の個体更新（BoidUnit側の概要）
+
+葉では、`indices` で参照できる個体群について、分離・整列・凝集のステアリングを合成して加速度（または目標速度）を作ります。
+探索コストが挙動に直結するため、近傍として参照する上限は `maxNeighbors` で明示的に制限します。
+
+代表的には次のような項目を順に適用し、最後に「物理的にあり得ない値」をクランプして破綻を防ぎます。
+
+- 近傍相互作用（分離・整列・凝集）: 各レンジ（`*Range`）内の近傍を集計し、強度（`cohesion/alignment/separation`）で重み付け
+- 捕食者影響: 非捕食者は捕食者を検知すると回避方向を加算（警戒距離は種族ごと）
+- 姿勢の追従: `torqueStrength` による方向合わせ、`horizontalTorque` による水平化
+- 旋回と速度の上限: `maxTurnAngle`（曲率）による旋回クランプ、`minSpeed/maxSpeed` による速度クランプ
+
+捕食者の影響（警戒距離）についても、毎フレーム「全種族を走査して最大警戒距離を求める」と重くなるため、
+種族パラメータ更新時に「全非捕食者の `predatorAlertRadius` の最大値」をキャッシュして探索半径に使います。
+
+### 4) 数値安定性（NaN/Infの連鎖を止める）
+
+大規模化すると「一度でもNaNが出ると全体に伝播して破綻する」パターンが出やすいので、
+`boid_unit.cpp` では正規化の0除算を避ける軽量ガード（長さ2の閾値判定）を入れています。
+isfinite系の重いチェックは避け、ホットパスでの分岐コストを最小化しています。
+
+また `boids_tree.cpp` 側では、`updateRecursive` に渡す `dt` をクランプして過大ステップを避けています。
+
+### 5) クラスター推定（species clusters / school clusters）
+
+クラスターは「個体全数」ではなく「leaf（BoidUnit）単位」の近似集計を行います。
+
+- 小クラスター: leaf を素材に中心・半径・速度整列などを推定
+- 大クラスター（群れ）: 小クラスター同士のリンク（距離閾値）を辿り、群れ中心を推定
+- 時間方向はEMA（指数移動平均）で平滑化し、表示/注視点が揺れないようにします
+
+この推定結果はデバッグ表示（球）と、起動直後のカメラ注視点に利用しています。
+
+#### 小クラスターの半径推定が“中心のズレ”に強い理由
+
+小クラスターは leaf を寄せ集めた近似なので、単純に「中心からの最大距離」だけで半径を作ると、
+中心が少しズレただけで半径が暴れやすくなります。
+
+そこで実装では、位置の二乗和（`E[x^2]`）も保持し、
+
+$$\mathrm{Var}(x) = E[x^2] - (E[x])^2$$
+
+の形でRMS半径を作ることで、中心が多少揺れても“広がり”が安定しやすいようにしています。
+さらに leaf 自体の半径も加算し、leaf単位近似による過小評価を抑えます。
+
+#### 群れ（大クラスター）の作り方
+
+群れは「小クラスター同士をリンクし、連結成分としてまとめる」方式です。
+リンク判定は
+
+```
+dist <= linkScale * (r_i + r_j)
+```
+
+のように、半径の和を基準にして密集を判定します。
+中心は10秒スケールのEMAで追跡し、フレームごとの対応付けが多少ズレても“注視点が飛ぶ”のを避けます。
+
+### 6) 旋回制限（maxTurnAngle の意味）
+
+`maxTurnAngle` は「角速度（/sec）」ではなく「最大曲率（移動距離あたりの回転量）」として扱います。
+角速度上限だと速度を変えたときに曲率が変わり、同じ設定値でも曲がり方が変わってしまうためです。
+
+1ステップの旋回上限角は概ね次で決まります。
+
+```
+maxTurnStep ≈ clamp(maxTurnAngle * speed * dt, 0, stepLimit)
+```
+
+これにより、速度を上げても「曲がりやすさ」が維持されます。
+
+補足:
+この設計は「視覚的な旋回の滑らかさ/安定性」を優先したもので、
+厳密な運動モデルというより“パラメータが直感通りに効く”ことを狙っています。
 
 ---
 
-## 必要環境とセットアップ
+## パラメータ（主要項目）
 
-### 1\. Emscripten SDK
+UIで編集できる代表パラメータ（`SpeciesParams`）の意味をまとめます。
 
-WASMビルドに必要です。
+| 名前 | 役割 |
+| --- | --- |
+| `cohesion`, `cohesionRange` | 群れ中心へ寄る強さと、その参照距離 |
+| `separation`, `separationRange` | 近すぎる個体から離れる強さと、開始距離 |
+| `alignment`, `alignmentRange` | 近傍の速度方向へ揃える強さと、参照距離 |
+| `maxSpeed`, `minSpeed` | 速度の上下限 |
+| `maxNeighbors` | 近傍として参照する最大数（探索コストと挙動が変わる） |
+| `maxTurnAngle` | 最大曲率（移動距離あたりの回転量）。速度を変えても曲がり方が崩れにくい |
+| `torqueStrength` | 方向合わせ（トルク）による回転の反応量 |
+| `horizontalTorque` | 上下の傾きを水平へ戻す補正 |
+| `lambda` | 減衰（速度の落ちやすさ） |
+| `tau` | 記憶時間（過去状態の残りやすさ） |
+| `predatorAlertRadius` | 捕食者を検知して逃避を始める距離 |
+| `isPredator` | 捕食者フラグ |
+
+---
+
+## 実行時の挙動メモ
+
+- 起動直後、ユーザーがカメラ操作する前は「クラスタ中心」へ注視点を滑らかに合わせます。
+- タブが非アクティブ（非表示/非フォーカス）の間、背景音は自動でミュートします。
+
+---
+
+## セットアップ / ビルド
+
+### 必要環境
+
+- Node.js / npm
+- Emscripten SDK（WASMビルド）
+- CMake（WASM/ネイティブどちらにも使用）
+
+### 依存関係
 
 ```bash
-git clone https://github.com/emscripten-core/emsdk.git
-cd emsdk
-./emsdk install latest
-./emsdk activate latest
-source ./emsdk_env.sh   # Linux/macOS
-# Windows (PowerShell) なら: ./emsdk_env.ps1
-```
-
-`emcc --version` が表示されればビルド環境は整っています。
-
-### 2\. Node.js / npm
-
-フロントエンドのビルドに使います（v16.x以上推奨）。
-
-```bash
-# https://nodejs.org/ からインストール
-node -v
-npm -v
-```
-
-### 3\. リポジトリをローカルにクローン
-
-```bash
-git clone https://github.com/tokachi269/wasm-boids.git
-cd wasm-boids
 npm install
 ```
 
----
+### WASMビルド
 
-## 開発モードで起動
+```bash
+npm run build-wasm:dev
+```
+
+本リポジトリ内の CMake ビルドは `build-dev/` を使います。
+Windows/PowerShell で手元のビルドをやり直す場合は次のコマンドも使用できます。
+
+```powershell
+cmake --build build-dev --clean-first
+```
+
+### 開発起動
 
 ```bash
 npm run serve
 ```
 
--   `serve` スクリプトで自動ビルドが実行され、即座にブラウザで確認できます。
-    
+`serve` は WASM の再ビルド（監視）と Vue dev server を並列起動します。
 
----
+### 本番ビルド
 
-## 主要なパラメータ（SpeciesParams）
-
-| パラメータ名 | 説明 | デフォルト値例 |
-| --- | --- | --- |
-| `separation` | 分離（近すぎるBoidを遠ざける力）の強度 | 1.0 |
-| `alignment` | 整列（近傍Boidの平均速度方向に合わせる力）の強度 | 1.0 |
-| `cohesion` | 凝集（群れの中心に近づく力）の強度 | 1.0 |
-| `separationRange` | 分離が作用する距離 (メートル相当) | 50.0 |
-| `cohesionRange` | 凝集・視界判定が作用する距離 | 50.0 |
-| `maxNeighbors` (Nu) | 1 Boid が参照する最大近傍数 | 32 |
-| `fieldOfViewDeg` | 視野角 (Degrees) | 270 |
-| `maxTurnAngle` | 1フレームの最大旋回角 (Radians) | 0.5 |
-| `torqueStrength` | 回転トルク強度 | 0.1 |
-| `horizontalTorque` | 傾き補正トルク強度 | 0.05 |
-| `minSpeed` | 最低速度 | 1.0 |
-| `maxSpeed` | 最高速度 | 5.0 |
-| `tau` | 近傍記憶の有効時間 (秒) | 0.5 |
-
----
-
-## 操作方法
-
-1.  **画面左側の GUI コントロール**
-    
-    -   **Boid数**や**分離/整列/凝集**などをスライダーで調整。
-        
-    -   設定変更後、即座にWASM側で反映されます。
-        
-2.  **画面右側の Three.js シーン**
-    
-    -   **マウス操作**
-        
-        -   左ドラッグ: 回転
-            
-        -   右ドラッグ: 平行移動（パン）
-            
-        -   ホイール: ズーム
-            
-    -   **HUD/Stats**: 画面右上にFPSカウンター表示
-        
-
----
-
-## アルゴリズム概要
-
-1.  **BoidTree構築**  
-    空間を再帰分割し、木構造を構築。葉ノードでは詳細な計算、中間ノードでは代表値で近似。
-    
-2.  **BoidUnit更新**  
-    再帰的に木をたどり、葉ノードで詳細相互作用を計算し、中間ノードで近似計算。
-    
-3.  **回転ルールの適用**  
-    非対称配置が生じた際、トルクによって群れ全体で回転構造を形成。
-    
-
----
-
-## 今後の予定
-
-1.  回転モデルの改善
-    
-2.  近傍探索の最適化（WebGPU/compute shader）
-    
-3.  衝突・重なり回避の強化
-    
-4.  捕食者モデルの追加
-    
-
----
-
-## デプロイ
-
-このプロジェクトはGitHub Pagesにデプロイされています。
-
-**Live Demo**: [https://tokachi269.github.io/wasm-boids/](https://tokachi269.github.io/wasm-boids/)
-
-### デプロイ手順
-
-1. **本番ビルド + デプロイ**
-   ```bash
-   npm run deploy
-   ```
-   これにより以下が実行されます：
-   - WASMファイルの本番ビルド（Release mode）
-   - Vue.jsアプリの本番ビルド
-   - GitHub Pagesへの自動デプロイ
-
-2. **手動でのビルドのみ**
-   ```bash
-   npm run build
-   ```
-
-### デプロイ設定
-
-- **ベースURL**: `/wasm-boids/` (本番環境)
-- **出力ディレクトリ**: `dist/`
-- **デプロイツール**: `gh-pages`
+```bash
+npm run build
+```
 
 ---
 
@@ -217,9 +315,8 @@ MIT License
 
 ---
 
-## 参考文献
+## 参考
 
--   石橋ら「大規模な魚群シミュレーションのための階層的Boidアルゴリズム」情報処理学会 CG-133 (2008)
-    
--   Ito & Uchida, *J. Phys. Soc. Jpn.*, **91**, 064806 (2022)
-    
+- 石橋ら「大規模な魚群シミュレーションのための階層的Boidアルゴリズム」情報処理学会 CG-133 (2008)
+- Ito & Uchida, J. Phys. Soc. Jpn., 91, 064806 (2022)
+
