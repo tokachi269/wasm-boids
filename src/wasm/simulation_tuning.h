@@ -8,12 +8,10 @@ struct SimulationTuningParams {
   float threatDecay = 1.6f;             // 単位: 1/sec。値が大きいほど恐怖が早く薄れる
   float threatGain = 1.5f;              // threat -> 逃走ブレンドへの変換倍率
   float maxEscapeWeight = 0.8f;         // 逃走方向に割ける最大割合（0〜1）
-  float baseEscapeStrength = 5.0f;      // 逃走加速度の基礎値
-  float escapeStrengthPerThreat = 10.0f;// threat に応じて加算する係数
-  float cohesionBoost = 1.2f;           // threat に応じた凝集力強化量
-  float separationMinFactor = 0.55f;    // threat=1 時の分離力スケール下限（0〜1）
-  float alignmentBoost = 0.6f;          // threat に応じた整列強化量
+  float baseEscapeStrength = 5.0f;      // 逃走ステアリング（目標速度への舵取り）強度の基礎値
+  float escapeStrengthPerThreat = 10.0f;// threat に応じて加算する逃走ステアリング係数
   float fastAttractStrength = 1.0f;     // 近傍不足時の補助凝集強度（0で無効）
+  float schoolPullCoefficient = 0.0008f;// 大クラスタ引力係数
 };
 
 // グローバルなチューニングパラメータ実体

@@ -26,6 +26,7 @@ public:
     std::vector<BoidUnit *> children;
     glm::vec3 center{}, averageVelocity{};
     float radius = 0.0f;
+    float simpleDensity = 0.0f;
     int level = 0;
     int frameCount = 0;
     glm::vec3 densityDir = glm::vec3(0.0f);

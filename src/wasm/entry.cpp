@@ -4,6 +4,12 @@
 #include <cstdint>
 #include <iostream>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#else
+#define EMSCRIPTEN_KEEPALIVE
+#endif
+
 #ifndef __EMSCRIPTEN__
 #include "native_simulation.h"
 #endif
@@ -85,6 +91,42 @@ uintptr_t speciesIdsPtr() {
     return 0;
   }
   return reinterpret_cast<uintptr_t>(ids.data());
+}
+
+uintptr_t unitSimpleDensityPtr() {
+  return BoidTree::instance().getUnitSimpleDensityPtr();
+}
+
+int unitSimpleDensityCount() {
+  return BoidTree::instance().getUnitSimpleDensityCount();
+}
+
+uintptr_t EMSCRIPTEN_KEEPALIVE speciesEnvelopesPtr() {
+  return BoidTree::instance().getSpeciesEnvelopePtr();
+}
+
+int EMSCRIPTEN_KEEPALIVE speciesEnvelopesCount() {
+  return BoidTree::instance().getSpeciesEnvelopeCount();
+}
+
+// Species clusters debug export
+// 1クラスターあたり 6 float: speciesId, center.xyz, radius, weight
+uintptr_t EMSCRIPTEN_KEEPALIVE speciesClustersPtr() {
+  return BoidTree::instance().getSpeciesClustersPtr();
+}
+
+int EMSCRIPTEN_KEEPALIVE speciesClustersCount() {
+  return BoidTree::instance().getSpeciesClustersCount();
+}
+
+// Species school clusters debug export
+// 1クラスターあたり 6 float: speciesId, center.xyz, radius, weight
+uintptr_t EMSCRIPTEN_KEEPALIVE speciesSchoolClustersPtr() {
+  return BoidTree::instance().getSpeciesSchoolClustersPtr();
+}
+
+int EMSCRIPTEN_KEEPALIVE speciesSchoolClustersCount() {
+  return BoidTree::instance().getSpeciesSchoolClustersCount();
 }
 
 void syncReadToWriteBuffers() {

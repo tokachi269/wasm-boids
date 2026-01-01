@@ -1,5 +1,4 @@
-// filepath: d:\GitHub\wasm-boids\src\components\Settings.vue
-<template>
+﻿<template>
   <div class="settings">
     <details class="species-section" :open="false">
       <summary class="species-header">
@@ -11,13 +10,15 @@
           @click.stop="emitRemove"
         >削除</button>
       </summary>
+
       <div class="species-content">
-        <div class="setting-row">
-          <label>種族名<br>(Species):</label>
-          <span>{{ settings.species }}</span>
+        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.species">
+          <label :title="settingHelp.species">種族名<br />(Species):</label>
+          <span :title="settingHelp.species">{{ settings.species }}</span>
         </div>
-        <div class="setting-row">
-          <label>群れの数(要更新)<br>(Count):</label>
+
+        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.count">
+          <label :title="settingHelp.count">群れの数(要更新)<br />(Count):</label>
           <input
             type="range"
             v-model.number="countDraft"
@@ -25,725 +26,317 @@
             max="50000"
             step="1"
             @change="commitCountFromSlider"
+            :title="settingHelp.count"
           />
-          <span 
-            v-if="!editingCount" 
-            class="editable-value" 
+          <span
+            v-if="!editingCount"
+            class="editable-value"
             @click="startEditCount"
-            title="クリックして編集"
+            :title="settingHelp.count + '（クリックして編集）'"
           >{{ settings.count }}</span>
-          <input 
-            v-if="editingCount"
-            type="number" 
-            v-model.number="countDraft" 
-            min="0" 
-            max="20000"
+          <input
+            v-else
+            ref="countInput"
             class="value-input"
+            type="number"
+            v-model.number="countDraft"
+            min="0"
+            max="20000"
+            step="1"
             @blur="cancelCountEdit"
             @keyup.enter="commitCountFromInput"
-            ref="countInput"
+            :title="settingHelp.count"
           />
-        </div><div class="setting-row">
-      <label>凝集<br>(Cohesion):</label>
-      <input type="range" v-model.number="settings.cohesion" min="0" max="40" step="0.01" />
-      <span 
-        v-if="!editingCohesion" 
-        class="editable-value" 
-        @click="startEditCohesion"
-        title="クリックして編集"
-      >{{ settings.cohesion }}</span>
-      <input 
-        v-if="editingCohesion"
-        type="number" 
-        v-model.number="settings.cohesion" 
-        min="0" 
-        max="40"
-        step="0.01"
-        class="value-input"
-        @blur="stopEditCohesion"
-        @keyup.enter="stopEditCohesion"
-        ref="cohesionInput"
-      />
-    </div>
-    <div class="setting-row">
-      <label>凝集範囲<br>(Cohesion Range):</label>
-      <input type="range" v-model.number="settings.cohesionRange" min="1" max="300" step="1" />
-      <span 
-        v-if="!editingCohesionRange" 
-        class="editable-value" 
-        @click="startEditCohesionRange"
-        title="クリックして編集"
-      >{{ settings.cohesionRange }}</span>
-      <input 
-        v-if="editingCohesionRange"
-        type="number" 
-        v-model.number="settings.cohesionRange" 
-        min="1" 
-        max="300"
-        step="1"
-        class="value-input"
-        @blur="stopEditCohesionRange"
-        @keyup.enter="stopEditCohesionRange"
-        ref="cohesionRangeInput"
-      />
-    </div>
-    <div class="setting-row">
-      <label>分離<br>(Separation):</label>
-      <input type="range" v-model.number="settings.separation" min="0" max="10" step="0.01" />
-      <span 
-        v-if="!editingSeparation" 
-        class="editable-value" 
-        @click="startEditSeparation"
-        title="クリックして編集"
-      >{{ settings.separation }}</span>
-      <input 
-        v-if="editingSeparation"
-        type="number" 
-        v-model.number="settings.separation" 
-        min="0" 
-        max="10"
-        step="0.01"
-        class="value-input"
-        @blur="stopEditSeparation"
-        @keyup.enter="stopEditSeparation"
-        ref="separationInput"
-      />
-    </div>
-    <div class="setting-row">
-      <label>分離範囲<br>(Separation Range):</label>
-      <input type="range" v-model.number="settings.separationRange" min="0.1" max="10" step="0.1" />
-      <span 
-        v-if="!editingSeparationRange" 
-        class="editable-value" 
-        @click="startEditSeparationRange"
-        title="クリックして編集"
-      >{{ settings.separationRange }}</span>
-      <input 
-        v-if="editingSeparationRange"
-        type="number" 
-        v-model.number="settings.separationRange" 
-        min="0.1" 
-        max="10"
-        step="0.1"
-        class="value-input"
-        @blur="stopEditSeparationRange"
-        @keyup.enter="stopEditSeparationRange"
-        ref="separationRangeInput"
-      />
-    </div>    <div class="setting-row">
-      <label>整列<br>(Alignment):</label>
-      <input type="range" v-model.number="settings.alignment" min="0" max="20" step="0.01" />
-      <span 
-        v-if="!editingAlignment" 
-        class="editable-value" 
-        @click="startEditAlignment"
-        title="クリックして編集"
-      >{{ settings.alignment }}</span>
-      <input 
-        v-if="editingAlignment"
-        type="number" 
-        v-model.number="settings.alignment" 
-        min="0" 
-        max="20"
-        step="0.01"
-        class="value-input"
-        @blur="stopEditAlignment"
-        @keyup.enter="stopEditAlignment"
-        ref="alignmentInput"
-      />
-    </div>
-    <div class="setting-row">
-      <label>整列範囲<br>(Alignment Range):</label>
-      <input type="range" v-model.number="settings.alignmentRange" min="1" max="100" step="1" />
-      <span 
-        v-if="!editingAlignmentRange" 
-        class="editable-value" 
-        @click="startEditAlignmentRange"
-        title="クリックして編集"
-      >{{ settings.alignmentRange }}</span>
-      <input 
-        v-if="editingAlignmentRange"
-        type="number" 
-        v-model.number="settings.alignmentRange" 
-        min="1" 
-        max="100"
-        step="1"
-        class="value-input"
-        @blur="stopEditAlignmentRange"
-        @keyup.enter="stopEditAlignmentRange"
-        ref="alignmentRangeInput"
-      />
-    </div>
-    <div class="setting-row">
-      <label>逃避開始距離<br>(Predator Alert):</label>
-      <input type="range" v-model.number="settings.predatorAlertRadius" min="0" max="10" step="0.05" />
-      <span 
-        v-if="!editingPredatorAlertRadius" 
-        class="editable-value" 
-        @click="startEditPredatorAlertRadius"
-        title="クリックして編集"
-      >{{ settings.predatorAlertRadius }}</span>
-      <input 
-        v-if="editingPredatorAlertRadius"
-        type="number" 
-        v-model.number="settings.predatorAlertRadius" 
-        min="0" 
-        max="20"
-        step="0.05"
-        class="value-input"
-        @blur="stopEditPredatorAlertRadius"
-        @keyup.enter="stopEditPredatorAlertRadius"
-        ref="predatorAlertRadiusInput"
-      />
-    </div>
-    <div class="setting-row">
-      <label>密度復帰強度<br>(Density Return):</label>
-      <input type="range" v-model.number="settings.densityReturnStrength" min="0" max="80" step="0.5" />
-      <span 
-        v-if="!editingDensityReturnStrength" 
-        class="editable-value" 
-        @click="startEditDensityReturnStrength"
-        title="クリックして編集"
-      >{{ settings.densityReturnStrength }}</span>
-      <input 
-        v-if="editingDensityReturnStrength"
-        type="number" 
-        v-model.number="settings.densityReturnStrength" 
-        min="0" 
-        max="120"
-        step="0.5"
-        class="value-input"
-        @blur="stopEditDensityReturnStrength"
-        @keyup.enter="stopEditDensityReturnStrength"
-        ref="densityReturnStrengthInput"
-      />
-    </div>
-    <div class="setting-row">
-      <label>最大速度<br>(Max Speed):</label>
-      <input type="range" v-model.number="settings.maxSpeed" min="0.1" max="2" step="0.01" />
-      <span 
-        v-if="!editingMaxSpeed" 
-        class="editable-value" 
-        @click="startEditMaxSpeed"
-        title="クリックして編集"
-      >{{ settings.maxSpeed }}</span>
-      <input 
-        v-if="editingMaxSpeed"
-        type="number" 
-        v-model.number="settings.maxSpeed" 
-        min="0.1" 
-        max="2"
-        step="0.01"
-        class="value-input"
-        @blur="stopEditMaxSpeed"
-        @keyup.enter="stopEditMaxSpeed"
-        ref="maxSpeedInput"
-      />
-    </div>    <div class="setting-row">
-      <label>最大旋回角<br>(Max Turn Angle):</label>
-      <input type="range" v-model.number="settings.maxTurnAngle" min="0.001" max="0.3" step="0.001" />
-      <span 
-        v-if="!editingMaxTurnAngle" 
-        class="editable-value" 
-        @click="startEditMaxTurnAngle"
-        title="クリックして編集"
-      >{{ settings.maxTurnAngle }}</span>
-      <input 
-        v-if="editingMaxTurnAngle"
-        type="number" 
-        v-model.number="settings.maxTurnAngle" 
-        min="0.001" 
-        max="0.3"
-        step="0.001"
-        class="value-input"
-        @blur="stopEditMaxTurnAngle"
-        @keyup.enter="stopEditMaxTurnAngle"
-        ref="maxTurnAngleInput"
-      />
-    </div>
-    <div class="setting-row">
-      <label>最大近傍数<br>(Max Neighbors):</label>
-      <input type="range" v-model.number="settings.maxNeighbors" min="0" max="32" step="1" />
-      <span 
-        v-if="!editingMaxNeighbors" 
-        class="editable-value" 
-        @click="startEditMaxNeighbors"
-        title="クリックして編集"
-      >{{ settings.maxNeighbors }}</span>
-      <input 
-        v-if="editingMaxNeighbors"
-        type="number" 
-        v-model.number="settings.maxNeighbors" 
-        min="0" 
-        max="32"
-        step="1"
-        class="value-input"
-        @blur="stopEditMaxNeighbors"
-        @keyup.enter="stopEditMaxNeighbors"
-        ref="maxNeighborsInput"
-      />
-    </div>
-    <div class="setting-row">
-      <label>水平化トルク<br>(Horizontal Torque):</label>
-      <input type="range" v-model.number="settings.horizontalTorque" min="0.0" max="0.2" step="0.001" />
-      <span 
-        v-if="!editingHorizontalTorque" 
-        class="editable-value" 
-        @click="startEditHorizontalTorque"
-        title="クリックして編集"
-      >{{ settings.horizontalTorque }}</span>
-      <input 
-        v-if="editingHorizontalTorque"
-        type="number" 
-        v-model.number="settings.horizontalTorque" 
-        min="0.0" 
-        max="0.2"
-        step="0.001"
-        class="value-input"
-        @blur="stopEditHorizontalTorque"
-        @keyup.enter="stopEditHorizontalTorque"
-        ref="horizontalTorqueInput"
-      />
-    </div>
-    <div class="setting-row">
-      <label>回転トルク強度<br>(Torque Strength):</label>
-      <input type="range" v-model.number="settings.torqueStrength" min="0.0" max="20" step="0.001" />
-      <span 
-        v-if="!editingTorqueStrength" 
-        class="editable-value" 
-        @click="startEditTorqueStrength"
-        title="クリックして編集"
-      >{{ settings.torqueStrength }}</span>
-      <input 
-        v-if="editingTorqueStrength"
-        type="number" 
-        v-model.number="settings.torqueStrength" 
-        min="0.0" 
-        max="5"
-        step="0.001"
-        class="value-input"
-        @blur="stopEditTorqueStrength"
-        @keyup.enter="stopEditTorqueStrength"
-        ref="torqueStrengthInput"
-      />
-    </div>
-    <div class="setting-row">
-      <label>減衰係数<br>(Damping Coefficient):</label>
-      <input type="range" v-model.number="settings.lambda" min="0" max="1" step="0.001" />
-      <span 
-        v-if="!editingLambda" 
-        class="editable-value" 
-        @click="startEditLambda"
-        title="クリックして編集"
-      >{{ settings.lambda }}</span>
-      <input 
-        v-if="editingLambda"
-        type="number" 
-        v-model.number="settings.lambda" 
-        min="0" 
-        max="1"
-        step="0.001"
-        class="value-input"
-        @blur="stopEditLambda"
-        @keyup.enter="stopEditLambda"
-        ref="lambdaInput"
-      />
-    </div>
-    <div class="setting-row">
-      <label>記憶時間<br>(Memory Time):</label>
-      <input type="range" v-model.number="settings.tau" min="0" max="5" step="0.01" />
-      <span 
-        v-if="!editingTau" 
-        class="editable-value" 
-        @click="startEditTau"
-        title="クリックして編集"
-      >{{ settings.tau }}</span>
-      <input 
-        v-if="editingTau"
-        type="number" 
-        v-model.number="settings.tau" 
-        min="0" 
-        max="5"
-        step="0.01"
-        class="value-input"
-        @blur="stopEditTau"
-        @keyup.enter="stopEditTau"
-        ref="tauInput"
-      />
-    </div>
-    <div class="setting-row">
-      <label>捕食者フラグ<br>(Is Predator):</label>
-      <input type="checkbox" v-model="settings.isPredator" />
-      <span>{{ settings.isPredator }}</span>
-    </div>
+        </div>
+
+        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.cohesion">
+          <label :title="settingHelp.cohesion">凝集<br />(Cohesion):</label>
+          <input type="range" v-model.number="settings.cohesion" min="0" max="40" step="0.01" :title="settingHelp.cohesion" />
+          <span v-if="!editingCohesion" class="editable-value" @click="startEditCohesion" :title="settingHelp.cohesion + '（クリックして編集）'">{{ settings.cohesion }}</span>
+          <input v-else ref="cohesionInput" class="value-input" type="number" v-model.number="settings.cohesion" min="0" max="40" step="0.01" @blur="stopEditCohesion" @keyup.enter="stopEditCohesion" :title="settingHelp.cohesion" />
+        </div>
+
+        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.cohesionRange">
+          <label :title="settingHelp.cohesionRange">凝集範囲<br />(Cohesion Range):</label>
+          <input type="range" v-model.number="settings.cohesionRange" min="1" max="300" step="1" :title="settingHelp.cohesionRange" />
+          <span v-if="!editingCohesionRange" class="editable-value" @click="startEditCohesionRange" :title="settingHelp.cohesionRange + '（クリックして編集）'">{{ settings.cohesionRange }}</span>
+          <input v-else ref="cohesionRangeInput" class="value-input" type="number" v-model.number="settings.cohesionRange" min="1" max="300" step="1" @blur="stopEditCohesionRange" @keyup.enter="stopEditCohesionRange" :title="settingHelp.cohesionRange" />
+        </div>
+
+        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.separation">
+          <label :title="settingHelp.separation">分離<br />(Separation):</label>
+          <input type="range" v-model.number="settings.separation" min="0" max="10" step="0.01" :title="settingHelp.separation" />
+          <span v-if="!editingSeparation" class="editable-value" @click="startEditSeparation" :title="settingHelp.separation + '（クリックして編集）'">{{ settings.separation }}</span>
+          <input v-else ref="separationInput" class="value-input" type="number" v-model.number="settings.separation" min="0" max="10" step="0.01" @blur="stopEditSeparation" @keyup.enter="stopEditSeparation" :title="settingHelp.separation" />
+        </div>
+
+        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.separationRange">
+          <label :title="settingHelp.separationRange">分離範囲<br />(Separation Range):</label>
+          <input type="range" v-model.number="settings.separationRange" min="0.1" max="10" step="0.1" :title="settingHelp.separationRange" />
+          <span v-if="!editingSeparationRange" class="editable-value" @click="startEditSeparationRange" :title="settingHelp.separationRange + '（クリックして編集）'">{{ settings.separationRange }}</span>
+          <input v-else ref="separationRangeInput" class="value-input" type="number" v-model.number="settings.separationRange" min="0.1" max="10" step="0.1" @blur="stopEditSeparationRange" @keyup.enter="stopEditSeparationRange" :title="settingHelp.separationRange" />
+        </div>
+
+        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.alignment">
+          <label :title="settingHelp.alignment">整列<br />(Alignment):</label>
+          <input type="range" v-model.number="settings.alignment" min="0" max="20" step="0.01" :title="settingHelp.alignment" />
+          <span v-if="!editingAlignment" class="editable-value" @click="startEditAlignment" :title="settingHelp.alignment + '（クリックして編集）'">{{ settings.alignment }}</span>
+          <input v-else ref="alignmentInput" class="value-input" type="number" v-model.number="settings.alignment" min="0" max="20" step="0.01" @blur="stopEditAlignment" @keyup.enter="stopEditAlignment" :title="settingHelp.alignment" />
+        </div>
+
+        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.alignmentRange">
+          <label :title="settingHelp.alignmentRange">整列範囲<br />(Alignment Range):</label>
+          <input type="range" v-model.number="settings.alignmentRange" min="1" max="100" step="1" :title="settingHelp.alignmentRange" />
+          <span v-if="!editingAlignmentRange" class="editable-value" @click="startEditAlignmentRange" :title="settingHelp.alignmentRange + '（クリックして編集）'">{{ settings.alignmentRange }}</span>
+          <input v-else ref="alignmentRangeInput" class="value-input" type="number" v-model.number="settings.alignmentRange" min="1" max="100" step="1" @blur="stopEditAlignmentRange" @keyup.enter="stopEditAlignmentRange" :title="settingHelp.alignmentRange" />
+        </div>
+
+        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.predatorAlertRadius">
+          <label :title="settingHelp.predatorAlertRadius">逃避開始距離<br />(Predator Alert):</label>
+          <input type="range" v-model.number="settings.predatorAlertRadius" min="0" max="10" step="0.05" :title="settingHelp.predatorAlertRadius" />
+          <span v-if="!editingPredatorAlertRadius" class="editable-value" @click="startEditPredatorAlertRadius" :title="settingHelp.predatorAlertRadius + '（クリックして編集）'">{{ settings.predatorAlertRadius }}</span>
+          <input v-else ref="predatorAlertRadiusInput" class="value-input" type="number" v-model.number="settings.predatorAlertRadius" min="0" max="20" step="0.05" @blur="stopEditPredatorAlertRadius" @keyup.enter="stopEditPredatorAlertRadius" :title="settingHelp.predatorAlertRadius" />
+        </div>
+
+        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.densityReturnStrength">
+          <label :title="settingHelp.densityReturnStrength">密度復帰強度<br />(Density Return):</label>
+          <input type="range" v-model.number="settings.densityReturnStrength" min="0" max="80" step="0.5" :title="settingHelp.densityReturnStrength" />
+          <span v-if="!editingDensityReturnStrength" class="editable-value" @click="startEditDensityReturnStrength" :title="settingHelp.densityReturnStrength + '（クリックして編集）'">{{ settings.densityReturnStrength }}</span>
+          <input v-else ref="densityReturnStrengthInput" class="value-input" type="number" v-model.number="settings.densityReturnStrength" min="0" max="120" step="0.5" @blur="stopEditDensityReturnStrength" @keyup.enter="stopEditDensityReturnStrength" :title="settingHelp.densityReturnStrength" />
+        </div>
+
+        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.maxSpeed">
+          <label :title="settingHelp.maxSpeed">最大速度<br />(Max Speed):</label>
+          <input type="range" v-model.number="settings.maxSpeed" min="0.1" max="2" step="0.01" :title="settingHelp.maxSpeed" />
+          <span v-if="!editingMaxSpeed" class="editable-value" @click="startEditMaxSpeed" :title="settingHelp.maxSpeed + '（クリックして編集）'">{{ settings.maxSpeed }}</span>
+          <input v-else ref="maxSpeedInput" class="value-input" type="number" v-model.number="settings.maxSpeed" min="0.1" max="2" step="0.01" @blur="stopEditMaxSpeed" @keyup.enter="stopEditMaxSpeed" :title="settingHelp.maxSpeed" />
+        </div>
+
+        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.maxTurnAngle">
+          <label :title="settingHelp.maxTurnAngle">最大旋回速度<br />(Max Turn Rate, rad/s):</label>
+          <input type="range" v-model.number="settings.maxTurnAngle" min="0" max="30" step="0.1" :title="settingHelp.maxTurnAngle" />
+          <span v-if="!editingMaxTurnAngle" class="editable-value" @click="startEditMaxTurnAngle" :title="settingHelp.maxTurnAngle + '（クリックして編集）'">{{ settings.maxTurnAngle }}</span>
+          <input v-else ref="maxTurnAngleInput" class="value-input" type="number" v-model.number="settings.maxTurnAngle" min="0" max="60" step="0.1" @blur="stopEditMaxTurnAngle" @keyup.enter="stopEditMaxTurnAngle" :title="settingHelp.maxTurnAngle" />
+        </div>
+
+        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.maxNeighbors">
+          <label :title="settingHelp.maxNeighbors">最大近傍数<br />(Max Neighbors):</label>
+          <input type="range" v-model.number="settings.maxNeighbors" min="0" max="32" step="1" :title="settingHelp.maxNeighbors" />
+          <span v-if="!editingMaxNeighbors" class="editable-value" @click="startEditMaxNeighbors" :title="settingHelp.maxNeighbors + '（クリックして編集）'">{{ settings.maxNeighbors }}</span>
+          <input v-else ref="maxNeighborsInput" class="value-input" type="number" v-model.number="settings.maxNeighbors" min="0" max="32" step="1" @blur="stopEditMaxNeighbors" @keyup.enter="stopEditMaxNeighbors" :title="settingHelp.maxNeighbors" />
+        </div>
+
+        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.horizontalTorque">
+          <label :title="settingHelp.horizontalTorque">水平化トルク<br />(Horizontal Torque):</label>
+          <input type="range" v-model.number="settings.horizontalTorque" min="0.0" max="0.2" step="0.001" :title="settingHelp.horizontalTorque" />
+          <span v-if="!editingHorizontalTorque" class="editable-value" @click="startEditHorizontalTorque" :title="settingHelp.horizontalTorque + '（クリックして編集）'">{{ settings.horizontalTorque }}</span>
+          <input v-else ref="horizontalTorqueInput" class="value-input" type="number" v-model.number="settings.horizontalTorque" min="0.0" max="0.2" step="0.001" @blur="stopEditHorizontalTorque" @keyup.enter="stopEditHorizontalTorque" :title="settingHelp.horizontalTorque" />
+        </div>
+
+        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.torqueStrength">
+          <label :title="settingHelp.torqueStrength">回転トルク強度<br />(Torque Strength):</label>
+          <input type="range" v-model.number="settings.torqueStrength" min="0.0" max="20" step="0.001" :title="settingHelp.torqueStrength" />
+          <span v-if="!editingTorqueStrength" class="editable-value" @click="startEditTorqueStrength" :title="settingHelp.torqueStrength + '（クリックして編集）'">{{ settings.torqueStrength }}</span>
+          <input v-else ref="torqueStrengthInput" class="value-input" type="number" v-model.number="settings.torqueStrength" min="0.0" max="5" step="0.001" @blur="stopEditTorqueStrength" @keyup.enter="stopEditTorqueStrength" :title="settingHelp.torqueStrength" />
+        </div>
+
+        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.lambda">
+          <label :title="settingHelp.lambda">減衰係数<br />(Damping Coefficient):</label>
+          <input type="range" v-model.number="settings.lambda" min="0" max="1" step="0.001" :title="settingHelp.lambda" />
+          <span v-if="!editingLambda" class="editable-value" @click="startEditLambda" :title="settingHelp.lambda + '（クリックして編集）'">{{ settings.lambda }}</span>
+          <input v-else ref="lambdaInput" class="value-input" type="number" v-model.number="settings.lambda" min="0" max="1" step="0.001" @blur="stopEditLambda" @keyup.enter="stopEditLambda" :title="settingHelp.lambda" />
+        </div>
+
+        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.tau">
+          <label :title="settingHelp.tau">記憶時間<br />(Memory Time):</label>
+          <input type="range" v-model.number="settings.tau" min="0" max="5" step="0.01" :title="settingHelp.tau" />
+          <span v-if="!editingTau" class="editable-value" @click="startEditTau" :title="settingHelp.tau + '（クリックして編集）'">{{ settings.tau }}</span>
+          <input v-else ref="tauInput" class="value-input" type="number" v-model.number="settings.tau" min="0" max="5" step="0.01" @blur="stopEditTau" @keyup.enter="stopEditTau" :title="settingHelp.tau" />
+        </div>
+
+        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.isPredator">
+          <label :title="settingHelp.isPredator">捕食者フラグ<br />(Is Predator):</label>
+          <input type="checkbox" v-model="settings.isPredator" :title="settingHelp.isPredator" />
+          <span :title="settingHelp.isPredator">{{ settings.isPredator }}</span>
+        </div>
       </div>
     </details>
   </div>
 </template>
 
 <script setup>
-import { ref, nextTick, watch } from 'vue';
+import { nextTick, ref, watch } from 'vue';
 
-const emit = defineEmits(['remove']);
-
+// 親(App.vue)から渡された種族設定オブジェクト。
+// ここでは v-model で直接書き換える（親が配列で保持しているため反映される）。
 const props = defineProps({
   settings: {
     type: Object,
-    required: true
+    required: true,
   },
   canRemove: {
     type: Boolean,
-    default: false
-  }
+    default: true,
+  },
 });
 
-const settings = props.settings;
-
-// 編集状態のref
-const editingCount = ref(false);
-const editingCohesion = ref(false);
-const editingCohesionRange = ref(false);
-const editingSeparation = ref(false);
-const editingSeparationRange = ref(false);
-const editingAlignment = ref(false);
-const editingAlignmentRange = ref(false);
-const editingMaxSpeed = ref(false);
-const editingMaxTurnAngle = ref(false);
-const editingMaxNeighbors = ref(false);
-const editingHorizontalTorque = ref(false);
-const editingTorqueStrength = ref(false);
-const editingLambda = ref(false);
-const editingTau = ref(false);
-const editingPredatorAlertRadius = ref(false);
-const editingDensityReturnStrength = ref(false);
-
-// 入力フィールドのref
-const countInput = ref(null);
-const cohesionInput = ref(null);
-const cohesionRangeInput = ref(null);
-const separationInput = ref(null);
-const separationRangeInput = ref(null);
-const alignmentInput = ref(null);
-const alignmentRangeInput = ref(null);
-const maxSpeedInput = ref(null);
-const maxTurnAngleInput = ref(null);
-const maxNeighborsInput = ref(null);
-const horizontalTorqueInput = ref(null);
-const torqueStrengthInput = ref(null);
-const lambdaInput = ref(null);
-const tauInput = ref(null);
-const predatorAlertRadiusInput = ref(null);
-const densityReturnStrengthInput = ref(null);
-
-const countDraft = ref(settings.count ?? 0);
-
-watch(
-  () => settings.count,
-  (value) => {
-    if (!editingCount.value) {
-      countDraft.value = value ?? 0;
-    }
-  }
-);
-
-// 編集開始関数
-async function startEditCount() {
-  editingCount.value = true;
-  countDraft.value = settings.count ?? 0;
-  await nextTick();
-  if (countInput.value) {
-    countInput.value.focus();
-    countInput.value.select();
-  }
-}
-
-function cancelCountEdit() {
-  editingCount.value = false;
-  countDraft.value = settings.count ?? 0;
-}
-
-function applyCountDraft() {
-  const nextValue = Math.max(0, Math.round(Number.isFinite(countDraft.value) ? countDraft.value : 0));
-  if (settings.count !== nextValue) {
-    settings.count = nextValue;
-  }
-}
-
-function commitCountFromSlider() {
-  applyCountDraft();
-}
-
-function commitCountFromInput() {
-  applyCountDraft();
-  cancelCountEdit();
-}
+const emit = defineEmits(['remove']);
 
 function emitRemove() {
   emit('remove');
 }
 
-async function startEditCohesion() {
-  editingCohesion.value = true;
-  await nextTick();
-  if (cohesionInput.value) {
-    cohesionInput.value.focus();
-    cohesionInput.value.select();
+// 各設定の説明（ユーザ目線）。ホバー時に title として表示する。
+// NOTE: 実装詳細ではなく「何が変わるか/どう触るか」を優先して書く。
+const settingHelp = {
+  species: 'この種族の表示名です。',
+  count: 'この種族の個体数です。増やすほど重くなります。反映にはリセットが必要です（要更新）。',
+  cohesion: '仲間の中心へ寄る強さです。大きいほど群れが固まりやすくなります。',
+  cohesionRange: '凝集を効かせる距離です。遠くの仲間まで意識すると大きくまとまりやすくなります。',
+  separation: '近づきすぎたときに離れる強さです。大きいほど衝突しにくく、散りやすくなります。',
+  separationRange: '分離を始める距離です。大きいほど早めに距離を取ります。',
+  alignment: '進行方向を揃える強さです。大きいほど同じ向きに泳ぎます。',
+  alignmentRange: '整列を効かせる距離です。近い仲間だけを見るか、少し遠くまで見るかが変わります。',
+  predatorAlertRadius: '捕食者に反応し始める距離です。大きいほど早めに逃げます。',
+  densityReturnStrength: '群れの密度が崩れたときに、元の密度へ戻ろうとする強さです。',
+  maxSpeed: '移動速度の上限です。',
+  maxTurnAngle: '向きを変える速さの上限です（rad/s）。大きいほどキビキビ曲がります。',
+  maxNeighbors: '近傍として見る最大数です。小さいと局所的、大きいと全体的な動きになります。',
+  horizontalTorque: '上下方向の傾きを水平へ戻す強さです。',
+  torqueStrength: '回転の反応の強さです。',
+  lambda: '動きの減衰（抵抗）です。大きいほど勢いが落ちやすくなります。',
+  tau: '過去の状態をどれくらい残すか（記憶時間）です。大きいほど反応が遅れて滑らかになります。',
+  isPredator: 'この種族を捕食者として扱います（他の種族が避ける対象になります）。',
+};
+
+// count は「要更新（リセットで反映）」なので、操作の感触を保ちつつ draft を使う。
+const countDraft = ref(props.settings.count);
+const editingCount = ref(false);
+const countInput = ref(null);
+
+watch(
+  () => props.settings.count,
+  (newCount) => {
+    // 親側から値が変わった場合（リセット等）は、編集していないときだけ同期する。
+    if (!editingCount.value) {
+      countDraft.value = newCount;
+    }
   }
+);
+
+function startEditCount() {
+  editingCount.value = true;
+  countDraft.value = props.settings.count;
+  nextTick(() => {
+    countInput.value?.focus?.();
+  });
 }
 
-async function startEditCohesionRange() {
-  editingCohesionRange.value = true;
-  await nextTick();
-  if (cohesionRangeInput.value) {
-    cohesionRangeInput.value.focus();
-    cohesionRangeInput.value.select();
-  }
+function commitCountFromSlider() {
+  props.settings.count = countDraft.value;
 }
 
-async function startEditSeparation() {
-  editingSeparation.value = true;
-  await nextTick();
-  if (separationInput.value) {
-    separationInput.value.focus();
-    separationInput.value.select();
-  }
+function commitCountFromInput() {
+  props.settings.count = countDraft.value;
+  editingCount.value = false;
 }
 
-async function startEditSeparationRange() {
-  editingSeparationRange.value = true;
-  await nextTick();
-  if (separationRangeInput.value) {
-    separationRangeInput.value.focus();
-    separationRangeInput.value.select();
-  }
+function cancelCountEdit() {
+  editingCount.value = false;
+  countDraft.value = props.settings.count;
 }
 
-async function startEditAlignment() {
-  editingAlignment.value = true;
-  await nextTick();
-  if (alignmentInput.value) {
-    alignmentInput.value.focus();
-    alignmentInput.value.select();
-  }
+// クリック編集の共通ヘルパ。
+function startEditNumber(editingFlag, inputRef) {
+  editingFlag.value = true;
+  nextTick(() => {
+    inputRef.value?.focus?.();
+  });
 }
 
-async function startEditAlignmentRange() {
-  editingAlignmentRange.value = true;
-  await nextTick();
-  if (alignmentRangeInput.value) {
-    alignmentRangeInput.value.focus();
-    alignmentRangeInput.value.select();
-  }
+function stopEditNumber(editingFlag) {
+  editingFlag.value = false;
 }
 
-async function startEditPredatorAlertRadius() {
-  editingPredatorAlertRadius.value = true;
-  await nextTick();
-  if (predatorAlertRadiusInput.value) {
-    predatorAlertRadiusInput.value.focus();
-    predatorAlertRadiusInput.value.select();
-  }
-}
+const editingCohesion = ref(false);
+const cohesionInput = ref(null);
+function startEditCohesion() { startEditNumber(editingCohesion, cohesionInput); }
+function stopEditCohesion() { stopEditNumber(editingCohesion); }
 
-async function startEditDensityReturnStrength() {
-  editingDensityReturnStrength.value = true;
-  await nextTick();
-  if (densityReturnStrengthInput.value) {
-    densityReturnStrengthInput.value.focus();
-    densityReturnStrengthInput.value.select();
-  }
-}
+const editingCohesionRange = ref(false);
+const cohesionRangeInput = ref(null);
+function startEditCohesionRange() { startEditNumber(editingCohesionRange, cohesionRangeInput); }
+function stopEditCohesionRange() { stopEditNumber(editingCohesionRange); }
 
-async function startEditMaxSpeed() {
-  editingMaxSpeed.value = true;
-  await nextTick();
-  if (maxSpeedInput.value) {
-    maxSpeedInput.value.focus();
-    maxSpeedInput.value.select();
-  }
-}
+const editingSeparation = ref(false);
+const separationInput = ref(null);
+function startEditSeparation() { startEditNumber(editingSeparation, separationInput); }
+function stopEditSeparation() { stopEditNumber(editingSeparation); }
 
-async function startEditMaxTurnAngle() {
-  editingMaxTurnAngle.value = true;
-  await nextTick();
-  if (maxTurnAngleInput.value) {
-    maxTurnAngleInput.value.focus();
-    maxTurnAngleInput.value.select();
-  }
-}
+const editingSeparationRange = ref(false);
+const separationRangeInput = ref(null);
+function startEditSeparationRange() { startEditNumber(editingSeparationRange, separationRangeInput); }
+function stopEditSeparationRange() { stopEditNumber(editingSeparationRange); }
 
-async function startEditMaxNeighbors() {
-  editingMaxNeighbors.value = true;
-  await nextTick();
-  if (maxNeighborsInput.value) {
-    maxNeighborsInput.value.focus();
-    maxNeighborsInput.value.select();
-  }
-}
+const editingAlignment = ref(false);
+const alignmentInput = ref(null);
+function startEditAlignment() { startEditNumber(editingAlignment, alignmentInput); }
+function stopEditAlignment() { stopEditNumber(editingAlignment); }
 
-async function startEditHorizontalTorque() {
-  editingHorizontalTorque.value = true;
-  await nextTick();
-  if (horizontalTorqueInput.value) {
-    horizontalTorqueInput.value.focus();
-    horizontalTorqueInput.value.select();
-  }
-}
+const editingAlignmentRange = ref(false);
+const alignmentRangeInput = ref(null);
+function startEditAlignmentRange() { startEditNumber(editingAlignmentRange, alignmentRangeInput); }
+function stopEditAlignmentRange() { stopEditNumber(editingAlignmentRange); }
 
-async function startEditTorqueStrength() {
-  editingTorqueStrength.value = true;
-  await nextTick();
-  if (torqueStrengthInput.value) {
-    torqueStrengthInput.value.focus();
-    torqueStrengthInput.value.select();
-  }
-}
+const editingPredatorAlertRadius = ref(false);
+const predatorAlertRadiusInput = ref(null);
+function startEditPredatorAlertRadius() { startEditNumber(editingPredatorAlertRadius, predatorAlertRadiusInput); }
+function stopEditPredatorAlertRadius() { stopEditNumber(editingPredatorAlertRadius); }
 
-async function startEditLambda() {
-  editingLambda.value = true;
-  await nextTick();
-  if (lambdaInput.value) {
-    lambdaInput.value.focus();
-    lambdaInput.value.select();
-  }
-}
+const editingDensityReturnStrength = ref(false);
+const densityReturnStrengthInput = ref(null);
+function startEditDensityReturnStrength() { startEditNumber(editingDensityReturnStrength, densityReturnStrengthInput); }
+function stopEditDensityReturnStrength() { stopEditNumber(editingDensityReturnStrength); }
 
-async function startEditTau() {
-  editingTau.value = true;
-  await nextTick();
-  if (tauInput.value) {
-    tauInput.value.focus();
-    tauInput.value.select();
-  }
-}
+const editingMaxSpeed = ref(false);
+const maxSpeedInput = ref(null);
+function startEditMaxSpeed() { startEditNumber(editingMaxSpeed, maxSpeedInput); }
+function stopEditMaxSpeed() { stopEditNumber(editingMaxSpeed); }
 
-function stopEditCohesion() {
-  editingCohesion.value = false;
-}
+const editingMaxTurnAngle = ref(false);
+const maxTurnAngleInput = ref(null);
+function startEditMaxTurnAngle() { startEditNumber(editingMaxTurnAngle, maxTurnAngleInput); }
+function stopEditMaxTurnAngle() { stopEditNumber(editingMaxTurnAngle); }
 
-function stopEditCohesionRange() {
-  editingCohesionRange.value = false;
-}
+const editingMaxNeighbors = ref(false);
+const maxNeighborsInput = ref(null);
+function startEditMaxNeighbors() { startEditNumber(editingMaxNeighbors, maxNeighborsInput); }
+function stopEditMaxNeighbors() { stopEditNumber(editingMaxNeighbors); }
 
-function stopEditSeparation() {
-  editingSeparation.value = false;
-}
+const editingHorizontalTorque = ref(false);
+const horizontalTorqueInput = ref(null);
+function startEditHorizontalTorque() { startEditNumber(editingHorizontalTorque, horizontalTorqueInput); }
+function stopEditHorizontalTorque() { stopEditNumber(editingHorizontalTorque); }
 
-function stopEditSeparationRange() {
-  editingSeparationRange.value = false;
-}
+const editingTorqueStrength = ref(false);
+const torqueStrengthInput = ref(null);
+function startEditTorqueStrength() { startEditNumber(editingTorqueStrength, torqueStrengthInput); }
+function stopEditTorqueStrength() { stopEditNumber(editingTorqueStrength); }
 
-function stopEditAlignment() {
-  editingAlignment.value = false;
-}
+const editingLambda = ref(false);
+const lambdaInput = ref(null);
+function startEditLambda() { startEditNumber(editingLambda, lambdaInput); }
+function stopEditLambda() { stopEditNumber(editingLambda); }
 
-function stopEditAlignmentRange() {
-  editingAlignmentRange.value = false;
-}
-
-function stopEditPredatorAlertRadius() {
-  editingPredatorAlertRadius.value = false;
-}
-
-function stopEditDensityReturnStrength() {
-  editingDensityReturnStrength.value = false;
-}
-
-function stopEditMaxSpeed() {
-  editingMaxSpeed.value = false;
-}
-
-function stopEditMaxTurnAngle() {
-  editingMaxTurnAngle.value = false;
-}
-
-function stopEditMaxNeighbors() {
-  editingMaxNeighbors.value = false;
-}
-
-function stopEditHorizontalTorque() {
-  editingHorizontalTorque.value = false;
-}
-
-function stopEditTorqueStrength() {
-  editingTorqueStrength.value = false;
-}
-
-function stopEditLambda() {
-  editingLambda.value = false;
-}
-
-function stopEditTau() {
-  editingTau.value = false;
-}
+const editingTau = ref(false);
+const tauInput = ref(null);
+function startEditTau() { startEditNumber(editingTau, tauInput); }
+function stopEditTau() { stopEditNumber(editingTau); }
 </script>
 
 <style scoped>
 .settings {
-  margin-bottom: 20px;
-  width: 100%;
-  min-width: 260px;
-  max-width: 520px;
-  box-sizing: border-box;
   pointer-events: auto;
-  position: relative;
-  z-index: 1;
-}
-.setting-row {
-  display: flex;
-  align-items: center;
-  margin-bottom: 8px;
-  width: 100%;
-}
-.setting-row label {
-  width: 130px;
-  text-align: left;
-  margin-right: 10px;
-  flex-shrink: 0;
-  display: inline-block;
-}
-.setting-row input[type="range"] {
-  width: 120px;
-  min-width: 80px;
-  max-width: 200px;
-  margin: 0 10px;
-  flex: none;
-  display: inline-block;
-}
-.setting-row span {
-  width: 60px;
-  text-align: left;
-  display: inline-block;
-  flex-shrink: 0;
-}
-
-.editable-value {
-  cursor: pointer;
-  padding: 2px 4px;
-  border-radius: 3px;
-  transition: background-color 0.2s;
-}
-
-.editable-value:hover {
-  background-color: rgba(255, 255, 255, 0.1);
-  text-decoration: underline;
-}
-
-.value-input {
-  width: 60px;
-  padding: 2px 4px;
-  border: 1px solid #ccc;
-  border-radius: 3px;
-  background: transparent;
-  color: inherit;
-  font-size: inherit;
-  text-align: left;
-}
-
-.value-input:focus {
-  outline: none;
-  border-color: #007bff;
-  box-shadow: 0 0 3px rgba(0, 123, 255, 0.3);
 }
 
 .species-section {
@@ -776,6 +369,10 @@ function stopEditTau() {
   gap: 8px;
 }
 
+.species-header:hover {
+  background-color: rgba(255, 255, 255, 0.15);
+}
+
 .species-title {
   flex: 1;
 }
@@ -795,10 +392,6 @@ function stopEditTau() {
   background: #c9302c;
 }
 
-.species-header:hover {
-  background-color: rgba(255, 255, 255, 0.15);
-}
-
 .species-content {
   padding: 10px;
   pointer-events: auto;
@@ -806,6 +399,60 @@ function stopEditTau() {
   max-width: 100%;
   width: 100%;
   box-sizing: border-box;
-  overflow: hidden;
+  /*
+    CSS疑似要素のツールチップ（.tooltip-target:hover::after）を
+    設定パネル内で見切れないようにする。
+  */
+  overflow: visible;
+}
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+  width: 100%;
+  /* ツールチップが行の外にはみ出せるようにする */
+  overflow: visible;
+}
+
+.setting-row label {
+  width: 150px;
+  text-align: left;
+  margin-right: 10px;
+  flex-shrink: 0;
+  line-height: 1.3;
+}
+
+.setting-row input[type="range"] {
+  width: 140px;
+  min-width: 100px;
+  max-width: 220px;
+  margin: 0 10px;
+}
+
+.value-input {
+  width: 70px;
+  padding: 2px 4px;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+}
+
+.value-input:focus {
+  outline: none;
+  border-color: #007bff;
+  box-shadow: 0 0 3px rgba(0, 123, 255, 0.3);
+}
+
+.editable-value {
+  width: 70px;
+  padding: 2px 4px;
+  border: 1px dashed rgba(255, 255, 255, 0.35);
+  border-radius: 3px;
+  cursor: pointer;
+  text-align: right;
+  user-select: none;
 }
 </style>

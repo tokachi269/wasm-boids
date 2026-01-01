@@ -35,11 +35,11 @@ SimulationTuningParams getSimulationTuningParams() {
 }
 
 // JavaScript 側からグローバルチューニングパラメータを設定
-// maxEscapeWeight と separationMinFactor は 0〜1 にクランプ
+// maxEscapeWeight は 0〜1 にクランプ
 void setSimulationTuningParams(const SimulationTuningParams &params) {
     gSimulationTuning = params;
     gSimulationTuning.maxEscapeWeight = std::clamp(gSimulationTuning.maxEscapeWeight, 0.0f, 1.0f);
-    gSimulationTuning.separationMinFactor = std::clamp(gSimulationTuning.separationMinFactor, 0.0f, 1.0f);
+    gSimulationTuning.schoolPullCoefficient = std::max(gSimulationTuning.schoolPullCoefficient, 0.0f);
 }
 
 EMSCRIPTEN_BINDINGS(my_module)
@@ -79,10 +79,8 @@ value_object<SimulationTuningParams>("SimulationTuningParams")
     .field("maxEscapeWeight", &SimulationTuningParams::maxEscapeWeight)
     .field("baseEscapeStrength", &SimulationTuningParams::baseEscapeStrength)
     .field("escapeStrengthPerThreat", &SimulationTuningParams::escapeStrengthPerThreat)
-    .field("cohesionBoost", &SimulationTuningParams::cohesionBoost)
-    .field("separationMinFactor", &SimulationTuningParams::separationMinFactor)
-    .field("alignmentBoost", &SimulationTuningParams::alignmentBoost)
-    .field("fastAttractStrength", &SimulationTuningParams::fastAttractStrength);
+    .field("fastAttractStrength", &SimulationTuningParams::fastAttractStrength)
+    .field("schoolPullCoefficient", &SimulationTuningParams::schoolPullCoefficient);
 
     class_<Boid>("Boid")
         .constructor<>()

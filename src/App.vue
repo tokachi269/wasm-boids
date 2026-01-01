@@ -1,231 +1,223 @@
 <template>
   <div id="app">
     <div class="ui-overlay">
-      <h1>Boids Simulation</h1>
-      <details>
-        <summary>Settings</summary>
-        <div v-for="(s, i) in settings" :key="i">
-          <Settings
-            :settings="s"
-            :can-remove="settings.length > 1"
-            @remove="removeSpecies(i)"
-          />
-        </div>
-        <button class="add-species-button" @click="addSpecies">
-          種族を追加
-        </button>
-        <button @click="resetSettings" style="margin-bottom: 1em">
-          リセット
-        </button>
-        <br />
-        <div class="settings tuning-settings">
-          <details class="species-section" :open="false">
-            <summary class="species-header">
-              <span class="species-title">Adjustment</span>
-            </summary>
-            <div class="species-content">
-              <div class="setting-row">
-                <label>脅威減衰<br />(threatDecay):</label>
-                <input
-                  type="range"
-                  min="0"
-                  max="5"
-                  step="0.05"
-                  v-model.number="systemSettings.threatDecay"
-                />
-                <input
-                  class="value-input"
-                  type="number"
-                  step="0.05"
-                  v-model.number="systemSettings.threatDecay"
-                />
+      <div class="ui-panel">
+        <h1>Boids Simulation</h1>
+        <details>
+          <summary>Settings</summary>
+          <div v-for="(s, i) in settings" :key="i">
+            <Settings
+              :settings="s"
+              :can-remove="settings.length > 1"
+              @remove="removeSpecies(i)"
+            />
+          </div>
+          <button class="add-species-button" @click="addSpecies">
+            種族を追加
+          </button>
+          <button @click="resetSettings" style="margin-bottom: 1em">
+            リセット
+          </button>
+          <br />
+          <div class="settings tuning-settings">
+            <details class="species-section" :open="false">
+              <summary class="species-header">
+                <span class="species-title">Adjustment</span>
+              </summary>
+              <div class="species-content">
+                <div class="setting-row tooltip-target" :data-tooltip="tuningHelp.threatDecay">
+                  <label :title="tuningHelp.threatDecay">脅威減衰<br />(threatDecay):</label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="5"
+                    step="0.05"
+                    v-model.number="systemSettings.threatDecay"
+                    :title="tuningHelp.threatDecay"
+                  />
+                  <input
+                    class="value-input"
+                    type="number"
+                    step="0.05"
+                    v-model.number="systemSettings.threatDecay"
+                    :title="tuningHelp.threatDecay"
+                  />
+                </div>
+                <div class="setting-row tooltip-target" :data-tooltip="tuningHelp.threatGain">
+                  <label :title="tuningHelp.threatGain">脅威増幅<br />(threatGain):</label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="5"
+                    step="0.05"
+                    v-model.number="systemSettings.threatGain"
+                    :title="tuningHelp.threatGain"
+                  />
+                  <input
+                    class="value-input"
+                    type="number"
+                    step="0.05"
+                    v-model.number="systemSettings.threatGain"
+                    :title="tuningHelp.threatGain"
+                  />
+                </div>
+                <div class="setting-row tooltip-target" :data-tooltip="tuningHelp.maxEscapeWeight">
+                  <label :title="tuningHelp.maxEscapeWeight">最大逃避重み<br />(maxEscapeWeight):</label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    v-model.number="systemSettings.maxEscapeWeight"
+                    :title="tuningHelp.maxEscapeWeight"
+                  />
+                  <input
+                    class="value-input"
+                    type="number"
+                    step="0.01"
+                    v-model.number="systemSettings.maxEscapeWeight"
+                    :title="tuningHelp.maxEscapeWeight"
+                  />
+                </div>
+                <div class="setting-row tooltip-target" :data-tooltip="tuningHelp.baseEscapeStrength">
+                  <label :title="tuningHelp.baseEscapeStrength">基本逃避強度<br />(baseEscapeStrength):</label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="15"
+                    step="0.1"
+                    v-model.number="systemSettings.baseEscapeStrength"
+                    :title="tuningHelp.baseEscapeStrength"
+                  />
+                  <input
+                    class="value-input"
+                    type="number"
+                    step="0.1"
+                    v-model.number="systemSettings.baseEscapeStrength"
+                    :title="tuningHelp.baseEscapeStrength"
+                  />
+                </div>
+                <div class="setting-row tooltip-target" :data-tooltip="tuningHelp.escapeStrengthPerThreat">
+                  <label :title="tuningHelp.escapeStrengthPerThreat">脅威ごとの逃避<br />(escapeStrengthPerThreat):</label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="40"
+                    step="0.5"
+                    v-model.number="systemSettings.escapeStrengthPerThreat"
+                    :title="tuningHelp.escapeStrengthPerThreat"
+                  />
+                  <input
+                    class="value-input"
+                    type="number"
+                    step="0.5"
+                    v-model.number="systemSettings.escapeStrengthPerThreat"
+                    :title="tuningHelp.escapeStrengthPerThreat"
+                  />
+                </div>
+                <div class="setting-row tooltip-target" :data-tooltip="tuningHelp.fastAttractStrength">
+                  <label :title="tuningHelp.fastAttractStrength">補助凝集強度<br />(fastAttractStrength):</label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="3"
+                    step="0.05"
+                    v-model.number="systemSettings.fastAttractStrength"
+                    :title="tuningHelp.fastAttractStrength"
+                  />
+                  <input
+                    class="value-input"
+                    type="number"
+                    step="0.05"
+                    v-model.number="systemSettings.fastAttractStrength"
+                    :title="tuningHelp.fastAttractStrength"
+                  />
+                </div>
+                <div class="setting-row tooltip-target" :data-tooltip="tuningHelp.schoolPullCoefficient">
+                  <label :title="tuningHelp.schoolPullCoefficient">大クラスタ引力係数<br />(schoolPullCoefficient):</label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="0.005"
+                    step="0.00001"
+                    v-model.number="systemSettings.schoolPullCoefficient"
+                    :title="tuningHelp.schoolPullCoefficient"
+                  />
+                  <input
+                    class="value-input"
+                    type="number"
+                    min="0"
+                    step="0.00001"
+                    v-model.number="systemSettings.schoolPullCoefficient"
+                    :title="tuningHelp.schoolPullCoefficient"
+                  />
+                </div>
               </div>
-              <div class="setting-row">
-                <label>脅威増幅<br />(threatGain):</label>
-                <input
-                  type="range"
-                  min="0"
-                  max="5"
-                  step="0.05"
-                  v-model.number="systemSettings.threatGain"
-                />
-                <input
-                  class="value-input"
-                  type="number"
-                  step="0.05"
-                  v-model.number="systemSettings.threatGain"
-                />
+            </details>
+          </div>
+          <br />
+          <div class="settings tuning-settings debug-settings">
+            <details class="species-section" :open="false">
+              <summary class="species-header">
+                <span class="species-title">Debug</span>
+              </summary>
+              <div class="species-content debug-content">
+                <label class="debug-checkbox tooltip-target" :title="debugHelp.enableFogPipeline" :data-tooltip="debugHelp.enableFogPipeline">
+                  <input
+                    type="checkbox"
+                    v-model="debugControls.enableFogPipeline"
+                    :title="debugHelp.enableFogPipeline"
+                  />
+                  フォグ/SSAO/ブルームを有効化
+                </label>
+                <label class="debug-checkbox tooltip-target" :title="debugHelp.enableShadows" :data-tooltip="debugHelp.enableShadows">
+                  <input type="checkbox" v-model="debugControls.enableShadows" :title="debugHelp.enableShadows" />
+                  影描画を有効化
+                </label>
+                <label class="debug-checkbox tooltip-target" :title="debugHelp.enableTailAnimation" :data-tooltip="debugHelp.enableTailAnimation">
+                  <input
+                    type="checkbox"
+                    v-model="debugControls.enableTailAnimation"
+                    :title="debugHelp.enableTailAnimation"
+                  />
+                  尾びれアニメーションを有効化
+                </label>
+                <label class="debug-checkbox tooltip-target" :title="debugHelp.showSpeciesEnvelopes" :data-tooltip="debugHelp.showSpeciesEnvelopes">
+                  <input type="checkbox" v-model="showSpeciesEnvelopes" :title="debugHelp.showSpeciesEnvelopes" />
+                  種族エンベロープ表示
+                </label>
+                <label class="debug-checkbox tooltip-target" :title="debugHelp.showSpeciesClusters" :data-tooltip="debugHelp.showSpeciesClusters">
+                  <input type="checkbox" v-model="showSpeciesClusters" :title="debugHelp.showSpeciesClusters" />
+                  クラスター表示
+                </label>
+                <label class="debug-checkbox tooltip-target" :title="debugHelp.showSpeciesSchoolClusters" :data-tooltip="debugHelp.showSpeciesSchoolClusters">
+                  <input type="checkbox" v-model="showSpeciesSchoolClusters" :title="debugHelp.showSpeciesSchoolClusters" />
+                  大クラスター表示
+                </label>
+                <label class="debug-checkbox tooltip-target" :title="debugHelp.showWorldAxisGrid" :data-tooltip="debugHelp.showWorldAxisGrid">
+                  <input type="checkbox" v-model="showWorldAxisGrid" :title="debugHelp.showWorldAxisGrid" />
+                  ワールド座標グリッド/軸（目盛り）表示
+                </label>
               </div>
-              <div class="setting-row">
-                <label>最大逃避重み<br />(maxEscapeWeight):</label>
-                <input
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.01"
-                  v-model.number="systemSettings.maxEscapeWeight"
-                />
-                <input
-                  class="value-input"
-                  type="number"
-                  step="0.01"
-                  v-model.number="systemSettings.maxEscapeWeight"
-                />
-              </div>
-              <div class="setting-row">
-                <label>基本逃避強度<br />(baseEscapeStrength):</label>
-                <input
-                  type="range"
-                  min="0"
-                  max="15"
-                  step="0.1"
-                  v-model.number="systemSettings.baseEscapeStrength"
-                />
-                <input
-                  class="value-input"
-                  type="number"
-                  step="0.1"
-                  v-model.number="systemSettings.baseEscapeStrength"
-                />
-              </div>
-              <div class="setting-row">
-                <label>脅威ごとの逃避<br />(escapeStrengthPerThreat):</label>
-                <input
-                  type="range"
-                  min="0"
-                  max="40"
-                  step="0.5"
-                  v-model.number="systemSettings.escapeStrengthPerThreat"
-                />
-                <input
-                  class="value-input"
-                  type="number"
-                  step="0.5"
-                  v-model.number="systemSettings.escapeStrengthPerThreat"
-                />
-              </div>
-              <div class="setting-row">
-                <label>凝集ブースト<br />(cohesionBoost):</label>
-                <input
-                  type="range"
-                  min="0"
-                  max="3"
-                  step="0.05"
-                  v-model.number="systemSettings.cohesionBoost"
-                />
-                <input
-                  class="value-input"
-                  type="number"
-                  step="0.05"
-                  v-model.number="systemSettings.cohesionBoost"
-                />
-              </div>
-              <div class="setting-row">
-                <label>分離下限係数<br />(separationMinFactor):</label>
-                <input
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.01"
-                  v-model.number="systemSettings.separationMinFactor"
-                />
-                <input
-                  class="value-input"
-                  type="number"
-                  step="0.01"
-                  v-model.number="systemSettings.separationMinFactor"
-                />
-              </div>
-              <div class="setting-row">
-                <label>整列ブースト<br />(alignmentBoost):</label>
-                <input
-                  type="range"
-                  min="0"
-                  max="2"
-                  step="0.05"
-                  v-model.number="systemSettings.alignmentBoost"
-                />
-                <input
-                  class="value-input"
-                  type="number"
-                  step="0.05"
-                  v-model.number="systemSettings.alignmentBoost"
-                />
-              </div>
-              <div class="setting-row">
-                <label>補助凝集強度<br />(fastAttractStrength):</label>
-                <input
-                  type="range"
-                  min="0"
-                  max="3"
-                  step="0.05"
-                  v-model.number="systemSettings.fastAttractStrength"
-                />
-                <input
-                  class="value-input"
-                  type="number"
-                  step="0.05"
-                  v-model.number="systemSettings.fastAttractStrength"
-                />
-              </div>
-              <div class="setting-row">
-                <label>アンチミル係数<br />(antiMillGain):</label>
-                <input
-                  type="range"
-                  min="0"
-                  max="0.6"
-                  step="0.01"
-                  v-model.number="systemSettings.antiMillGain"
-                />
-                <input
-                  class="value-input"
-                  type="number"
-                  step="0.01"
-                  v-model.number="systemSettings.antiMillGain"
-                />
-              </div>
-            </div>
-          </details>
-        </div>
-        <br />
-        <div class="settings tuning-settings debug-settings">
-          <details class="species-section" :open="false">
-            <summary class="species-header">
-              <span class="species-title">Debug</span>
-            </summary>
-            <div class="species-content debug-content">
-              <label class="debug-checkbox">
-                <input
-                  type="checkbox"
-                  v-model="debugControls.enableFogPipeline"
-                />
-                フォグ/SSAO/ブルームを有効化
-              </label>
-              <label class="debug-checkbox">
-                <input type="checkbox" v-model="debugControls.enableShadows" />
-                影描画を有効化
-              </label>
-              <label class="debug-checkbox">
-                <input
-                  type="checkbox"
-                  v-model="debugControls.enableTailAnimation"
-                />
-                尾びれアニメーションを有効化
-              </label>
-            </div>
-            <div>
-              <label style="margin-left: 1em">
-                <input type="checkbox" v-model="showUnitColors" />
-                Unit色分け
-              </label>
-            </div>
-          </details>
-        </div>
-      </details>
+            </details>
+          </div>
+        </details>
       <div class="info">
         <p>Boids Count: {{ totalBoids }}</p>
       </div>
     </div>
+    </div>
+
+    <!--
+      デバッグHUD（ログではなく画面表示）
+      種族エンベロープの中心座標と半径を確認する用途。
+      - showSpeciesEnvelopes が ON のときだけ表示する。
+      - 文字列更新はフレーム毎ではなく間引き、性能劣化を避ける。
+    -->
+    <pre v-if="showSpeciesEnvelopes && speciesEnvelopeHudText" class="debug-hud">
+{{ speciesEnvelopeHudText }}
+    </pre>
+
     <div ref="threeContainer" class="three-container" />
     <audio
       ref="backgroundAudio"
@@ -309,60 +301,86 @@ function fetchTreeStructure() {
 const deviceProfile = detectDeviceProfile();
 const useLowSpecPreset =
   deviceProfile.isMobile || deviceProfile.hasIntegratedGpu;
-const mobileBoidCount = useLowSpecPreset ? 6000 : 10000;
+// 性能を落とさず、PC では見栄えする密度にする。
+const defaultBoidCount = useLowSpecPreset ? 6000 : 20000;
 
 const DEFAULT_SETTINGS = [
   {
     species: "Boids", // 種族名
-    count: mobileBoidCount, // 群れの数（スマホなら6000、PCなら10000）
-    cohesion: 24.1, // 凝集
+    count: defaultBoidCount, // 群れの数（低スペックでは軽量化）
+    // 画面初期値（個体数以外）を「イワシっぽい回転する群れ」向けに調整。
+    // 値はスライダー操作で扱いやすいように“キリの良い数”へ寄せる。
+    cohesion: 20.0, // 凝集
     cohesionRange: 5, // 凝集範囲
-    separation: 3.4, // 分離
+    separation: 4.0, // 分離
     separationRange: 0.4, // 分離範囲
-    alignment: 17.05, // 整列
-    alignmentRange: 2, // 整列範囲
+    alignment: 7.0, // 整列
+    alignmentRange: 1, // 整列範囲
     maxSpeed: 0.33, // 最大速度
-    maxTurnAngle: 0.233, // 最大旋回角
-    maxNeighbors: 6, // 最大近傍数
+    maxTurnAngle: 0.25, // 最大旋回速度(rad/sec)
+    maxNeighbors: 4, // 最大近傍数
     horizontalTorque: 0.02, // 水平化トルク
-    torqueStrength: 4.487, // 回転トルク強度
-    lambda: 0.801, // 速度調整係数
-    tau: 0.1, // 記憶時間スケール
+    torqueStrength: 1.0, // 回転トルク強度
+    lambda: 0.8, // 速度調整係数（減衰係数）
+    tau: 0.8, // 記憶時間
     predatorAlertRadius: 1.0, // 捕食者を察知する距離
-    densityReturnStrength: 0.0, // 疎密に応じて群れへ戻す調整用強度
+    densityReturnStrength: 5.0, // 疎密に応じて群れへ戻す調整用強度
+    isPredator: false,
   },
   {
     species: "Predator",
-    count: 1,
-    cohesion: 5.58, // 捕食者には使わない
+    count: 3,
+    cohesion: 0.0, // 捕食者は群集力学を使わない
+    cohesionRange: 5.0,
     separation: 0.0,
+    separationRange: 0.1,
     alignment: 0.0,
-    maxSpeed: 1.37, // 速く逃げられるよう速度は大きめ
-    minSpeed: 0.4,
-    maxTurnAngle: 0.13,
-    separationRange: 14.0,
-    alignmentRange: 11.0,
-    cohesionRange: 77.0,
+    alignmentRange: 1.0,
+    predatorAlertRadius: 0.0,
+    densityReturnStrength: 0.0,
+    maxSpeed: 2.0,
+    minSpeed: 0.0,
+    maxTurnAngle: 0.4,
     maxNeighbors: 0,
     lambda: 0.05,
     tau: 1.0, // 捕食者は常に追いかける
-    horizontalTorque: 0.022,
-    torqueStrength: 0.0,
+    horizontalTorque: 0.01,
+    torqueStrength: 2.5,
     isPredator: true, // 捕食者フラグ
   },
 ];
 
 const DEFAULT_TUNING_SETTINGS = {
-  threatDecay: 0.75, // 脅威減衰速度（1/sec）
-  threatGain: 2.0, // 脅威→逃避ブレンド倍率
+  threatDecay: 1.0, // 脅威減衰速度（1/sec）
+  threatGain: 1.0, // 脅威→逃避ブレンド倍率
   maxEscapeWeight: 1.0, // 逃避方向の最大割合（0〜1）
-  baseEscapeStrength: 3.0, // 基本逃避強度
+  baseEscapeStrength: 5.0, // 基本逃避強度
   escapeStrengthPerThreat: 10.0, // 脅威レベルごとの追加逃避強度
-  cohesionBoost: 2.0, // 脅威時の凝集力ブースト
-  separationMinFactor: 1.0, // 脅威時の分離力スケール下限（0〜1）
-  alignmentBoost: 1.2, // 脅威時の整列力ブースト
-  antiMillGain: 0.15, // 渦抑制用アンチミル係数
-  fastAttractStrength: 1.0, // 近傍不足時の補助凝集強度（0で無効）
+  fastAttractStrength: 2.0, // 近傍不足時の補助凝集強度（0で無効）
+  schoolPullCoefficient: 0.00003, // 大クラスタ引力係数
+};
+
+// 調整スライダーの説明（ユーザ目線）。ホバー時に title として表示する。
+// NOTE: 実装の内部用語ではなく「何がどう変わるか」を短く書く。
+const tuningHelp = {
+  threatDecay: '脅威（捕食者などの危険度）が時間でどれだけ早く消えるか。大きいほど早く落ち着きます。',
+  threatGain: '脅威をどれだけ強く「逃げ」に反映するか。大きいほど危険を強く避けます。',
+  maxEscapeWeight: '逃げ方向の最大割合（0〜1）。1 に近いほど、危険時はほぼ逃げが優先されます。',
+  baseEscapeStrength: '逃避の「舵取り」強度（目標速度へ寄せる強さ）の基本値。大きいほど素早く逃げ方向へ乗ります。',
+  escapeStrengthPerThreat: '脅威レベルに応じて追加される舵取り強度。大きいほど危険度に敏感になります。',
+  fastAttractStrength: '近くの仲間が少ないときに、群れへ戻す補助の凝集強度（0で無効）。',
+  schoolPullCoefficient: '大きな群れ（大クラスタ）へ引き寄せる強さ。大きいほど大群にまとまりやすいです。',
+};
+
+// デバッグ表示/負荷設定の説明（ユーザ目線）。
+const debugHelp = {
+  enableFogPipeline: '見た目（フォグ/SSAO/ブルーム）を有効にします。重い場合は OFF。',
+  enableShadows: '影描画を有効にします。見た目は良くなりますが負荷が上がりやすいです。',
+  enableTailAnimation: '尾びれのアニメーションを有効にします。負荷が気になるなら OFF。',
+  showSpeciesEnvelopes: '各種族の分布（中心/半径）を可視化します。',
+  showSpeciesClusters: 'クラスタ検出結果を可視化します。',
+  showSpeciesSchoolClusters: '大クラスタ（大きな群れ）の結果を可視化します。',
+  showWorldAxisGrid: 'ワールド座標のグリッド/軸（目盛り）を表示します。空間スケール確認用。',
 };
 
 const flockStore = createFlockSettingsStore(
@@ -459,15 +477,53 @@ let groundMesh = null; // 地面メッシュの参照
 
 const paused = ref(false);
 
+// デバッグHUD（Species envelope の中心/半径を画面表示する）
+const speciesEnvelopeHudText = ref("");
+
 // デバッグ用 Unit 可視化フラグ
 const showUnits = ref(true);
 const showUnitSpheres = ref(false);
 const showUnitLines = ref(false);
 const showUnitColors = ref(false);
+const showSpeciesEnvelopes = ref(false);
+const showSpeciesClusters = ref(false);
+const showSpeciesSchoolClusters = ref(false);
+
+// Blenderのビューポートのように、座標系の目盛り（グリッド/軸）を表示するデバッグトグル。
+// - 画面上の数値HUDではなく、3D空間に基準を置くことでスケール感を掴みやすくする。
+// - 描画負荷が極小のため、ON/OFFで即時に切り替える。
+const showWorldAxisGrid = ref(false);
 const unitLayer = ref(1);
 
 let unitSpheres = []; // デバッグ用スフィアメッシュ
 let unitLines = []; // デバッグ用ラインメッシュ
+let envelopeSpheres = []; // 種族エンベロープ可視化用メッシュ
+let envelopeGeometry = null;
+
+// ワールド座標の目盛り（グリッド/軸）
+let worldGridHelper = null;
+let worldAxesHelper = null;
+
+// Species clusters デバッグ可視化（クラスター中心に球を置く）
+let clusterMesh = null;
+let clusterGeometry = null;
+let clusterMaterial = null;
+let clusterMaxInstances = 0;
+
+// Species school clusters（大クラスター/群れ）デバッグ可視化
+// 小クラスターと区別し、重なっても見えるようワイヤーフレームで描画する。
+let schoolClusterMesh = null;
+let schoolClusterGeometry = null;
+let schoolClusterMaterial = null;
+let schoolClusterMaxInstances = 0;
+
+// InstancedMesh 更新用の一時オブジェクト（GC削減）
+const clusterDummy = new THREE.Object3D();
+const clusterColor = new THREE.Color();
+
+// InstancedMesh 更新用の一時オブジェクト（GC削減）
+const schoolClusterDummy = new THREE.Object3D();
+const schoolClusterColor = new THREE.Color();
 
 // GPU 負荷計測用に主要機能を切り替えるデバッグトグル群
 const debugControls = reactive({
@@ -475,6 +531,52 @@ const debugControls = reactive({
   enableShadows: true,
   enableTailAnimation: true,
 });
+
+/**
+ * Blender風の「座標の目盛り」を3D空間に表示する。
+ * - GridHelper: XZ平面に格子を描く（距離感/中心の把握用）
+ * - AxesHelper: XYZ軸を描く（向きの把握用）
+ */
+function applyWorldAxisGridState() {
+  if (!scene) {
+    return;
+  }
+
+  const enabled = showWorldAxisGrid.value;
+
+  if (enabled) {
+    // 既に生成済みなら再利用してGCを避ける。
+    if (!worldGridHelper) {
+      // size=200, divisions=200 -> 1ユニット刻みのグリッド。
+      // デバッグ用途なので色は控えめな明度にする。
+      worldGridHelper = new THREE.GridHelper(
+        200,
+        200,
+        toHex(OCEAN_COLORS.AMBIENT_LIGHT),
+        toHex(OCEAN_COLORS.BOTTOM_LIGHT)
+      );
+    }
+    if (!worldAxesHelper) {
+      // 軸の長さは過剰に大きくしない（画面を占有しやすい）
+      worldAxesHelper = new THREE.AxesHelper(12);
+    }
+
+    if (!worldGridHelper.parent) {
+      scene.add(worldGridHelper);
+    }
+    if (!worldAxesHelper.parent) {
+      scene.add(worldAxesHelper);
+    }
+  } else {
+    // removeのみ行い、オブジェクトは保持して次回ON時に再利用する。
+    if (worldGridHelper?.parent) {
+      scene.remove(worldGridHelper);
+    }
+    if (worldAxesHelper?.parent) {
+      scene.remove(worldAxesHelper);
+    }
+  }
+}
 
 let maxDepth = 1;
 let stats = null; // stats-gl パフォーマンス表示
@@ -498,6 +600,48 @@ function positionStatsOverlay(element) {
   element.style.height = "48px";
   element.style.pointerEvents = "auto";
   element.style.transform = "none";
+}
+
+/**
+ * Species envelope（中心座標+半径）を HUD 文字列として整形する。
+ * - ログではなく画面に出す用途。
+ * - 必要最小限の情報（xyz と半径）だけ表示する。
+ */
+function updateSpeciesEnvelopeHud(envelopeData) {
+  const buffer = envelopeData?.buffer;
+  const floatCount = buffer?.length ?? 0;
+  const envelopeCount = Math.floor(floatCount / 5);
+
+  if (!buffer || envelopeCount <= 0) {
+    speciesEnvelopeHudText.value = "";
+    return;
+  }
+
+  // 表示は軽量な文字列組み立てに留める。
+  // env[i] : center=(x,y,z) radius=r count=n
+  const lines = [];
+  for (let i = 0; i < envelopeCount; i += 1) {
+    const base = i * 5;
+    const cx = buffer[base];
+    const cy = buffer[base + 1];
+    const cz = buffer[base + 2];
+    const radius = buffer[base + 3];
+    const population = buffer[base + 4];
+
+    // 半径が0のエンベロープは未確定扱いなので省略しても良いが、
+    // ここでは「有効なものだけ」表示し、情報量を抑える。
+    if (!(radius > 0.0001) || !(population > 0.0)) {
+      continue;
+    }
+
+    lines.push(
+      `env[${i}] center=(${cx.toFixed(2)}, ${cy.toFixed(2)}, ${cz.toFixed(
+        2
+      )}) radius=${radius.toFixed(2)} count=${Math.floor(population)}`
+    );
+  }
+
+  speciesEnvelopeHudText.value = lines.join("\n");
 }
 
 // ツリーの最大深さを計算
@@ -672,6 +816,7 @@ function initThreeJS() {
   rebuildFogPipeline();
   applyShadowDebugState();
   applyTailAnimationDebugState();
+  applyWorldAxisGridState();
   // ウィンドウリサイズ対応
   window.addEventListener("resize", onWindowResize);
 }
@@ -1247,6 +1392,44 @@ function clearUnitVisuals() {
   unitLines = [];
 }
 
+function clearSpeciesEnvelopeVisuals() {
+  for (const mesh of envelopeSpheres) scene.remove(mesh);
+  envelopeSpheres = [];
+}
+
+function clearClusterVisuals(disposeSharedResources = true) {
+  if (clusterMesh) {
+    scene.remove(clusterMesh);
+    // InstancedMesh 自体の破棄。geometry/material は共有しているので、
+    // disposeSharedResources=true の時だけ共有リソースを破棄する。
+    clusterMesh = null;
+    clusterMaxInstances = 0;
+  }
+  if (disposeSharedResources) {
+    clusterGeometry?.dispose?.();
+    clusterMaterial?.dispose?.();
+    clusterGeometry = null;
+    clusterMaterial = null;
+  }
+}
+
+function clearSchoolClusterVisuals(disposeSharedResources = true) {
+  if (schoolClusterMesh) {
+    scene.remove(schoolClusterMesh);
+    // InstancedMesh 自体の破棄。geometry/material は共有しているので、
+    // disposeSharedResources=true の時だけ共有リソースを破棄する。
+    schoolClusterMesh = null;
+    schoolClusterMaxInstances = 0;
+  }
+
+  if (disposeSharedResources) {
+    schoolClusterGeometry?.dispose?.();
+    schoolClusterMaterial?.dispose?.();
+    schoolClusterGeometry = null;
+    schoolClusterMaterial = null;
+  }
+}
+
 // レイヤ制限付き再帰描画
 function drawUnitTree(unit, layer = 0) {
   // スフィア: スライダで制御
@@ -1319,7 +1502,242 @@ function drawUnitTree(unit, layer = 0) {
     }
   }
 }
+
+function renderSpeciesEnvelopes(envelopeData) {
+  if (!showSpeciesEnvelopes.value) {
+    clearSpeciesEnvelopeVisuals();
+    return;
+  }
+
+  const buffer = envelopeData?.buffer;
+  const floatCount = buffer?.length ?? 0;
+  const envelopeCount = Math.floor(floatCount / 5);
+
+  if (!buffer || envelopeCount <= 0) {
+    clearSpeciesEnvelopeVisuals();
+    return;
+  }
+
+  if (!envelopeGeometry) {
+    envelopeGeometry = new THREE.SphereGeometry(1, 24, 18);
+  }
+
+  const hueSpan = 0.65;
+  for (let i = 0; i < envelopeCount; i += 1) {
+    const base = i * 5;
+    const radius = buffer[base + 3];
+    const population = buffer[base + 4];
+    if (radius <= 0.0001 || population <= 0.0) {
+      if (envelopeSpheres[i]) {
+        envelopeSpheres[i].visible = false;
+      }
+      continue;
+    }
+
+    let mesh = envelopeSpheres[i];
+    if (!mesh) {
+      const material = new THREE.MeshBasicMaterial({
+        color: new THREE.Color().setHSL(0.6, 0.8, 0.45),
+        wireframe: true,
+        transparent: true,
+        opacity: 0.3,
+        depthWrite: false,
+      });
+      mesh = new THREE.Mesh(envelopeGeometry, material);
+      scene.add(mesh);
+      envelopeSpheres[i] = mesh;
+    }
+
+    mesh.visible = true;
+    mesh.position.set(buffer[base], buffer[base + 1], buffer[base + 2]);
+    mesh.scale.set(radius, radius, radius);
+    mesh.material.color.setHSL((i % 7) / 7 * hueSpan, 0.85, 0.5);
+    mesh.material.opacity = 0.22 + Math.min(population / 1000, 1) * 0.25;
+  }
+
+  for (let i = envelopeCount; i < envelopeSpheres.length; i += 1) {
+    if (envelopeSpheres[i]) {
+      envelopeSpheres[i].visible = false;
+    }
+  }
+}
+
+/**
+ * Species clusters の中心を球でデバッグ表示する。
+ * - 1クラスター = 1インスタンス
+ * - 半径は cluster.radius に比例
+ * - speciesId で色分け
+ */
+function renderSpeciesClusters(clusterData) {
+  if (!showSpeciesClusters.value) {
+    clearClusterVisuals();
+    return;
+  }
+
+  const buffer = clusterData?.buffer;
+  const floatCount = buffer?.length ?? 0;
+  const clusterCount = Math.floor(floatCount / 6);
+
+  if (!buffer || clusterCount <= 0) {
+    clearClusterVisuals();
+    return;
+  }
+
+  if (!clusterGeometry) {
+    // デバッグ用途なので分割数は低め（描画負荷を抑える）
+    clusterGeometry = new THREE.SphereGeometry(1, 12, 10);
+  }
+  if (!clusterMaterial) {
+    clusterMaterial = new THREE.MeshBasicMaterial({
+      transparent: true,
+      opacity: 0.55,
+      depthWrite: false,
+      vertexColors: true,
+    });
+  }
+
+  // InstancedMesh は作り直しが高コストなので、capacity方式で必要なときだけ拡張する。
+  if (!clusterMesh || clusterMaxInstances < clusterCount) {
+    clearClusterVisuals(false);
+    clusterMesh = new THREE.InstancedMesh(
+      clusterGeometry,
+      clusterMaterial,
+      clusterCount
+    );
+    clusterMesh.frustumCulled = false;
+    clusterMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    scene.add(clusterMesh);
+    clusterMaxInstances = clusterCount;
+  }
+
+  // 実際に描画するインスタンス数だけ切り替える（clusterCount が減っても作り直さない）
+  clusterMesh.count = clusterCount;
+
+  const hueSpan = 0.65;
+  // デバッグ表示の球は「クラスターの影響半径」をそのまま描くと大きく見えやすい。
+  // 視認性と直感（周辺の近い個体が入る程度）を優先して表示倍率をかける。
+  const radiusVisualScale = 0.5;
+  const minRadius = 0.25;
+
+  for (let i = 0; i < clusterCount; i += 1) {
+    const base = i * 6;
+    const speciesId = Math.max(0, Math.floor(buffer[base] || 0));
+    const cx = buffer[base + 1];
+    const cy = buffer[base + 2];
+    const cz = buffer[base + 3];
+    const radius = Math.max(minRadius, (buffer[base + 4] || 0) * radiusVisualScale);
+    const weight = Math.max(0, buffer[base + 5] || 0);
+
+    clusterDummy.position.set(cx, cy + 0.02, cz);
+    clusterDummy.scale.setScalar(radius);
+    clusterDummy.updateMatrix();
+    clusterMesh.setMatrixAt(i, clusterDummy.matrix);
+
+    // weight が大きいほど明るく（生きているクラスターが見やすい）
+    const normalized = Math.min(weight / 5000, 1);
+    const hue = (speciesId % 7) / 7 * hueSpan;
+    clusterColor.setHSL(hue, 0.9, 0.18 + normalized * 0.62);
+    clusterMesh.setColorAt(i, clusterColor);
+  }
+
+  clusterMesh.instanceMatrix.needsUpdate = true;
+  if (clusterMesh.instanceColor) {
+    clusterMesh.instanceColor.needsUpdate = true;
+  }
+}
+
+/**
+ * Species school clusters（大クラスター/群れ）の中心を球でデバッグ表示する。
+ * - 1クラスター = 1インスタンス
+ * - 半径は cluster.radius に比例
+ * - 小クラスターと重なっても見やすいように wireframe で描く
+ */
+function renderSpeciesSchoolClusters(clusterData) {
+  if (!showSpeciesSchoolClusters.value) {
+    clearSchoolClusterVisuals();
+    return;
+  }
+
+  const buffer = clusterData?.buffer;
+  const floatCount = buffer?.length ?? 0;
+  const clusterCount = Math.floor(floatCount / 6);
+
+  if (!buffer || clusterCount <= 0) {
+    clearSchoolClusterVisuals();
+    return;
+  }
+
+  if (!schoolClusterGeometry) {
+    // 大クラスターは数が少ないが、視認性のため分割数は控えめに確保する。
+    schoolClusterGeometry = new THREE.SphereGeometry(1, 14, 12);
+  }
+  if (!schoolClusterMaterial) {
+    schoolClusterMaterial = new THREE.MeshBasicMaterial({
+      transparent: true,
+      opacity: 0.35,
+      depthWrite: false,
+      // デバッグ用途：奥に隠れた群れ中心も見たいので depthTest を切る。
+      depthTest: false,
+      vertexColors: true,
+      wireframe: true,
+      // 重なった部分が明るくなり、複数群れの重なりが判別しやすい。
+      blending: THREE.AdditiveBlending,
+    });
+  }
+
+  // InstancedMesh は作り直しが高コストなので、capacity方式で必要なときだけ拡張する。
+  if (!schoolClusterMesh || schoolClusterMaxInstances < clusterCount) {
+    clearSchoolClusterVisuals(false);
+    schoolClusterMesh = new THREE.InstancedMesh(
+      schoolClusterGeometry,
+      schoolClusterMaterial,
+      clusterCount
+    );
+    schoolClusterMesh.frustumCulled = false;
+    schoolClusterMesh.renderOrder = 20;
+    schoolClusterMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    scene.add(schoolClusterMesh);
+    schoolClusterMaxInstances = clusterCount;
+  }
+
+  // 実際に描画するインスタンス数だけ切り替える（clusterCount が減っても作り直さない）
+  schoolClusterMesh.count = clusterCount;
+
+  const hueSpan = 0.65;
+  // 大クラスターは半径が大きくなりやすいので、視認性優先で少し縮めて表示する。
+  const radiusVisualScale = 0.6;
+  const minRadius = 0.6;
+
+  for (let i = 0; i < clusterCount; i += 1) {
+    const base = i * 6;
+    const speciesId = Math.max(0, Math.floor(buffer[base] || 0));
+    const cx = buffer[base + 1];
+    const cy = buffer[base + 2];
+    const cz = buffer[base + 3];
+    const radius = Math.max(minRadius, (buffer[base + 4] || 0) * radiusVisualScale);
+    const weight = Math.max(0, buffer[base + 5] || 0);
+
+    schoolClusterDummy.position.set(cx, cy + 0.03, cz);
+    schoolClusterDummy.scale.setScalar(radius);
+    schoolClusterDummy.updateMatrix();
+    schoolClusterMesh.setMatrixAt(i, schoolClusterDummy.matrix);
+
+    // weight が大きいほど明るく（追跡が安定した群れが見やすい）
+    const normalized = Math.min(weight / 12000, 1);
+    const hue = (speciesId % 7) / 7 * hueSpan;
+    schoolClusterColor.setHSL(hue, 0.85, 0.12 + normalized * 0.75);
+    schoolClusterMesh.setColorAt(i, schoolClusterColor);
+  }
+
+  schoolClusterMesh.instanceMatrix.needsUpdate = true;
+  if (schoolClusterMesh.instanceColor) {
+    schoolClusterMesh.instanceColor.needsUpdate = true;
+  }
+}
 let lastTime = performance.now(); // 前回のフレームのタイムスタンプ
+let unitIdScratch = null;
+let unitIdScratchSize = 0;
+const unitColor = new THREE.Color();
 
 function animate() {
   stats?.begin();
@@ -1384,42 +1802,66 @@ function animate() {
     const lowMap = updateInfo?.lowInstanceToBoid ?? null;
 
     if (unitMappings) {
-      // High LOD 側（packed instance index）
-      for (let inst = 0; inst < highCount; inst++) {
-        const boidIndex = highMap ? highMap[inst] : inst;
-        let unitId = -1;
-        for (let j = 0; j < unitMappings.length; j += 2) {
-          if (unitMappings[j] === boidIndex) {
-            unitId = unitMappings[j + 1];
-            break;
-          }
+      if (unitIdScratchSize !== count) {
+        unitIdScratch = new Int32Array(count);
+        unitIdScratchSize = count;
+      }
+      unitIdScratch.fill(-1);
+      for (let j = 0; j < unitMappings.length; j += 2) {
+        const boidIndex = unitMappings[j];
+        if (boidIndex >= 0 && boidIndex < unitIdScratchSize) {
+          unitIdScratch[boidIndex] = unitMappings[j + 1];
         }
-
-        const color =
-          unitId >= 0
-            ? new THREE.Color().setHSL((unitId % 100) / 100, 0.8, 0.6)
-            : new THREE.Color(1, 0, 0);
-
-        instancedMeshHigh.setColorAt(inst, color);
       }
 
-      // Low LOD 側（packed instance index）
-      for (let inst = 0; inst < lowCount; inst++) {
-        const boidIndex = lowMap ? lowMap[inst] : inst;
-        let unitId = -1;
-        for (let j = 0; j < unitMappings.length; j += 2) {
-          if (unitMappings[j] === boidIndex) {
-            unitId = unitMappings[j + 1];
-            break;
-          }
+      const unitDensities = wasmBridge?.getUnitSimpleDensities?.();
+      const densityCount = unitDensities?.length ?? 0;
+      const densityScale = 0.18;
+      const hueSpan = 0.45;
+      const hueMax = 0.58;
+
+      const applyDensityColor = Boolean(unitDensities && densityCount > 0);
+
+      for (let inst = 0; inst < highCount; inst++) {
+        const boidIndex = highMap ? highMap[inst] : inst;
+        const unitId =
+          boidIndex >= 0 && boidIndex < unitIdScratchSize
+            ? unitIdScratch[boidIndex]
+            : -1;
+
+        if (applyDensityColor && unitId >= 0 && unitId < densityCount) {
+          const density = unitDensities[unitId];
+          const normalized = Math.min(Math.max(density * densityScale, 0), 1);
+          const hue = hueMax - normalized * hueSpan;
+          unitColor.setHSL(hue, 0.85, 0.55);
+        } else if (unitId >= 0) {
+          unitColor.setHSL((unitId % 100) / 100, 0.8, 0.6);
+        } else {
+          unitColor.setRGB(1, 0, 0);
         }
 
-        const color =
-          unitId >= 0
-            ? new THREE.Color().setHSL((unitId % 100) / 100, 0.8, 0.6)
-            : new THREE.Color(1, 0, 0);
+        instancedMeshHigh.setColorAt(inst, unitColor);
+      }
 
-        instancedMeshLow.setColorAt(inst, color);
+      for (let inst = 0; inst < lowCount; inst++) {
+        const boidIndex = lowMap ? lowMap[inst] : inst;
+        const unitId =
+          boidIndex >= 0 && boidIndex < unitIdScratchSize
+            ? unitIdScratch[boidIndex]
+            : -1;
+
+        if (applyDensityColor && unitId >= 0 && unitId < densityCount) {
+          const density = unitDensities[unitId];
+          const normalized = Math.min(Math.max(density * densityScale, 0), 1);
+          const hue = hueMax - normalized * hueSpan;
+          unitColor.setHSL(hue, 0.85, 0.55);
+        } else if (unitId >= 0) {
+          unitColor.setHSL((unitId % 100) / 100, 0.8, 0.6);
+        } else {
+          unitColor.setRGB(1, 0, 0);
+        }
+
+        instancedMeshLow.setColorAt(inst, unitColor);
       }
 
       instancedMeshHigh.instanceColor.needsUpdate = true;
@@ -1446,6 +1888,39 @@ function animate() {
   }
 
   lastShowUnitColors = showUnitColors.value;
+
+  if (showSpeciesEnvelopes.value && wasmBridge) {
+    const envelopeData = wasmBridge.getSpeciesEnvelopes?.();
+    renderSpeciesEnvelopes(envelopeData);
+
+    // HUD 更新も間引く（文字列更新を毎フレーム行わない）
+    if ((frameCounter & 3) === 0) {
+      updateSpeciesEnvelopeHud(envelopeData);
+    }
+  } else if (envelopeSpheres.length > 0) {
+    clearSpeciesEnvelopeVisuals();
+    speciesEnvelopeHudText.value = "";
+  }
+
+  // クラスター表示も更新頻度を間引く（中心推定の確認用途）
+  if (showSpeciesClusters.value && wasmBridge) {
+    if ((frameCounter & 3) === 0) {
+      const clusterData = wasmBridge.getSpeciesClusters?.();
+      renderSpeciesClusters(clusterData);
+    }
+  } else if (clusterMesh) {
+    clearClusterVisuals();
+  }
+
+  // 大クラスター（群れクラスタ）表示も更新頻度を間引く
+  if (showSpeciesSchoolClusters.value && wasmBridge) {
+    if ((frameCounter & 3) === 0) {
+      const schoolClusterData = wasmBridge.getSpeciesSchoolClusters?.();
+      renderSpeciesSchoolClusters(schoolClusterData);
+    }
+  } else if (schoolClusterMesh) {
+    clearSchoolClusterVisuals();
+  }
 
   controls.update();
   updateParticleUniforms();
@@ -1586,6 +2061,11 @@ watch(
   }
 );
 
+watch(showWorldAxisGrid, () => {
+  // ON/OFFの即時反映
+  applyWorldAxisGridState();
+});
+
 // グローバル調整値の変更を監視し、wasm 側へ逐次反映する。
 watch(
   systemSettings,
@@ -1670,6 +2150,12 @@ watch(showUnits, (newValue) => {
   }
 });
 
+watch(showSpeciesEnvelopes, (enabled) => {
+  if (!enabled) {
+    clearSpeciesEnvelopeVisuals();
+  }
+});
+
 // Unit表示モードの変更を監視
 watch([showUnitSpheres, showUnitLines], ([newSpheres, newLines]) => {
   console.log(
@@ -1735,8 +2221,76 @@ watch([showUnitSpheres, showUnitLines], ([newSpheres, newLines]) => {
   pointer-events: none;
 }
 
-.ui-overlay * {
+/*
+  UI はカメラ操作（ドラッグ等）を妨げないため、ヒットテストは
+  左上のパネル領域(ui-panel)に限定する。
+  details を開いた際に子要素が幅100%になっても、画面全体を覆って
+  pointer を奪わないようにする。
+*/
+.ui-panel {
+  display: inline-block;
   pointer-events: auto;
+}
+
+/*
+  簡易ツールチップ
+  - ブラウザによっては input[type=range] などで title のネイティブツールチップが
+    表示されない/出にくいことがあるため、CSS で確実に表示する。
+  - data-tooltip に説明文字列を入れておく。
+  - クリック等の入力を邪魔しないよう、疑似要素は pointer-events: none。
+*/
+.tooltip-target {
+  position: relative;
+}
+
+.tooltip-target:hover::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 0;
+  top: 100%;
+  margin-top: 6px;
+  z-index: 9999;
+
+  max-width: 360px;
+  white-space: normal;
+
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 5px;
+  background-color: rgba(255, 255, 255, 0.05);
+  color: #fff;
+
+  font-size: 12px;
+  line-height: 1.35;
+
+  pointer-events: none;
+}
+
+/*
+  デバッグHUD（画面表示）
+  - シミュレーションの視認性を損なわないよう、控えめな半透明パネルで表示する。
+  - クリック等の入力は奪わない（pointer-events: none）。
+*/
+.debug-hud {
+  position: fixed;
+  left: 12px;
+  bottom: 12px;
+  z-index: 3;
+  pointer-events: none;
+
+  max-width: 520px;
+  max-height: 45vh;
+  overflow: hidden;
+  white-space: pre;
+
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 5px;
+  background-color: rgba(255, 255, 255, 0.05);
+  color: #fff;
+
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .add-species-button {
