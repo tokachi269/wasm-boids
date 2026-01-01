@@ -93,10 +93,8 @@ export class WasmtimeBridge {
     };
     handle({
       threatDecay: toNumber(params.threatDecay, 0.5),
-      threatGain: toNumber(params.threatGain, 2.0),
       maxEscapeWeight: toNumber(params.maxEscapeWeight, 1.0),
       baseEscapeStrength: toNumber(params.baseEscapeStrength, 3.0),
-      escapeStrengthPerThreat: toNumber(params.escapeStrengthPerThreat, 10.0),
       fastAttractStrength: toNumber(params.fastAttractStrength, 1.0),
       schoolPullCoefficient: Math.max(
         0,

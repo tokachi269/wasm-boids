@@ -37,6 +37,11 @@ export class ParticleField {
     this.particlePoints = null;
     this.particleMaterial = null;
     this.elapsedTime = 0;
+
+    // 粒子帯の基準座標（ワールド座標）。
+    // 海中の粒子は「ワールドに漂っている」表現なので、カメラに追従させない。
+    // ＝カメラが移動すると、粒子が視界から流れていく（戻ってこない）。
+    this.worldOrigin = new THREE.Vector3(0, 0, 0);
   }
 
   /**
@@ -106,6 +111,9 @@ export class ParticleField {
 
     this.particleMaterial = material;
     this.setWorldBasis(material.uniforms.uFlowDir.value);
+
+    // 粒子帯の中心はワールド基準で固定する。
+    material.uniforms.uOrigin.value.copy(this.worldOrigin);
     this.update(camera, controls);
     return true;
   }
@@ -172,7 +180,10 @@ export class ParticleField {
     }
 
     const uniforms = this.particleMaterial.uniforms;
-    uniforms.uOrigin.value.copy(targetCamera.position);
+
+    // uOrigin はワールド基準で固定。
+    // NOTE: 海中粒子を“環境”として扱うため、カメラ移動で中心を戻さない。
+    // uniforms.uOrigin は init() で設定済み。
 
     const { baseSpread, baseMaxDistance, baseTargetDistance } = this.particleMaterial.userData || {};
     if (!baseSpread || !baseMaxDistance) {

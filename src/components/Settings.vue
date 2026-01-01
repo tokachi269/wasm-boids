@@ -12,12 +12,12 @@
       </summary>
 
       <div class="species-content">
-        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.species">
+        <div class="setting-row">
           <label :title="settingHelp.species">種族名<br />(Species):</label>
           <span :title="settingHelp.species">{{ settings.species }}</span>
         </div>
 
-        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.count">
+        <div class="setting-row">
           <label :title="settingHelp.count">群れの数(要更新)<br />(Count):</label>
           <input
             type="range"
@@ -49,112 +49,112 @@
           />
         </div>
 
-        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.cohesion">
+        <div class="setting-row">
           <label :title="settingHelp.cohesion">凝集<br />(Cohesion):</label>
           <input type="range" v-model.number="settings.cohesion" min="0" max="40" step="0.01" :title="settingHelp.cohesion" />
           <span v-if="!editingCohesion" class="editable-value" @click="startEditCohesion" :title="settingHelp.cohesion + '（クリックして編集）'">{{ settings.cohesion }}</span>
           <input v-else ref="cohesionInput" class="value-input" type="number" v-model.number="settings.cohesion" min="0" max="40" step="0.01" @blur="stopEditCohesion" @keyup.enter="stopEditCohesion" :title="settingHelp.cohesion" />
         </div>
 
-        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.cohesionRange">
+        <div class="setting-row">
           <label :title="settingHelp.cohesionRange">凝集範囲<br />(Cohesion Range):</label>
           <input type="range" v-model.number="settings.cohesionRange" min="1" max="300" step="1" :title="settingHelp.cohesionRange" />
           <span v-if="!editingCohesionRange" class="editable-value" @click="startEditCohesionRange" :title="settingHelp.cohesionRange + '（クリックして編集）'">{{ settings.cohesionRange }}</span>
           <input v-else ref="cohesionRangeInput" class="value-input" type="number" v-model.number="settings.cohesionRange" min="1" max="300" step="1" @blur="stopEditCohesionRange" @keyup.enter="stopEditCohesionRange" :title="settingHelp.cohesionRange" />
         </div>
 
-        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.separation">
+        <div class="setting-row">
           <label :title="settingHelp.separation">分離<br />(Separation):</label>
           <input type="range" v-model.number="settings.separation" min="0" max="10" step="0.01" :title="settingHelp.separation" />
           <span v-if="!editingSeparation" class="editable-value" @click="startEditSeparation" :title="settingHelp.separation + '（クリックして編集）'">{{ settings.separation }}</span>
           <input v-else ref="separationInput" class="value-input" type="number" v-model.number="settings.separation" min="0" max="10" step="0.01" @blur="stopEditSeparation" @keyup.enter="stopEditSeparation" :title="settingHelp.separation" />
         </div>
 
-        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.separationRange">
+        <div class="setting-row">
           <label :title="settingHelp.separationRange">分離範囲<br />(Separation Range):</label>
           <input type="range" v-model.number="settings.separationRange" min="0.1" max="10" step="0.1" :title="settingHelp.separationRange" />
           <span v-if="!editingSeparationRange" class="editable-value" @click="startEditSeparationRange" :title="settingHelp.separationRange + '（クリックして編集）'">{{ settings.separationRange }}</span>
           <input v-else ref="separationRangeInput" class="value-input" type="number" v-model.number="settings.separationRange" min="0.1" max="10" step="0.1" @blur="stopEditSeparationRange" @keyup.enter="stopEditSeparationRange" :title="settingHelp.separationRange" />
         </div>
 
-        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.alignment">
+        <div class="setting-row">
           <label :title="settingHelp.alignment">整列<br />(Alignment):</label>
           <input type="range" v-model.number="settings.alignment" min="0" max="20" step="0.01" :title="settingHelp.alignment" />
           <span v-if="!editingAlignment" class="editable-value" @click="startEditAlignment" :title="settingHelp.alignment + '（クリックして編集）'">{{ settings.alignment }}</span>
           <input v-else ref="alignmentInput" class="value-input" type="number" v-model.number="settings.alignment" min="0" max="20" step="0.01" @blur="stopEditAlignment" @keyup.enter="stopEditAlignment" :title="settingHelp.alignment" />
         </div>
 
-        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.alignmentRange">
+        <div class="setting-row">
           <label :title="settingHelp.alignmentRange">整列範囲<br />(Alignment Range):</label>
           <input type="range" v-model.number="settings.alignmentRange" min="1" max="100" step="1" :title="settingHelp.alignmentRange" />
           <span v-if="!editingAlignmentRange" class="editable-value" @click="startEditAlignmentRange" :title="settingHelp.alignmentRange + '（クリックして編集）'">{{ settings.alignmentRange }}</span>
           <input v-else ref="alignmentRangeInput" class="value-input" type="number" v-model.number="settings.alignmentRange" min="1" max="100" step="1" @blur="stopEditAlignmentRange" @keyup.enter="stopEditAlignmentRange" :title="settingHelp.alignmentRange" />
         </div>
 
-        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.predatorAlertRadius">
+        <div class="setting-row">
           <label :title="settingHelp.predatorAlertRadius">逃避開始距離<br />(Predator Alert):</label>
           <input type="range" v-model.number="settings.predatorAlertRadius" min="0" max="10" step="0.05" :title="settingHelp.predatorAlertRadius" />
           <span v-if="!editingPredatorAlertRadius" class="editable-value" @click="startEditPredatorAlertRadius" :title="settingHelp.predatorAlertRadius + '（クリックして編集）'">{{ settings.predatorAlertRadius }}</span>
           <input v-else ref="predatorAlertRadiusInput" class="value-input" type="number" v-model.number="settings.predatorAlertRadius" min="0" max="20" step="0.05" @blur="stopEditPredatorAlertRadius" @keyup.enter="stopEditPredatorAlertRadius" :title="settingHelp.predatorAlertRadius" />
         </div>
 
-        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.densityReturnStrength">
+        <div class="setting-row">
           <label :title="settingHelp.densityReturnStrength">密度復帰強度<br />(Density Return):</label>
           <input type="range" v-model.number="settings.densityReturnStrength" min="0" max="80" step="0.5" :title="settingHelp.densityReturnStrength" />
           <span v-if="!editingDensityReturnStrength" class="editable-value" @click="startEditDensityReturnStrength" :title="settingHelp.densityReturnStrength + '（クリックして編集）'">{{ settings.densityReturnStrength }}</span>
           <input v-else ref="densityReturnStrengthInput" class="value-input" type="number" v-model.number="settings.densityReturnStrength" min="0" max="120" step="0.5" @blur="stopEditDensityReturnStrength" @keyup.enter="stopEditDensityReturnStrength" :title="settingHelp.densityReturnStrength" />
         </div>
 
-        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.maxSpeed">
+        <div class="setting-row">
           <label :title="settingHelp.maxSpeed">最大速度<br />(Max Speed):</label>
           <input type="range" v-model.number="settings.maxSpeed" min="0.1" max="2" step="0.01" :title="settingHelp.maxSpeed" />
           <span v-if="!editingMaxSpeed" class="editable-value" @click="startEditMaxSpeed" :title="settingHelp.maxSpeed + '（クリックして編集）'">{{ settings.maxSpeed }}</span>
           <input v-else ref="maxSpeedInput" class="value-input" type="number" v-model.number="settings.maxSpeed" min="0.1" max="2" step="0.01" @blur="stopEditMaxSpeed" @keyup.enter="stopEditMaxSpeed" :title="settingHelp.maxSpeed" />
         </div>
 
-        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.maxTurnAngle">
+        <div class="setting-row">
           <label :title="settingHelp.maxTurnAngle">最大旋回速度<br />(Max Turn Rate, rad/s):</label>
           <input type="range" v-model.number="settings.maxTurnAngle" min="0" max="30" step="0.1" :title="settingHelp.maxTurnAngle" />
           <span v-if="!editingMaxTurnAngle" class="editable-value" @click="startEditMaxTurnAngle" :title="settingHelp.maxTurnAngle + '（クリックして編集）'">{{ settings.maxTurnAngle }}</span>
           <input v-else ref="maxTurnAngleInput" class="value-input" type="number" v-model.number="settings.maxTurnAngle" min="0" max="60" step="0.1" @blur="stopEditMaxTurnAngle" @keyup.enter="stopEditMaxTurnAngle" :title="settingHelp.maxTurnAngle" />
         </div>
 
-        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.maxNeighbors">
+        <div class="setting-row">
           <label :title="settingHelp.maxNeighbors">最大近傍数<br />(Max Neighbors):</label>
           <input type="range" v-model.number="settings.maxNeighbors" min="0" max="32" step="1" :title="settingHelp.maxNeighbors" />
           <span v-if="!editingMaxNeighbors" class="editable-value" @click="startEditMaxNeighbors" :title="settingHelp.maxNeighbors + '（クリックして編集）'">{{ settings.maxNeighbors }}</span>
           <input v-else ref="maxNeighborsInput" class="value-input" type="number" v-model.number="settings.maxNeighbors" min="0" max="32" step="1" @blur="stopEditMaxNeighbors" @keyup.enter="stopEditMaxNeighbors" :title="settingHelp.maxNeighbors" />
         </div>
 
-        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.horizontalTorque">
+        <div class="setting-row">
           <label :title="settingHelp.horizontalTorque">水平化トルク<br />(Horizontal Torque):</label>
           <input type="range" v-model.number="settings.horizontalTorque" min="0.0" max="0.2" step="0.001" :title="settingHelp.horizontalTorque" />
           <span v-if="!editingHorizontalTorque" class="editable-value" @click="startEditHorizontalTorque" :title="settingHelp.horizontalTorque + '（クリックして編集）'">{{ settings.horizontalTorque }}</span>
           <input v-else ref="horizontalTorqueInput" class="value-input" type="number" v-model.number="settings.horizontalTorque" min="0.0" max="0.2" step="0.001" @blur="stopEditHorizontalTorque" @keyup.enter="stopEditHorizontalTorque" :title="settingHelp.horizontalTorque" />
         </div>
 
-        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.torqueStrength">
+        <div class="setting-row">
           <label :title="settingHelp.torqueStrength">回転トルク強度<br />(Torque Strength):</label>
           <input type="range" v-model.number="settings.torqueStrength" min="0.0" max="20" step="0.001" :title="settingHelp.torqueStrength" />
           <span v-if="!editingTorqueStrength" class="editable-value" @click="startEditTorqueStrength" :title="settingHelp.torqueStrength + '（クリックして編集）'">{{ settings.torqueStrength }}</span>
           <input v-else ref="torqueStrengthInput" class="value-input" type="number" v-model.number="settings.torqueStrength" min="0.0" max="5" step="0.001" @blur="stopEditTorqueStrength" @keyup.enter="stopEditTorqueStrength" :title="settingHelp.torqueStrength" />
         </div>
 
-        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.lambda">
+        <div class="setting-row">
           <label :title="settingHelp.lambda">減衰係数<br />(Damping Coefficient):</label>
           <input type="range" v-model.number="settings.lambda" min="0" max="1" step="0.001" :title="settingHelp.lambda" />
           <span v-if="!editingLambda" class="editable-value" @click="startEditLambda" :title="settingHelp.lambda + '（クリックして編集）'">{{ settings.lambda }}</span>
           <input v-else ref="lambdaInput" class="value-input" type="number" v-model.number="settings.lambda" min="0" max="1" step="0.001" @blur="stopEditLambda" @keyup.enter="stopEditLambda" :title="settingHelp.lambda" />
         </div>
 
-        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.tau">
+        <div class="setting-row">
           <label :title="settingHelp.tau">記憶時間<br />(Memory Time):</label>
           <input type="range" v-model.number="settings.tau" min="0" max="5" step="0.01" :title="settingHelp.tau" />
           <span v-if="!editingTau" class="editable-value" @click="startEditTau" :title="settingHelp.tau + '（クリックして編集）'">{{ settings.tau }}</span>
           <input v-else ref="tauInput" class="value-input" type="number" v-model.number="settings.tau" min="0" max="5" step="0.01" @blur="stopEditTau" @keyup.enter="stopEditTau" :title="settingHelp.tau" />
         </div>
 
-        <div class="setting-row tooltip-target" :data-tooltip="settingHelp.isPredator">
+        <div class="setting-row">
           <label :title="settingHelp.isPredator">捕食者フラグ<br />(Is Predator):</label>
           <input type="checkbox" v-model="settings.isPredator" :title="settingHelp.isPredator" />
           <span :title="settingHelp.isPredator">{{ settings.isPredator }}</span>
@@ -400,8 +400,8 @@ function stopEditTau() { stopEditNumber(editingTau); }
   width: 100%;
   box-sizing: border-box;
   /*
-    CSS疑似要素のツールチップ（.tooltip-target:hover::after）を
-    設定パネル内で見切れないようにする。
+    設定の説明はブラウザ標準の title ツールチップを使用する。
+    パネル内で疑似要素を描画する独自ツールチップは使わない。
   */
   overflow: visible;
 }

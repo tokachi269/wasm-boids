@@ -75,10 +75,8 @@ value_object<SpeciesParams>("SpeciesParams")
 
 value_object<SimulationTuningParams>("SimulationTuningParams")
     .field("threatDecay", &SimulationTuningParams::threatDecay)
-    .field("threatGain", &SimulationTuningParams::threatGain)
     .field("maxEscapeWeight", &SimulationTuningParams::maxEscapeWeight)
     .field("baseEscapeStrength", &SimulationTuningParams::baseEscapeStrength)
-    .field("escapeStrengthPerThreat", &SimulationTuningParams::escapeStrengthPerThreat)
     .field("fastAttractStrength", &SimulationTuningParams::fastAttractStrength)
     .field("schoolPullCoefficient", &SimulationTuningParams::schoolPullCoefficient);
 

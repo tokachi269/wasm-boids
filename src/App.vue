@@ -25,7 +25,7 @@
                 <span class="species-title">Adjustment</span>
               </summary>
               <div class="species-content">
-                <div class="setting-row tooltip-target" :data-tooltip="tuningHelp.threatDecay">
+                <div class="setting-row">
                   <label :title="tuningHelp.threatDecay">脅威減衰<br />(threatDecay):</label>
                   <input
                     type="range"
@@ -43,26 +43,8 @@
                     :title="tuningHelp.threatDecay"
                   />
                 </div>
-                <div class="setting-row tooltip-target" :data-tooltip="tuningHelp.threatGain">
-                  <label :title="tuningHelp.threatGain">脅威増幅<br />(threatGain):</label>
-                  <input
-                    type="range"
-                    min="0"
-                    max="5"
-                    step="0.05"
-                    v-model.number="systemSettings.threatGain"
-                    :title="tuningHelp.threatGain"
-                  />
-                  <input
-                    class="value-input"
-                    type="number"
-                    step="0.05"
-                    v-model.number="systemSettings.threatGain"
-                    :title="tuningHelp.threatGain"
-                  />
-                </div>
-                <div class="setting-row tooltip-target" :data-tooltip="tuningHelp.maxEscapeWeight">
-                  <label :title="tuningHelp.maxEscapeWeight">最大逃避重み<br />(maxEscapeWeight):</label>
+                <div class="setting-row">
+                  <label :title="tuningHelp.maxEscapeWeight">逃避優先度<br />(maxEscapeWeight):</label>
                   <input
                     type="range"
                     min="0"
@@ -79,8 +61,8 @@
                     :title="tuningHelp.maxEscapeWeight"
                   />
                 </div>
-                <div class="setting-row tooltip-target" :data-tooltip="tuningHelp.baseEscapeStrength">
-                  <label :title="tuningHelp.baseEscapeStrength">基本逃避強度<br />(baseEscapeStrength):</label>
+                <div class="setting-row">
+                  <label :title="tuningHelp.baseEscapeStrength">逃避舵取り強度<br />(baseEscapeStrength):</label>
                   <input
                     type="range"
                     min="0"
@@ -97,25 +79,7 @@
                     :title="tuningHelp.baseEscapeStrength"
                   />
                 </div>
-                <div class="setting-row tooltip-target" :data-tooltip="tuningHelp.escapeStrengthPerThreat">
-                  <label :title="tuningHelp.escapeStrengthPerThreat">脅威ごとの逃避<br />(escapeStrengthPerThreat):</label>
-                  <input
-                    type="range"
-                    min="0"
-                    max="40"
-                    step="0.5"
-                    v-model.number="systemSettings.escapeStrengthPerThreat"
-                    :title="tuningHelp.escapeStrengthPerThreat"
-                  />
-                  <input
-                    class="value-input"
-                    type="number"
-                    step="0.5"
-                    v-model.number="systemSettings.escapeStrengthPerThreat"
-                    :title="tuningHelp.escapeStrengthPerThreat"
-                  />
-                </div>
-                <div class="setting-row tooltip-target" :data-tooltip="tuningHelp.fastAttractStrength">
+                <div class="setting-row">
                   <label :title="tuningHelp.fastAttractStrength">補助凝集強度<br />(fastAttractStrength):</label>
                   <input
                     type="range"
@@ -133,7 +97,7 @@
                     :title="tuningHelp.fastAttractStrength"
                   />
                 </div>
-                <div class="setting-row tooltip-target" :data-tooltip="tuningHelp.schoolPullCoefficient">
+                <div class="setting-row">
                   <label :title="tuningHelp.schoolPullCoefficient">大クラスタ引力係数<br />(schoolPullCoefficient):</label>
                   <input
                     type="range"
@@ -162,7 +126,7 @@
                 <span class="species-title">Debug</span>
               </summary>
               <div class="species-content debug-content">
-                <label class="debug-checkbox tooltip-target" :title="debugHelp.enableFogPipeline" :data-tooltip="debugHelp.enableFogPipeline">
+                <label class="debug-checkbox" :title="debugHelp.enableFogPipeline">
                   <input
                     type="checkbox"
                     v-model="debugControls.enableFogPipeline"
@@ -170,11 +134,11 @@
                   />
                   フォグ/SSAO/ブルームを有効化
                 </label>
-                <label class="debug-checkbox tooltip-target" :title="debugHelp.enableShadows" :data-tooltip="debugHelp.enableShadows">
+                <label class="debug-checkbox" :title="debugHelp.enableShadows">
                   <input type="checkbox" v-model="debugControls.enableShadows" :title="debugHelp.enableShadows" />
                   影描画を有効化
                 </label>
-                <label class="debug-checkbox tooltip-target" :title="debugHelp.enableTailAnimation" :data-tooltip="debugHelp.enableTailAnimation">
+                <label class="debug-checkbox" :title="debugHelp.enableTailAnimation">
                   <input
                     type="checkbox"
                     v-model="debugControls.enableTailAnimation"
@@ -182,19 +146,19 @@
                   />
                   尾びれアニメーションを有効化
                 </label>
-                <label class="debug-checkbox tooltip-target" :title="debugHelp.showSpeciesEnvelopes" :data-tooltip="debugHelp.showSpeciesEnvelopes">
+                <label class="debug-checkbox" :title="debugHelp.showSpeciesEnvelopes">
                   <input type="checkbox" v-model="showSpeciesEnvelopes" :title="debugHelp.showSpeciesEnvelopes" />
                   種族エンベロープ表示
                 </label>
-                <label class="debug-checkbox tooltip-target" :title="debugHelp.showSpeciesClusters" :data-tooltip="debugHelp.showSpeciesClusters">
+                <label class="debug-checkbox" :title="debugHelp.showSpeciesClusters">
                   <input type="checkbox" v-model="showSpeciesClusters" :title="debugHelp.showSpeciesClusters" />
                   クラスター表示
                 </label>
-                <label class="debug-checkbox tooltip-target" :title="debugHelp.showSpeciesSchoolClusters" :data-tooltip="debugHelp.showSpeciesSchoolClusters">
+                <label class="debug-checkbox" :title="debugHelp.showSpeciesSchoolClusters">
                   <input type="checkbox" v-model="showSpeciesSchoolClusters" :title="debugHelp.showSpeciesSchoolClusters" />
                   大クラスター表示
                 </label>
-                <label class="debug-checkbox tooltip-target" :title="debugHelp.showWorldAxisGrid" :data-tooltip="debugHelp.showWorldAxisGrid">
+                <label class="debug-checkbox" :title="debugHelp.showWorldAxisGrid">
                   <input type="checkbox" v-model="showWorldAxisGrid" :title="debugHelp.showWorldAxisGrid" />
                   ワールド座標グリッド/軸（目盛り）表示
                 </label>
@@ -301,30 +265,30 @@ function fetchTreeStructure() {
 const deviceProfile = detectDeviceProfile();
 const useLowSpecPreset =
   deviceProfile.isMobile || deviceProfile.hasIntegratedGpu;
-// 性能を落とさず、PC では見栄えする密度にする。
-const defaultBoidCount = useLowSpecPreset ? 6000 : 20000;
+// 画面ガワのデフォルト（画像の値）
+// NOTE: 個体数は重い環境でも動かしやすい値を優先する。
+const defaultBoidCount = 4839;
 
 const DEFAULT_SETTINGS = [
   {
     species: "Boids", // 種族名
     count: defaultBoidCount, // 群れの数（低スペックでは軽量化）
-    // 画面初期値（個体数以外）を「イワシっぽい回転する群れ」向けに調整。
-    // 値はスライダー操作で扱いやすいように“キリの良い数”へ寄せる。
-    cohesion: 20.0, // 凝集
+    // 画面ガワの初期値（画像の値）
+    cohesion: 3.66, // 凝集
     cohesionRange: 5, // 凝集範囲
-    separation: 4.0, // 分離
+    separation: 2.15, // 分離
     separationRange: 0.4, // 分離範囲
-    alignment: 7.0, // 整列
+    alignment: 8.0, // 整列
     alignmentRange: 1, // 整列範囲
-    maxSpeed: 0.33, // 最大速度
-    maxTurnAngle: 0.25, // 最大旋回速度(rad/sec)
+    maxSpeed: 0.35, // 最大速度
+    maxTurnAngle: 0.3, // 最大旋回速度(rad/sec)
     maxNeighbors: 4, // 最大近傍数
-    horizontalTorque: 0.02, // 水平化トルク
+    horizontalTorque: 0.03, // 水平化トルク
     torqueStrength: 1.0, // 回転トルク強度
-    lambda: 0.8, // 速度調整係数（減衰係数）
-    tau: 0.8, // 記憶時間
+    lambda: 0.419, // 速度調整係数（減衰係数）
+    tau: 0.5, // 記憶時間
     predatorAlertRadius: 1.0, // 捕食者を察知する距離
-    densityReturnStrength: 5.0, // 疎密に応じて群れへ戻す調整用強度
+    densityReturnStrength: 0.0, // 密度復帰強度
     isPredator: false,
   },
   {
@@ -352,22 +316,18 @@ const DEFAULT_SETTINGS = [
 
 const DEFAULT_TUNING_SETTINGS = {
   threatDecay: 1.0, // 脅威減衰速度（1/sec）
-  threatGain: 1.0, // 脅威→逃避ブレンド倍率
-  maxEscapeWeight: 1.0, // 逃避方向の最大割合（0〜1）
-  baseEscapeStrength: 5.0, // 基本逃避強度
-  escapeStrengthPerThreat: 10.0, // 脅威レベルごとの追加逃避強度
+  maxEscapeWeight: 3.5, // 逃避方向の最大割合（0〜1）
+  baseEscapeStrength: 5.0, // 逃避舵取り強度（目標速度へ寄せる強さ）
   fastAttractStrength: 2.0, // 近傍不足時の補助凝集強度（0で無効）
   schoolPullCoefficient: 0.00003, // 大クラスタ引力係数
 };
-
+  
 // 調整スライダーの説明（ユーザ目線）。ホバー時に title として表示する。
 // NOTE: 実装の内部用語ではなく「何がどう変わるか」を短く書く。
 const tuningHelp = {
   threatDecay: '脅威（捕食者などの危険度）が時間でどれだけ早く消えるか。大きいほど早く落ち着きます。',
-  threatGain: '脅威をどれだけ強く「逃げ」に反映するか。大きいほど危険を強く避けます。',
-  maxEscapeWeight: '逃げ方向の最大割合（0〜1）。1 に近いほど、危険時はほぼ逃げが優先されます。',
-  baseEscapeStrength: '逃避の「舵取り」強度（目標速度へ寄せる強さ）の基本値。大きいほど素早く逃げ方向へ乗ります。',
-  escapeStrengthPerThreat: '脅威レベルに応じて追加される舵取り強度。大きいほど危険度に敏感になります。',
+  maxEscapeWeight: '逃避行動をどれだけ優先するか（0〜1）。1 に近いほど、危険時はほぼ逃げが優先されます。',
+  baseEscapeStrength: '逃避の舵取り強度（目標速度へ寄せる強さ）。大きいほど素早く逃げ方向へ乗ります。',
   fastAttractStrength: '近くの仲間が少ないときに、群れへ戻す補助の凝集強度（0で無効）。',
   schoolPullCoefficient: '大きな群れ（大クラスタ）へ引き寄せる強さ。大きいほど大群にまとまりやすいです。',
 };
@@ -474,6 +434,26 @@ let fogPipeline = null; // 深度フォグパイプライン
 let particleField = null; // 背景パーティクルフィールド
 let dirLight = null; // ディレクショナルライトの参照
 let groundMesh = null; // 地面メッシュの参照
+
+/*
+  起動直後（ユーザーがカメラ操作する前）は、群れ全体が画面中央に来るように
+  「種族エンベロープ（中心座標）」へ OrbitControls の target を滑らかに合わせる。
+  - ユーザーが操作を開始したら即座に無効化する（意図しない自動追従を避ける）。
+  - envelope は WASM 側の集計で得られるため、個体数に対して軽量。
+  - 追従中だけ envelopeData を取得し、不要な負荷を避ける。
+*/
+const startupCameraLookAt = {
+  active: true,
+  userInteracted: false,
+  controlsHooked: false,
+  startedAtMs: 0,
+  maxDurationMs: 6000,
+  smoothingSpeed: 4.0, // 大きいほど速く追従（指数平滑）
+};
+
+// GC を避けるため、Vector3 は使い回す。
+const startupEnvelopeTarget = new THREE.Vector3(0, 0, 0);
+const startupEnvelopeTargetScratch = new THREE.Vector3(0, 0, 0);
 
 const paused = ref(false);
 
@@ -776,6 +756,18 @@ function initThreeJS() {
   controls.enableDamping = true; // なめらかな操作
   controls.dampingFactor = 0.1;
 
+  // 起動直後だけ、種族エンベロープ中心へ注視点を滑らかに合わせる。
+  // OrbitControls の start イベントでユーザー操作開始を検出できる。
+  startupCameraLookAt.active = true;
+  startupCameraLookAt.userInteracted = false;
+  startupCameraLookAt.startedAtMs = performance.now();
+  if (!startupCameraLookAt.controlsHooked) {
+    startupCameraLookAt.controlsHooked = true;
+    controls.addEventListener("start", () => {
+      startupCameraLookAt.userInteracted = true;
+    });
+  }
+
   // 地面メッシュ追加
   const groundGeo = new THREE.PlaneGeometry(300, 300);
   const groundMat = createFadeOutGroundMaterial();
@@ -819,6 +811,87 @@ function initThreeJS() {
   applyWorldAxisGridState();
   // ウィンドウリサイズ対応
   window.addEventListener("resize", onWindowResize);
+}
+
+/**
+ * species envelope バッファ（5 float/1 envelope）から、全体の注視点を計算する。
+ * バッファ形式は HUD/描画と同じ: (cx, cy, cz, radius, population)
+ * - population を重みとして中心を加重平均する。
+ * - 有効な envelope（radius>0 かつ population>0）のみを採用する。
+ */
+function computeSpeciesEnvelopeWeightedCenter(envelopeData, outCenter) {
+  const buffer = envelopeData?.buffer;
+  const floatCount = buffer?.length ?? 0;
+  const envelopeCount = Math.floor(floatCount / 5);
+
+  if (!buffer || envelopeCount <= 0) {
+    return false;
+  }
+
+  let sumX = 0;
+  let sumY = 0;
+  let sumZ = 0;
+  let sumW = 0;
+
+  for (let i = 0; i < envelopeCount; i += 1) {
+    const base = i * 5;
+    const cx = buffer[base];
+    const cy = buffer[base + 1];
+    const cz = buffer[base + 2];
+    const radius = buffer[base + 3];
+    const population = buffer[base + 4];
+
+    if (!(radius > 0.0001) || !(population > 0.0)) {
+      continue;
+    }
+
+    // population は大きくなりうるため、念のため上限を設けて暴走を避ける。
+    const weight = Math.min(population, 50000);
+    sumX += cx * weight;
+    sumY += cy * weight;
+    sumZ += cz * weight;
+    sumW += weight;
+  }
+
+  if (!(sumW > 0)) {
+    return false;
+  }
+
+  outCenter.set(sumX / sumW, sumY / sumW, sumZ / sumW);
+  return true;
+}
+
+function shouldAutoLookAtSpeciesEnvelope() {
+  if (!startupCameraLookAt.active || startupCameraLookAt.userInteracted) {
+    return false;
+  }
+  if (!camera || !controls) {
+    return false;
+  }
+  const elapsed = performance.now() - startupCameraLookAt.startedAtMs;
+  return elapsed >= 0 && elapsed <= startupCameraLookAt.maxDurationMs;
+}
+
+function updateStartupCameraLookAt(envelopeData, deltaTime) {
+  if (!shouldAutoLookAtSpeciesEnvelope()) {
+    return;
+  }
+
+  // deltaTime が極端に大きいフレームでは平滑係数が跳ねるので、上限を付ける。
+  const safeDeltaTime = Math.min(Math.max(deltaTime, 0), 0.1);
+  const smoothing = 1.0 - Math.exp(-startupCameraLookAt.smoothingSpeed * safeDeltaTime);
+
+  const hasTarget = computeSpeciesEnvelopeWeightedCenter(
+    envelopeData,
+    startupEnvelopeTargetScratch
+  );
+
+  if (hasTarget) {
+    startupEnvelopeTarget.copy(startupEnvelopeTargetScratch);
+  }
+
+  // まだ有効な envelope が無い場合は、最後のターゲット（初期は原点）へ寄せる。
+  controls.target.lerp(startupEnvelopeTarget, smoothing);
 }
 
 function onWindowResize() {
@@ -1889,8 +1962,13 @@ function animate() {
 
   lastShowUnitColors = showUnitColors.value;
 
-  if (showSpeciesEnvelopes.value && wasmBridge) {
-    const envelopeData = wasmBridge.getSpeciesEnvelopes?.();
+  // species envelope は「表示ON」または「起動直後のカメラ合わせ中」のときだけ取得する。
+  let envelopeData = null;
+  if (wasmBridge && (showSpeciesEnvelopes.value || shouldAutoLookAtSpeciesEnvelope())) {
+    envelopeData = wasmBridge.getSpeciesEnvelopes?.();
+  }
+
+  if (showSpeciesEnvelopes.value) {
     renderSpeciesEnvelopes(envelopeData);
 
     // HUD 更新も間引く（文字列更新を毎フレーム行わない）
@@ -1901,6 +1979,9 @@ function animate() {
     clearSpeciesEnvelopeVisuals();
     speciesEnvelopeHudText.value = "";
   }
+
+  // 起動直後だけ、エンベロープ中心に注視点を滑らかに合わせる。
+  updateStartupCameraLookAt(envelopeData, deltaTime);
 
   // クラスター表示も更新頻度を間引く（中心推定の確認用途）
   if (showSpeciesClusters.value && wasmBridge) {
@@ -2233,38 +2314,9 @@ watch([showUnitSpheres, showUnitLines], ([newSpheres, newLines]) => {
 }
 
 /*
-  簡易ツールチップ
-  - ブラウザによっては input[type=range] などで title のネイティブツールチップが
-    表示されない/出にくいことがあるため、CSS で確実に表示する。
-  - data-tooltip に説明文字列を入れておく。
-  - クリック等の入力を邪魔しないよう、疑似要素は pointer-events: none。
+  設定の説明はブラウザ標準の title ツールチップを使用する。
+  - 見た目を増やさず、OS/ブラウザの一貫したUIに任せる。
 */
-.tooltip-target {
-  position: relative;
-}
-
-.tooltip-target:hover::after {
-  content: attr(data-tooltip);
-  position: absolute;
-  left: 0;
-  top: 100%;
-  margin-top: 6px;
-  z-index: 9999;
-
-  max-width: 360px;
-  white-space: normal;
-
-  padding: 8px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 5px;
-  background-color: rgba(255, 255, 255, 0.05);
-  color: #fff;
-
-  font-size: 12px;
-  line-height: 1.35;
-
-  pointer-events: none;
-}
 
 /*
   デバッグHUD（画面表示）

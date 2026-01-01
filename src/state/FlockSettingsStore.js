@@ -6,7 +6,7 @@ const STORAGE_KEY = 'boids_settings';
 // - メジャーが一致しない（または未保存=旧ユーザ）場合は、localStorage の設定を使わず
 //   デフォルト設定で上書きし、再アクセス時の「変な動き」を防ぐ。
 // 2026-01-01: 調整項目（cohesionBoost / separationMinFactor / alignmentBoost）削除のため +1
-const SETTINGS_SCHEMA_MAJOR_VERSION = 2;
+const SETTINGS_SCHEMA_MAJOR_VERSION = 1;
 const STORAGE_VERSION_KEY = 'boids_settings_schema_major';
 const DEFAULT_SPECIES_FALLBACK = {
   species: 'Species',
