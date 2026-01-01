@@ -267,7 +267,7 @@ const useLowSpecPreset =
   deviceProfile.isMobile || deviceProfile.hasIntegratedGpu;
 // 画面ガワのデフォルト（画像の値）
 // NOTE: 個体数は重い環境でも動かしやすい値を優先する。
-const defaultBoidCount = 4839;
+const defaultBoidCount = 10000;
 
 const DEFAULT_SETTINGS = [
   {
@@ -285,7 +285,7 @@ const DEFAULT_SETTINGS = [
     maxNeighbors: 4, // 最大近傍数
     horizontalTorque: 0.03, // 水平化トルク
     torqueStrength: 1.0, // 回転トルク強度
-    lambda: 0.419, // 速度調整係数（減衰係数）
+    lambda: 0.1, // 速度調整係数（減衰係数）
     tau: 0.5, // 記憶時間
     predatorAlertRadius: 1.0, // 捕食者を察知する距離
     densityReturnStrength: 0.0, // 密度復帰強度
@@ -437,10 +437,10 @@ let groundMesh = null; // 地面メッシュの参照
 
 /*
   起動直後（ユーザーがカメラ操作する前）は、群れ全体が画面中央に来るように
-  「種族エンベロープ（中心座標）」へ OrbitControls の target を滑らかに合わせる。
+  「クラスタ（中心座標）」へ OrbitControls の target を滑らかに合わせる。
   - ユーザーが操作を開始したら即座に無効化する（意図しない自動追従を避ける）。
-  - envelope は WASM 側の集計で得られるため、個体数に対して軽量。
-  - 追従中だけ envelopeData を取得し、不要な負荷を避ける。
+  - cluster は WASM 側の集計で得られるため、個体数に対して軽量。
+  - 追従中だけ clusterData を取得し、不要な負荷を避ける。
 */
 const startupCameraLookAt = {
   active: true,
@@ -452,8 +452,8 @@ const startupCameraLookAt = {
 };
 
 // GC を避けるため、Vector3 は使い回す。
-const startupEnvelopeTarget = new THREE.Vector3(0, 0, 0);
-const startupEnvelopeTargetScratch = new THREE.Vector3(0, 0, 0);
+const startupClusterTarget = new THREE.Vector3(0, 0, 0);
+const startupClusterTargetScratch = new THREE.Vector3(0, 0, 0);
 
 const paused = ref(false);
 
@@ -491,7 +491,7 @@ let clusterMaterial = null;
 let clusterMaxInstances = 0;
 
 // Species school clusters（大クラスター/群れ）デバッグ可視化
-// 小クラスターと区別し、重なっても見えるようワイヤーフレームで描画する。
+// 種族エンベロープ表示と同じ見た目（ワイヤーフレーム/半透明）に揃える。
 let schoolClusterMesh = null;
 let schoolClusterGeometry = null;
 let schoolClusterMaterial = null;
@@ -756,7 +756,7 @@ function initThreeJS() {
   controls.enableDamping = true; // なめらかな操作
   controls.dampingFactor = 0.1;
 
-  // 起動直後だけ、種族エンベロープ中心へ注視点を滑らかに合わせる。
+  // 起動直後だけ、クラスタ中心へ注視点を滑らかに合わせる。
   // OrbitControls の start イベントでユーザー操作開始を検出できる。
   startupCameraLookAt.active = true;
   startupCameraLookAt.userInteracted = false;
@@ -814,17 +814,17 @@ function initThreeJS() {
 }
 
 /**
- * species envelope バッファ（5 float/1 envelope）から、全体の注視点を計算する。
- * バッファ形式は HUD/描画と同じ: (cx, cy, cz, radius, population)
- * - population を重みとして中心を加重平均する。
- * - 有効な envelope（radius>0 かつ population>0）のみを採用する。
+ * species clusters バッファ（6 float/1 cluster）から、全体の注視点を計算する。
+ * バッファ形式は描画と同じ: (speciesId, cx, cy, cz, radius, weight)
+ * - weight を重みとして中心を加重平均する。
+ * - 有効な cluster（weight>0）のみを採用する。
  */
-function computeSpeciesEnvelopeWeightedCenter(envelopeData, outCenter) {
-  const buffer = envelopeData?.buffer;
+function computeSpeciesClusterWeightedCenter(clusterData, outCenter) {
+  const buffer = clusterData?.buffer;
   const floatCount = buffer?.length ?? 0;
-  const envelopeCount = Math.floor(floatCount / 5);
+  const clusterCount = Math.floor(floatCount / 6);
 
-  if (!buffer || envelopeCount <= 0) {
+  if (!buffer || clusterCount <= 0) {
     return false;
   }
 
@@ -833,24 +833,23 @@ function computeSpeciesEnvelopeWeightedCenter(envelopeData, outCenter) {
   let sumZ = 0;
   let sumW = 0;
 
-  for (let i = 0; i < envelopeCount; i += 1) {
-    const base = i * 5;
-    const cx = buffer[base];
-    const cy = buffer[base + 1];
-    const cz = buffer[base + 2];
-    const radius = buffer[base + 3];
-    const population = buffer[base + 4];
+  for (let i = 0; i < clusterCount; i += 1) {
+    const base = i * 6;
+    const cx = buffer[base + 1];
+    const cy = buffer[base + 2];
+    const cz = buffer[base + 3];
+    const weight = Math.max(0, buffer[base + 5] || 0);
 
-    if (!(radius > 0.0001) || !(population > 0.0)) {
+    if (!(weight > 0.0)) {
       continue;
     }
 
-    // population は大きくなりうるため、念のため上限を設けて暴走を避ける。
-    const weight = Math.min(population, 50000);
-    sumX += cx * weight;
-    sumY += cy * weight;
-    sumZ += cz * weight;
-    sumW += weight;
+    // weight は大きくなりうるため、念のため上限を設けて暴走を避ける。
+    const clamped = Math.min(weight, 50000);
+    sumX += cx * clamped;
+    sumY += cy * clamped;
+    sumZ += cz * clamped;
+    sumW += clamped;
   }
 
   if (!(sumW > 0)) {
@@ -861,7 +860,7 @@ function computeSpeciesEnvelopeWeightedCenter(envelopeData, outCenter) {
   return true;
 }
 
-function shouldAutoLookAtSpeciesEnvelope() {
+function shouldAutoLookAtClusterCenter() {
   if (!startupCameraLookAt.active || startupCameraLookAt.userInteracted) {
     return false;
   }
@@ -872,8 +871,8 @@ function shouldAutoLookAtSpeciesEnvelope() {
   return elapsed >= 0 && elapsed <= startupCameraLookAt.maxDurationMs;
 }
 
-function updateStartupCameraLookAt(envelopeData, deltaTime) {
-  if (!shouldAutoLookAtSpeciesEnvelope()) {
+function updateStartupCameraLookAt(clusterData, deltaTime) {
+  if (!shouldAutoLookAtClusterCenter()) {
     return;
   }
 
@@ -881,17 +880,17 @@ function updateStartupCameraLookAt(envelopeData, deltaTime) {
   const safeDeltaTime = Math.min(Math.max(deltaTime, 0), 0.1);
   const smoothing = 1.0 - Math.exp(-startupCameraLookAt.smoothingSpeed * safeDeltaTime);
 
-  const hasTarget = computeSpeciesEnvelopeWeightedCenter(
-    envelopeData,
-    startupEnvelopeTargetScratch
+  const hasTarget = computeSpeciesClusterWeightedCenter(
+    clusterData,
+    startupClusterTargetScratch
   );
 
   if (hasTarget) {
-    startupEnvelopeTarget.copy(startupEnvelopeTargetScratch);
+    startupClusterTarget.copy(startupClusterTargetScratch);
   }
 
-  // まだ有効な envelope が無い場合は、最後のターゲット（初期は原点）へ寄せる。
-  controls.target.lerp(startupEnvelopeTarget, smoothing);
+  // まだ有効な cluster が無い場合は、最後のターゲット（初期は原点）へ寄せる。
+  controls.target.lerp(startupClusterTarget, smoothing);
 }
 
 function onWindowResize() {
@@ -1657,15 +1656,18 @@ function renderSpeciesClusters(clusterData) {
   }
 
   if (!clusterGeometry) {
-    // デバッグ用途なので分割数は低め（描画負荷を抑える）
-    clusterGeometry = new THREE.SphereGeometry(1, 12, 10);
+    // 種族エンベロープ表示と同じ見た目に揃える（ワイヤーフレームの密度も一致させる）。
+    // InstancedMesh で共有されるので、生成は1回だけ。
+    clusterGeometry = new THREE.SphereGeometry(1, 24, 18);
   }
   if (!clusterMaterial) {
     clusterMaterial = new THREE.MeshBasicMaterial({
       transparent: true,
-      opacity: 0.55,
+      // 種族エンベロープと同じ “薄いワイヤーフレーム” の見た目に合わせる。
+      opacity: 0.3,
       depthWrite: false,
       vertexColors: true,
+      wireframe: true,
     });
   }
 
@@ -1741,20 +1743,16 @@ function renderSpeciesSchoolClusters(clusterData) {
   }
 
   if (!schoolClusterGeometry) {
-    // 大クラスターは数が少ないが、視認性のため分割数は控えめに確保する。
-    schoolClusterGeometry = new THREE.SphereGeometry(1, 14, 12);
+    // 種族エンベロープ表示と同じ見た目に揃える。
+    schoolClusterGeometry = new THREE.SphereGeometry(1, 24, 18);
   }
   if (!schoolClusterMaterial) {
     schoolClusterMaterial = new THREE.MeshBasicMaterial({
       transparent: true,
-      opacity: 0.35,
+      opacity: 0.3,
       depthWrite: false,
-      // デバッグ用途：奥に隠れた群れ中心も見たいので depthTest を切る。
-      depthTest: false,
       vertexColors: true,
       wireframe: true,
-      // 重なった部分が明るくなり、複数群れの重なりが判別しやすい。
-      blending: THREE.AdditiveBlending,
     });
   }
 
@@ -1767,7 +1765,6 @@ function renderSpeciesSchoolClusters(clusterData) {
       clusterCount
     );
     schoolClusterMesh.frustumCulled = false;
-    schoolClusterMesh.renderOrder = 20;
     schoolClusterMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     scene.add(schoolClusterMesh);
     schoolClusterMaxInstances = clusterCount;
@@ -1962,9 +1959,9 @@ function animate() {
 
   lastShowUnitColors = showUnitColors.value;
 
-  // species envelope は「表示ON」または「起動直後のカメラ合わせ中」のときだけ取得する。
+  // species envelope は「表示ON」のときだけ取得する。
   let envelopeData = null;
-  if (wasmBridge && (showSpeciesEnvelopes.value || shouldAutoLookAtSpeciesEnvelope())) {
+  if (wasmBridge && showSpeciesEnvelopes.value) {
     envelopeData = wasmBridge.getSpeciesEnvelopes?.();
   }
 
@@ -1980,8 +1977,12 @@ function animate() {
     speciesEnvelopeHudText.value = "";
   }
 
-  // 起動直後だけ、エンベロープ中心に注視点を滑らかに合わせる。
-  updateStartupCameraLookAt(envelopeData, deltaTime);
+  // 起動直後だけ、クラスタ中心に注視点を滑らかに合わせる。
+  let startupClusterData = null;
+  if (wasmBridge && shouldAutoLookAtClusterCenter()) {
+    startupClusterData = wasmBridge.getSpeciesClusters?.();
+  }
+  updateStartupCameraLookAt(startupClusterData, deltaTime);
 
   // クラスター表示も更新頻度を間引く（中心推定の確認用途）
   if (showSpeciesClusters.value && wasmBridge) {

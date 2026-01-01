@@ -79,23 +79,6 @@ inline bool tryNormalizeXZ(const glm::vec3 &v, glm::vec3 &out) {
   return true;
 }
 
-float computeLeafDensityValue(const BoidUnit *leaf) {
-  if (!leaf) {
-    return 0.0f;
-  }
-  float minRadius = kLeafDensityMinRadius;
-  if (leaf->speciesId >= 0 &&
-      leaf->speciesId < static_cast<int>(globalSpeciesParams.size())) {
-    minRadius =
-        glm::max(kLeafDensityMinRadius,
-                 globalSpeciesParams[leaf->speciesId].separationRange * 0.25f);
-  }
-  const float safeRadius = glm::max(leaf->radius, minRadius);
-  const float volume = safeRadius * safeRadius * safeRadius + 1e-3f;
-  return static_cast<float>(glm::max<std::size_t>(leaf->indices.size(), 1)) /
-         volume;
-}
-
 float computeLeafSimpleDensity(const int *indices, std::size_t count,
                                const SoABuffers &buffers,
                                const SpeciesParams &speciesParams) {
@@ -166,93 +149,6 @@ float computeLeafSimpleDensity(const int *indices, std::size_t count,
     return 1.0f / smoothingSq;
   }
   return accum / weight;
-}
-
-void refreshLeafDensityDirection(BoidUnit *leaf) {
-  if (!leaf) {
-    return;
-  }
-  const int sid = leaf->speciesId;
-  if (sid < 0 || sid >= static_cast<int>(globalSpeciesParams.size())) {
-    leaf->densityDir = glm::vec3(0.00001f);
-    leaf->densityDirStrength = 0.0f;
-    return;
-  }
-
-  const float cohesionRange = globalSpeciesParams[sid].cohesionRange;
-  const float localMin = leaf->radius * 2.0f;
-  const float localMax = leaf->radius * 4.0f;
-  const float baseRange = std::max(std::min(cohesionRange, localMax), localMin);
-  const float searchRadius = std::max(baseRange, 0.5f);
-  const float searchRadiusSq = searchRadius * searchRadius;
-
-  const float selfDensity = computeLeafDensityValue(leaf);
-  glm::vec3 gradient(0.0f);
-  float totalWeight = 0.0f;
-
-  BoidTree::instance().forEachLeafIntersectingSphere(
-      leaf->center, searchRadius, [&](const SpatialLeaf &leafInfo) {
-        const BoidUnit *other = leafInfo.node;
-        if (!other || other == leaf) {
-          return;
-        }
-        if (other->speciesId != sid) {
-          return;
-        }
-
-        glm::vec3 delta = other->center - leaf->center;
-        float distSq = glm::length2(delta);
-        if (distSq < 1e-6f || distSq > searchRadiusSq) {
-          return;
-        }
-
-        float dist = glm::sqrt(distSq);
-        if (dist <= 1e-6f) {
-          return;
-        }
-
-        glm::vec3 dir = delta * (1.0f / dist);
-        float otherDensity = computeLeafDensityValue(other);
-
-        // 種が要求する復帰強度に応じて閾値を滑らかに調整する
-        const float returnStrength =
-          std::max(globalSpeciesParams[sid].densityReturnStrength, 0.0f);
-        const float rawContrast = 0.08f + returnStrength * 0.01f;
-        const float contrast =
-          std::max(0.05f, std::min(rawContrast, 0.25f));
-        const float significantDensity = selfDensity * (1.0f + contrast);
-        if (otherDensity <= significantDensity) {
-          return;
-        }
-
-        // 密度差が十分ある方向のみを加重して薄い領域への吸引を防ぐ
-        float densityExcess = otherDensity - significantDensity;
-        float kernel = 1.0f / (1.0f + dist);
-        float weight = (densityExcess * densityExcess) * kernel;
-        gradient += dir * weight;
-        totalWeight += weight;
-      });
-
-  if (totalWeight > 0.0f) {
-    float gradLen2 = glm::length2(gradient);
-    if (gradLen2 > 1e-6f) {
-      glm::vec3 newDir = gradient * (1.0f / glm::sqrt(gradLen2));
-      if (leaf->densityDirStrength > 0.0f) {
-        glm::vec3 blended = glm::mix(leaf->densityDir, newDir, 0.35f);
-        float blendLen2 = glm::length2(blended);
-        if (blendLen2 > 1e-6f) {
-          blended *= 1.0f / glm::sqrt(blendLen2);
-          newDir = blended;
-        }
-      }
-      leaf->densityDir = newDir;
-      leaf->densityDirStrength = glm::clamp(totalWeight, 0.0f, 2.0f);
-      return;
-    }
-  }
-
-  leaf->densityDir = glm::vec3(0.0f);
-  leaf->densityDirStrength = 0.0f;
 }
 
 } // namespace
@@ -476,19 +372,34 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
         acceleration += (desiredVel - velocity) * predatorWarmup * 0.75f;
       }
     } else if (unit->buf->stresses[gIdx] > 0.1f ||
-           glm::length(unit->buf->predatorInfluences[gIdx]) > 0.001f) {
+       glm::length2(unit->buf->predatorInfluences[gIdx]) > (0.001f * 0.001f)) {
       // -----------------------------------------------
       // 逃避挙動: 捕食者からの影響を逃走加速度に変換
       // -----------------------------------------------
+      // 逃避優先度が 0（デッドゾーン含む）の場合、捕食者由来の処理自体が不要。
+      // ここでは「恐怖(threat)の減衰」だけ行い、逃避方向計算などはスキップする。
+      // 目的:
+      // - ユーザー期待: 逃避OFFなら捕食者由来の効果が走らない
+      // - 性能: 影響ベクトルの正規化や目標速度計算をホットループから外す
+      if (!escapeFeatureEnabled) {
+      unit->buf->predatorThreats[gIdx] = glm::max(
+        unit->buf->predatorThreats[gIdx] - gSimulationTuning.threatDecay * dt,
+        0.0f);
+      } else {
       float currentStress = unit->buf->stresses[gIdx];
       glm::vec3 storedInfluence = unit->buf->predatorInfluences[gIdx];
-      float predatorInfluenceMagnitude = glm::length(storedInfluence);
+      // `length()` は内部で sqrt を行うため、まず length2 を取り、必要なときだけ sqrt する。
+      const float predatorInfluenceMagnitude2 = glm::length2(storedInfluence);
+      const float predatorInfluenceMagnitude =
+        (predatorInfluenceMagnitude2 > 0.0f)
+          ? glm::sqrt(predatorInfluenceMagnitude2)
+          : 0.0f;
 
       // threatState は applyPredatorSweep で蓄積した恐怖レベル (0-1)。
       float threatState = unit->buf->predatorThreats[gIdx];
       // 直接の影響が強い場合は threatState を補強（0-1 に正規化して混ぜる）。
       float influenceThreat =
-          glm::clamp(predatorInfluenceMagnitude * 0.15f, 0.0f, 1.0f);
+        glm::clamp(predatorInfluenceMagnitude * 0.15f, 0.0f, 1.0f);
       threatState = glm::max(threatState, influenceThreat);
       float threatLevel = glm::clamp(threatState, 0.0f, 1.0f);
 
@@ -506,17 +417,19 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
 
       // 逃避モードに入る条件（スムーズに動くよう閾値は少し高め）
       // NOTE: predatorInfluences は後段で減衰しているため、ここが自然なヒステリシスになる。
-      const bool escapeMode = (threatLevel > 0.25f) || (predatorInfluenceMagnitude > 0.35f);
+        const bool escapeMode = (threatLevel > 0.25f) ||
+              (predatorInfluenceMagnitude > 0.35f);
 
       // 逃避優先度が小さいときに「常に少し回避」が残ると、
       // 群れ行動（分離/整列等）との競合が増え、ブルブルの原因になりやすい。
       // そのため escapeMode のときだけ逃避を合成する（低脅威時は逃避を発火させない）。
-      const float escapeBlend = (escapeMode && escapeFeatureEnabled) ? effectiveEscapeWeight : 0.0f;
+        // このブロック内では escapeFeatureEnabled は true が保証される。
+        const float escapeBlend = escapeMode ? effectiveEscapeWeight : 0.0f;
 
       // 逃避加速度を計算（捕食者から遠ざかる方向）
-      glm::vec3 escapeForce = storedInfluence;
-      if (predatorInfluenceMagnitude > 0.001f) {
-        glm::vec3 fleeDir = storedInfluence / predatorInfluenceMagnitude;
+        glm::vec3 escapeForce = storedInfluence;
+        if (predatorInfluenceMagnitude > 0.001f) {
+          glm::vec3 fleeDir = storedInfluence / predatorInfluenceMagnitude;
         // 逃避を「一定加速度を付ける」ではなく「目標速度へ舵取りする」形にする。
         // - 速度がすでに逃走方向に乗っている場合は余計な加速が減り、挙動が滑らかになる。
         // - threat が高いほど、目標速度を少し上げて危険時のキビキビ感を出す。
@@ -528,21 +441,22 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
         const float desiredSpeed =
             globalSpeciesParams[sid].maxSpeed * (1.0f + 0.65f * threatLevel);
         const glm::vec3 desiredVel = fleeDir * desiredSpeed;
-        escapeForce = (desiredVel - velocity) * fleeStrength;
-      }
+          escapeForce = (desiredVel - velocity) * fleeStrength;
+        }
 
       // 通常加速度と逃避加速度の合成（整理版）
       // - 低脅威: 少しだけ回避（加算）
       // - 逃避モード: 逃避を優先（固定割合でブレンドし、競合を減らす）
-      if (escapeBlend > 0.0f) {
-        acceleration =
-            acceleration * (1.0f - escapeBlend) + escapeForce * escapeBlend;
-      }
+        if (escapeBlend > 0.0f) {
+          acceleration =
+              acceleration * (1.0f - escapeBlend) + escapeForce * escapeBlend;
+        }
 
       // threat レベルを時間経過で減衰
-      float decayedThreat =
-          glm::max(threatState - gSimulationTuning.threatDecay * dt, 0.0f);
-      unit->buf->predatorThreats[gIdx] = decayedThreat;
+        float decayedThreat =
+            glm::max(threatState - gSimulationTuning.threatDecay * dt, 0.0f);
+        unit->buf->predatorThreats[gIdx] = decayedThreat;
+      }
     } else {
       // ストレスも影響もない場合は threat を徐々に減衰
       unit->buf->predatorThreats[gIdx] = glm::max(
@@ -621,8 +535,11 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
       newDir = desiredVelocity / speed;
     }
 
-    float dotProduct = glm::dot(oldDir, newDir);
-    float angle = acosf(glm::clamp(dotProduct, -1.0f, 1.0f));
+    // 旋回制限は「角度(acos)」を直接求めず、cos しきい値で判定する。
+    // - `acosf` は高コストなので、ホットループでは避ける。
+    // - 判定自体は angle > maxTurnStep  <=>  dot < cos(maxTurnStep) で同値。
+    const float dotProduct = glm::dot(oldDir, newDir);
+    const float clampedDot = glm::clamp(dotProduct, -1.0f, 1.0f);
     // maxTurnAngle は UI から渡される「1秒あたりの旋回速度(rad/sec)」。
     // フレーム間隔(dt)が揺れても挙動が破綻しないよう、1ステップの上限角は
     // turnRate * dt で算出する。
@@ -654,7 +571,8 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
     constexpr float kMaxTurnStepLimit = 1.2f; // 約69°
     const float maxTurnStep = glm::clamp(maxTurnRate * dt, 0.0f, kMaxTurnStepLimit);
 
-    if (angle > maxTurnStep) {
+    // maxTurnStep が 0 のときは無駄な軸計算を避ける。
+    if (maxTurnStep > 0.0f && clampedDot < std::cos(maxTurnStep)) {
       glm::vec3 axis = glm::cross(oldDir, newDir);
       float axisLength2 = glm::length2(axis);
       if (axisLength2 > 1e-8f) {
@@ -663,8 +581,8 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
         // 反平行などで cross が退化すると、旋回制限が効かずに暴れる。
         axis = buildFallbackTurnAxis(oldDir);
       }
-      const float rot = glm::min(angle, maxTurnStep);
-      newDir = approxRotate(oldDir, axis, rot);
+      // ここに到達している時点で angle > maxTurnStep が確定しているため、回転量は maxTurnStep 固定でよい。
+      newDir = approxRotate(oldDir, axis, maxTurnStep);
     }
 
     // -----------------------------------------------
@@ -677,14 +595,20 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
       glm::vec3 flatDir;
       if (tryNormalizeXZ(newDir, flatDir)) {
         glm::vec3 axis = glm::cross(newDir, flatDir);
-        float flatAngle =
-            acosf(glm::clamp(glm::dot(newDir, flatDir), -1.0f, 1.0f));
-        float axisLength2 = glm::length2(axis);
-        if (flatAngle > 1e-4f && axisLength2 > 1e-8f) {
-          axis /= glm::sqrt(axisLength2);
-          float rot = glm::min(flatAngle,
-                               globalSpeciesParams[sid].horizontalTorque * dt);
-          newDir = approxRotate(newDir, axis, rot);
+        const float axisLength2 = glm::length2(axis);
+        if (axisLength2 > 1e-8f) {
+          // `acosf(dot)` を避け、angle = atan2(|cross|, dot) を使う。
+          // - axis の正規化に |cross| が必要なので、sqrt は1回で済む。
+          // - dot が 1 付近の微小角では、数値安定性も良い。
+          const float axisLength = glm::sqrt(axisLength2);
+          const float dotNF = glm::clamp(glm::dot(newDir, flatDir), -1.0f, 1.0f);
+          const float flatAngle = atan2f(axisLength, dotNF);
+          if (flatAngle > 1e-4f) {
+            axis *= (1.0f / axisLength);
+            const float rotLimit = globalSpeciesParams[sid].horizontalTorque * dt;
+            const float rot = glm::min(flatAngle, rotLimit);
+            newDir = approxRotate(newDir, axis, rot);
+          }
         }
       }
     }
@@ -739,11 +663,14 @@ void BoidUnit::computeBoundingSphere() {
     center /= static_cast<float>(indices.size());
 
     // 平均距離と分散を計算
+    // NOTE: 平均距離(mean)は距離そのものが必要なので sqrt は避けられない。
+    // ただし分散(sum2)は距離^2で足せるため、d*d の乗算は省ける。
     float sum = 0.0f, sum2 = 0.0f;
     for (int gIdx : indices) {
-      float d = glm::distance(center, buf->positions[gIdx]);
+      const float d2 = glm::distance2(center, buf->positions[gIdx]);
+      const float d = (d2 > 0.0f) ? glm::sqrt(d2) : 0.0f;
       sum += d;
-      sum2 += d * d;
+      sum2 += d2;
     }
     float mean = sum / static_cast<float>(indices.size());
     float var = sum2 / static_cast<float>(indices.size()) - mean * mean;
@@ -783,10 +710,13 @@ void BoidUnit::computeBoundingSphere() {
     center /= static_cast<float>(childrenSize);
 
     // 子ノード中心までの平均距離 + 子ノード半径 - パフォーマンス最適化
+    // NOTE: mean を維持するため sqrt は必要。
     float sum = 0.0f, sum2 = 0.0f;
     for (size_t i = 0; i < childrenSize; ++i) {
       const BoidUnit *child = childrenData[i];
-      float d = glm::distance(center, child->center) + child->radius;
+      const float baseD2 = glm::distance2(center, child->center);
+      const float baseD = (baseD2 > 0.0f) ? glm::sqrt(baseD2) : 0.0f;
+      const float d = baseD + child->radius;
       sum += d;
       sum2 += d * d;
     }
@@ -799,7 +729,6 @@ void BoidUnit::computeBoundingSphere() {
     BoidTree::instance().setUnitSimpleDensity(id, 0.0f);
   }
 }
-const int targetIndex = 50; // ログを出力する特定の Boid のインデックス
 
 /** * 他のユニットとの相互作用を計算し、加速度に影響を加える。
  *
@@ -1249,29 +1178,6 @@ void BoidUnit::computeBoidInteraction(float dt) {
   computeBoundingSphere();
 
   const int globalFrame = BoidTree::instance().frameCount;
-  constexpr int LEAF_DENSITY_STRIDE = 6;
-  // Lazy: このフレームで必要になった時だけ更新・キャッシュ確定
-  glm::vec3 cachedLeafDensityDir = densityDir;
-  float cachedLeafDensityStrength = densityDirStrength;
-  bool leafDensityReady = false;
-
-  auto ensureLeafDensity = [&]() {
-    if (leafDensityReady) {
-      return;
-    }
-
-    const bool densityExpired =
-        (globalFrame - densityDirFrame) > LEAF_DENSITY_STRIDE * 4;
-
-    if (((globalFrame + id) % LEAF_DENSITY_STRIDE) == 0 || densityExpired) {
-      refreshLeafDensityDirection(this);
-      densityDirFrame = globalFrame;
-    }
-
-    cachedLeafDensityDir = densityDir;
-    cachedLeafDensityStrength = densityDirStrength;
-    leafDensityReady = true;
-  };
 
   glm::vec3 separation;
   glm::vec3 alignment;
@@ -1347,9 +1253,6 @@ void BoidUnit::computeBoidInteraction(float dt) {
     const float selfTailAbs = std::abs(selfParams.bodyTailLength);
     const float selfRadiusAbs = std::max(selfParams.bodyRadius, 0.0f);
     const float baseCohesionStrength = glm::max(selfParams.cohesion, 0.0f);
-    const float returnStrength =
-        glm::max(selfParams.densityReturnStrength, 0.0f);
-    const float densityGain = glm::clamp(returnStrength * 0.15f, 0.0f, 8.0f);
     glm::vec3 longTermCohesion(0.0f);
     // 以前はカプセル同士の最近接(closestPointsOnSegments)で強い反発を入れていたが、
     // 近傍ごとに高コストで、さらに「相手の加速度まで書き換える」ため並列時の
@@ -1358,6 +1261,11 @@ void BoidUnit::computeBoidInteraction(float dt) {
     float threatLevel = glm::clamp(buf->predatorThreats[gIdx], 0.0f, 1.0f);
     const float viewRangeSq = globalSpeciesParams[sid].cohesionRange *
                               globalSpeciesParams[sid].cohesionRange;
+
+    // FastAttract 機能を廃止したため、状態は毎フレーム明示的にリセットする。
+    // バッファを持ち越すと「過去のON状態」が残って挙動が不安定になり得る。
+    buf->isAttracting[gIdx] = 0;
+    buf->attractTimers[gIdx] = 0.0f;
 
     // 小クラスターより更に上位の「群れ（大クラスター）」中心を使う。
     // - 小クラスターはフレーム間でスイッチしやすく、群れ全体の中心としては不安定になりがち
@@ -1439,14 +1347,6 @@ void BoidUnit::computeBoidInteraction(float dt) {
         }
       }
     }
-    // console.call<void>("log", globalSpeciesParams[sid].species +
-    //                              " cohesionRange: " +
-    //                              std::to_string(globalSpeciesParams[sid].cohesionRange)
-    //                              +
-    //                              ", viewRangeSq: " +
-    //                              std::to_string(viewRangeSq) +
-    //                              ", maxNeighbors: " +
-    //                              std::to_string(globalSpeciesParams[sid].maxNeighbors));
     // 視界角度（FOV in degrees）の半分をラジアンに変換
     float halfFovRad =
         glm::radians(globalSpeciesParams[sid].fieldOfViewDeg * 0.5f);
@@ -1627,8 +1527,9 @@ void BoidUnit::computeBoidInteraction(float dt) {
         buf->boidActiveNeighbors[gIdx]; // 使用中slotのインデックス
 
     // 近傍キャッシュは固定スロット数で管理する。
-    // maxNeighbors がこれを超えると「常に薄い」扱いになり、FastAttract 等が過剰発火して
-    // 飛び散る原因になるため、ここで“実効 maxNeighbors”を揃える。
+    // maxNeighbors がこれを超えると「常に薄い」扱いになり、
+    // 近傍不足時の補助ロジックが過剰に働いて飛び散る原因になるため、
+    // ここで“実効 maxNeighbors”を揃える。
     const int neighborSlotLimit = static_cast<int>(
       std::min<std::size_t>(cohesionMemories.size(), SoABuffers::NeighborSlotCount));
     const int maxNeighbors = glm::clamp(globalSpeciesParams[sid].maxNeighbors, 0,
@@ -1821,32 +1722,8 @@ void BoidUnit::computeBoidInteraction(float dt) {
     const int totalNeighborCount = neighborCount + externalNeighborCount;
 
     if (totalNeighborCount == 0) {
-      buf->isAttracting[gIdx] = 0;
-      buf->attractTimers[gIdx] = 0.0f;
-
-      glm::vec3 shortGuidance(0.0f);
-      glm::vec3 longGuidance(0.0f);
-      bool hasShortGuidance = false;
-      bool hasLongGuidance = false;
-
-      if (densityGain > 1e-4f) {
-        ensureLeafDensity();
-        if (cachedLeafDensityStrength > 1e-3f) {
-          const float dirScale =
-              glm::clamp(cachedLeafDensityStrength, 0.25f, 1.5f);
-          shortGuidance += cachedLeafDensityDir *
-                           (baseCohesionStrength * dirScale * densityGain);
-          hasShortGuidance = true;
-        }
-      }
-
-      // 旧・長期誘導機能は廃止したため、近傍ゼロ時のガイダンスは密度方向のみで構成する。
-      glm::vec3 finalGuidance = shortGuidance;
-
-      if (glm::length2(finalGuidance) > EPS) {
-        buf->accelerations[gIdx] += finalGuidance;
-      }
-
+      // 近傍が完全に途切れた場合は、余計な補助機構で加速させずに保守的に振る舞う。
+      // ただし大クラスター中心が取れている場合のみ、弱い誘導で群れへ復帰させる。
       if (hasSchoolCenterDir) {
         float clusterLen2 = glm::length2(schoolCenterDir);
         if (clusterLen2 > EPS) {
@@ -1863,53 +1740,11 @@ void BoidUnit::computeBoidInteraction(float dt) {
     }
 
     // phi は「近傍がどれだけ充足しているか」を表す指標。
-    // maxNeighbors と実際に追跡できるスロット数が不整合な場合、phi が恒常的に小さくなり、
-    // FastAttract 等が常時ON→過剰な加速→飛び散りの原因になり得る。
+    // 近傍数が不足している状況を検出し、凝集の補助などに利用する。
     const int phiDenom = std::max(
         1, std::min(maxNeighbors,
                     static_cast<int>(neighborSlots) + externalNeighborCount));
     float phi = float(totalNeighborCount) / float(phiDenom);
-    float thinScale = 0.0f;
-
-    if (gSimulationTuning.fastAttractStrength > 0.001f) {
-      if (phi < 1.0f) {
-        // 群れの縁に出た場合は吸引ONでタイマーリセット
-        buf->isAttracting[gIdx] = 1;
-        buf->attractTimers[gIdx] = globalSpeciesParams[sid].tau;
-      } else if (buf->isAttracting[gIdx]) {
-        // 内部に戻った場合はタイマーカウントダウン
-        buf->attractTimers[gIdx] -= dt;
-        if (buf->attractTimers[gIdx] <= 0.0f) {
-          buf->isAttracting[gIdx] = 0;
-          buf->attractTimers[gIdx] = 0.0f;
-        }
-      }
-    } else {
-      buf->isAttracting[gIdx] = 0;
-      buf->attractTimers[gIdx] = 0.0f;
-    }
-
-    // -------------------------------------------------------
-    // Fast Attract 最適化: 近傍ループ結果の再利用
-    // -------------------------------------------------------
-    // 従来は別途空間クエリを実行していたが、既存の近傍走査で
-    // 得られた距離・方向情報を流用することで計算コストを大幅削減。
-    // 群れの縁にいるボイドの吸引処理を効率的に実装。
-    const bool enableFastAttract =
-        buf->isAttracting[gIdx] &&
-        gSimulationTuning.fastAttractStrength > 0.001f;
-    const float fastAttractSeparation =
-        enableFastAttract ? globalSpeciesParams[sid].separationRange : 0.0f;
-    const float fastAttractCohesion =
-        enableFastAttract ? glm::max(globalSpeciesParams[sid].cohesionRange,
-                                     fastAttractSeparation + 0.1f)
-                          : 0.0f;
-    const float fastAttractSeparationSq =
-        fastAttractSeparation * fastAttractSeparation;
-    const float fastAttractCohesionSq =
-        fastAttractCohesion * fastAttractCohesion;
-    glm::vec3 fastAttractDirSum(0.00001f); // 吸引方向の累積ベクトル
-    int fastAttractDirCount = 0;           // 吸引対象カウント
 
     if (totalNeighborCount > 0) {
       // 近傍のストレスを集約し、逃走の波を伝搬させる。
@@ -1979,15 +1814,6 @@ void BoidUnit::computeBoidInteraction(float dt) {
         float distSq = glm::dot(diff, diff);
         if (cohesionRangeSq > 0.0f && distSq < cohesionRangeSq) {
           ++closeNeighborCount;
-        }
-        if (enableFastAttract && distSq > fastAttractSeparationSq &&
-            distSq < fastAttractCohesionSq && distSq > EPS) {
-          // Fast attract 方向データ収集: 追加クエリ不要の効率実装
-          // 分離範囲外かつ凝集範囲内の近傍から吸引方向を算出し、
-          // メインの群集力学計算と並行して処理することで性能向上を実現。
-          float invDist = glm::inversesqrt(distSq);
-          fastAttractDirSum += diff * invDist;
-          fastAttractDirCount += 1;
         }
         int neighborSid = buf->speciesIds[gNeighbor];
         const SpeciesParams &neighborParams = globalSpeciesParams[neighborSid];
@@ -2118,14 +1944,6 @@ void BoidUnit::computeBoidInteraction(float dt) {
           ++closeNeighborCount;
         }
 
-        // Fast attract の方向データは外部近傍も加味しておく（追加クエリ不要）。
-        if (enableFastAttract && distSq > fastAttractSeparationSq &&
-            distSq < fastAttractCohesionSq && distSq > EPS) {
-          float invDist = glm::inversesqrt(distSq);
-          fastAttractDirSum += diff * invDist;
-          fastAttractDirCount += 1;
-        }
-
         // 近接反発（外部近傍版）
         // 近傍キャッシュ(leaf内)に入っていない相手でも、重なりだけは確実に排除する。
         const int neighborSid = buf->speciesIds[gNeighbor];
@@ -2220,24 +2038,6 @@ void BoidUnit::computeBoidInteraction(float dt) {
         phi = glm::clamp(phiNow, 0.0f, 1.0f);
       } else {
         phi = 1.0f;
-      }
-
-      const float phiThreshold =
-          glm::clamp(0.45f + densityGain * 0.04f, 0.5f, 0.85f);
-      const float thinLinear =
-          phiThreshold > 1e-5f
-              ? glm::clamp((phiThreshold - phi) / phiThreshold, 0.0f, 1.0f)
-              : 0.0f;
-      thinScale = thinLinear * thinLinear;
-      if (densityGain > 1e-4f && thinScale > 0.0f) {
-        ensureLeafDensity();
-        if (cachedLeafDensityStrength > 1e-3f) {
-          const float dirScale =
-              glm::clamp(cachedLeafDensityStrength, 0.2f, 1.2f);
-          buf->accelerations[gIdx] +=
-              cachedLeafDensityDir *
-              (baseCohesionStrength * thinScale * dirScale * densityGain);
-        }
       }
 
       // -------------------------------------------------------
@@ -2336,14 +2136,6 @@ void BoidUnit::computeBoidInteraction(float dt) {
         autonomousAttractionScale =
           glm::mix(autonomousAttractionScale, 1.0f, threatLevel);
 
-          // 密集時は「速度目標」も下げて、詰まりの中での巡航を抑える。
-          // これが無いと、凝集力だけ弱めても maxSpeed 由来の推進（milling/fastAttract）が残り、
-          // 見た目として「密度が高くても減速しない」状態になりやすい。
-          constexpr float kSpeedMinScale = 0.65f;
-          float autonomousSpeedScale = glm::mix(1.0f, kSpeedMinScale, crowded);
-          // 脅威が高いときは減速を抑え、逃走のキビキビ感を優先する。
-          autonomousSpeedScale = glm::mix(autonomousSpeedScale, 1.0f, threatLevel);
-
       // 凝集の最終ベクトル（重みの総和で正規化、原点依存なし）
       glm::vec3 totalCohesion = glm::vec3(0.0f);
       if (wCohSum > EPS) {
@@ -2372,23 +2164,11 @@ void BoidUnit::computeBoidInteraction(float dt) {
           globalSpeciesParams[sid].alignment;
       }
 
-      glm::vec3 millingCenterDir = localCenterDir;
-      bool hasMillingCenter = hasLocalCenterDir;
       if (hasSchoolCenterDir) {
         if (globalSpeciesParams[sid].isPredator) {
           // 捕食者は大クラスタ引力に左右されない。修正ループを防ぐため即スキップ。
           continue;
         }
-        if (hasMillingCenter) {
-          const float blend = glm::clamp(
-              schoolRadius / (schoolRadius + glm::max(radius, 1.0f)), 0.2f,
-              0.65f);
-          millingCenterDir = glm::mix(millingCenterDir, schoolCenterDir, blend);
-        } else {
-          millingCenterDir = schoolCenterDir;
-          hasMillingCenter = true;
-        }
-
         float clusterLen2 = glm::length2(schoolCenterDir);
         if (clusterLen2 > EPS) {
           const float clusterDist = glm::sqrt(clusterLen2);
@@ -2431,117 +2211,12 @@ void BoidUnit::computeBoidInteraction(float dt) {
         }
       }
 
-      // -------------------------------------------------------
-      // ミリング（回転性）: 局所中心の周りへ接線方向のステアを加える
-      // -------------------------------------------------------
-      // 「中心へ向かう」凝集だけだと塊にはなるが、回転（群れの輪）に入りづらい。
-      // そこで、近傍から推定した中心方向に対し、速度の接線成分へ寄せるように
-      // 目標速度を作り、(desiredVel - vel) 型の加速でゆっくり回転へ誘導する。
-      // ※局所中心（近傍）に基づくため、離れた群れ同士を同期させない。
-      if (hasMillingCenter) {
-        const float centerLen2 = glm::length2(millingCenterDir);
-        const float velLen2 = glm::length2(vel);
-        if (centerLen2 > EPS && velLen2 > EPS) {
-          const glm::vec3 radialDir =
-              millingCenterDir * (1.0f / glm::sqrt(centerLen2));
-          const glm::vec3 velDir = vel * (1.0f / glm::sqrt(velLen2));
-          // 速度から中心方向成分を落とし、接線方向を得る。
-          glm::vec3 tangentialDir = velDir - radialDir * glm::dot(velDir, radialDir);
-          const float tanLen2 = glm::length2(tangentialDir);
-          if (tanLen2 > EPS) {
-            tangentialDir *= 1.0f / glm::sqrt(tanLen2);
-
-            // 密度が薄い(外縁)ほどまずは集まる方を優先し、回転は抑える。
-            const float thinAttenuation =
-                glm::clamp(1.0f - thinScale * 1.2f, 0.0f, 1.0f);
-            const float phiWeight = glm::clamp(phi, 0.0f, 1.0f);
-            const float millingWeight = thinAttenuation * phiWeight;
-            if (millingWeight > 1e-4f) {
-              // 密集時は目標速度を落として、回転が暴走しないようにする。
-              const glm::vec3 desiredVel =
-                  tangentialDir * (globalSpeciesParams[sid].maxSpeed * autonomousSpeedScale);
-              // lambda は速度追従の時定数として既に使われているので、同程度の
-              // スケールで回転誘導を入れる（過剰な旋回で破綻しないよう控えめ）。
-              const float millingGain =
-                  globalSpeciesParams[sid].lambda * 0.55f * millingWeight;
-              buf->accelerations[gIdx] += (desiredVel - vel) * millingGain;
-            }
-          }
-        }
-      }
-
-      // -------------------------------------------------------
-      // 薄い領域からの引き戻しと進行方向の抑制
-      // -------------------------------------------------------
-      if (densityGain > 1e-4f && thinScale > 0.0f) {
-        ensureLeafDensity();
-        if (cachedLeafDensityStrength > 1e-3f) {
-          const float thinWeight =
-              thinScale * densityGain * (1.0f - threatLevel);
-          if (thinWeight > 1e-4f) {
-            const float denseDirScale =
-                glm::clamp(cachedLeafDensityStrength, 0.3f, 1.5f);
-            totalCohesion +=
-                cachedLeafDensityDir *
-                (baseCohesionStrength * thinWeight * denseDirScale * 0.6f);
-            // densityDir を alignment に混ぜると、密度勾配の更新タイミング次第で
-            // 群れ全体の向きが一斉に変わることがある。
-            // 薄い領域からの引き戻しは cohesion のみで行い、向きは近傍整列に任せる。
-
-            float velLen2 = glm::length2(vel);
-            if (velLen2 > EPS) {
-              glm::vec3 forwardDir = vel * (1.0f / glm::sqrt(velLen2));
-              float denseDot = glm::dot(forwardDir, cachedLeafDensityDir);
-              if (denseDot < 0.0f) {
-                float resist = (-denseDot) * thinWeight * denseDirScale;
-                buf->accelerations[gIdx] +=
-                  cachedLeafDensityDir *
-                  (baseCohesionStrength * resist);
-              }
-            }
-          }
-        }
-      }
-
       // 種単位の移動参照球(envelope)から外れた場合の復帰力は、
       // 「同一speciesで複数の独立した群れ」を作ると、全群れが“種の重心”へ
       // 同時に引かれて一斉に向きが変わる副作用が出やすい。
       // ユーザー要望: 群れが急に全体で向きを変える挙動を消す。
       // そのため envelope 復帰力は無効化する（ローカル相互作用のみで復帰を担う）。
 
-      // -------------------------------------------------------
-      // Fast Attract 加速度適用: 収集データからの最終計算
-      // -------------------------------------------------------
-      if (enableFastAttract && fastAttractDirCount > 0) {
-        // 近傍走査で収集した方向ベクトルから平均方向を算出し、
-        // 群れ復帰のための吸引加速度として適用。
-        // 既存データ活用により追加の空間探索コストを回避。
-        glm::vec3 avgDir = fastAttractDirSum / float(fastAttractDirCount);
-        float avgLen2 = glm::length2(avgDir);
-        if (avgLen2 > EPS) {
-          avgDir *= 1.0f / glm::sqrt(avgLen2);
-          const float attractScale = gSimulationTuning.fastAttractStrength *
-                                     globalSpeciesParams[sid].lambda;
-          const glm::vec3 desiredVel =
-              // 密集時は目標速度を落とし、縁からの復帰が「急加速」にならないようにする。
-              avgDir * (globalSpeciesParams[sid].maxSpeed * autonomousSpeedScale);
-          const glm::vec3 attractAcc = (desiredVel - vel) * attractScale;
-          buf->accelerations[gIdx] += attractAcc;
-        }
-      }
-
-      // -------------------------------------------------------
-      // 密集時の粘性抵抗（見た目の減速を出す）
-      // -------------------------------------------------------
-      // 速度に比例した抵抗を追加し、密集クラスタ内部での巡航を抑える。
-      // 近傍の密度評価(phi)にだけ依存するので、全体の向きを揃える外力にはならない。
-      if (hasVel) {
-        const float dragFactor = glm::clamp(1.0f - autonomousSpeedScale, 0.0f, 1.0f);
-        if (dragFactor > 1e-4f) {
-          const float dragGain = globalSpeciesParams[sid].lambda * 0.45f * dragFactor;
-          buf->accelerations[gIdx] += (-vel) * dragGain;
-        }
-      }
 
       // 旧・長期誘導機能は廃止したため、長期項は school cluster 由来の凝集のみを加算する。
       // alignment は近傍速度の整列（短期）だけで決める。
@@ -2551,7 +2226,9 @@ void BoidUnit::computeBoidInteraction(float dt) {
       // --- 回転トルクによる向き補正（alignment方向へ向ける） ---
       float velLen2_2 = glm::length2(vel);
       if (velLen2_2 > EPS) {
-        glm::vec3 forward2 = vel * (1.0f / glm::sqrt(velLen2_2));
+        // forward2 の正規化と speed を同時に得て、後段での sqrt を増やさない。
+        const float velSpeed = glm::sqrt(velLen2_2);
+        glm::vec3 forward2 = vel * (1.0f / velSpeed);
 
         // 合成後のアライメントベクトルがゼロでないかチェック
         float aliLen2_check = glm::length2(combinedAlignment);
@@ -2559,21 +2236,24 @@ void BoidUnit::computeBoidInteraction(float dt) {
           glm::vec3 tgt2 =
               combinedAlignment * (1.0f / glm::sqrt(aliLen2_check));
           float dot2 = glm::clamp(glm::dot(forward2, tgt2), -1.0f, 1.0f);
-          float ang2 = acosf(dot2);
 
-          if (ang2 > 1e-4f) {
-            glm::vec3 axis2 = glm::cross(forward2, tgt2);
-            float axisLen2 = glm::length2(axis2);
-            if (axisLen2 > EPS) {
-              axis2 *= (1.0f / glm::sqrt(axisLen2));
+          // `acosf(dot)` は高コストなため、angle = atan2(|cross|, dot) で置き換える。
+          // |cross| は軸の正規化で必要なので、sqrt は1回で済む。
+          glm::vec3 axis2 = glm::cross(forward2, tgt2);
+          const float axisLen2 = glm::length2(axis2);
+          if (axisLen2 > EPS) {
+            const float axisLen = glm::sqrt(axisLen2);
+            const float ang2 = atan2f(axisLen, dot2);
+            if (ang2 > 1e-4f) {
+              axis2 *= (1.0f / axisLen);
               float rot2 =
                   std::min(ang2, globalSpeciesParams[sid].torqueStrength * dt);
-                // maxTurnAngle は旋回速度(rad/sec)なので、1ステップ上限へ変換する。
-                rot2 = std::min(rot2, globalSpeciesParams[sid].maxTurnAngle * dt);
+              // maxTurnAngle は旋回速度(rad/sec)なので、1ステップ上限へ変換する。
+              rot2 = std::min(rot2, globalSpeciesParams[sid].maxTurnAngle * dt);
               glm::vec3 newDir2 = approxRotate(forward2, axis2, rot2);
 
-              // 速度ベクトルを回転後の方向に更新
-              vel = newDir2 * glm::length(vel);
+              // 速度ベクトルを回転後の方向に更新（sqrtの重複を避ける）
+              vel = newDir2 * velSpeed;
 
               // 加速度にもトルク分を加算
               buf->accelerations[gIdx] +=
@@ -2582,12 +2262,6 @@ void BoidUnit::computeBoidInteraction(float dt) {
           }
         }
       }
-      // if (targetIndex == gIdx) {
-      //   console.call<void>("log", "UPDATE:L gIdx=" + std::to_string(gIdx) +
-      //                                 " dt=" + std::to_string(dt) + "
-      //                                 stress=" +
-      //                                 std::to_string(buf->stresses[gIdx]));
-      // }
       // --- 最終的な加速度をバッファに書き込み ---
       buf->accelerations[gIdx] +=
           totalSeparation + combinedAlignment + combinedCohesion;
@@ -2831,12 +2505,23 @@ std::vector<BoidUnit *> BoidUnit::splitByClustering(int numClusters) {
 bool BoidUnit::canMergeWith(const BoidUnit &other, float mergeDist,
                             float velThresh, float maxRadius,
                             int maxBoids) const {
+  // 異なる種族同士を merge すると、mergeWith() が buf->speciesIds を上書きし、
+  // 捕食者が“通常Boid化”してしまう。
+  // その結果、時間経過で「捕食者が仲良く泳ぐ」「以降まったく逃げない」などの
+  // 破綻した挙動になり得るため、ここで明示的に禁止する。
+  if (speciesId != other.speciesId) {
+    return false;
+  }
+
   // 中心間距離
-  if (glm::distance(center, other.center) > mergeDist)
+  // `distance()` を使うと sqrt が入るため、distance2 で比較する。
+  if (glm::distance2(center, other.center) > (mergeDist * mergeDist))
     return false;
 
   // 平均速度差
-  if (glm::length(averageVelocity - other.averageVelocity) > velThresh)
+  // `length()` を使うと sqrt が入るため、length2 で比較する。
+  if (glm::length2(averageVelocity - other.averageVelocity) >
+      (velThresh * velThresh))
     return false;
 
   // Boid 数上限
@@ -2850,14 +2535,17 @@ bool BoidUnit::canMergeWith(const BoidUnit &other, float mergeDist,
       static_cast<float>(indices.size() + other.indices.size());
 
   // 結合後の半径
-  float newRadius = 0.0f;
-  for (int gIdx : indices)
-    newRadius =
-        std::max(newRadius, glm::distance(newCenter, buf->positions[gIdx]));
-  for (int gIdx : other.indices)
-    newRadius =
-        std::max(newRadius, glm::distance(newCenter, buf->positions[gIdx]));
-
+  // `distance()` の sqrt をループ内で繰り返さないように maxDist2 を集約する。
+  float maxDist2 = 0.0f;
+  for (int gIdx : indices) {
+    maxDist2 =
+        std::max(maxDist2, glm::distance2(newCenter, buf->positions[gIdx]));
+  }
+  for (int gIdx : other.indices) {
+    maxDist2 =
+        std::max(maxDist2, glm::distance2(newCenter, buf->positions[gIdx]));
+  }
+  const float newRadius = (maxDist2 > 0.0f) ? glm::sqrt(maxDist2) : 0.0f;
   return newRadius <= maxRadius;
 }
 
@@ -2937,10 +2625,12 @@ void BoidUnit::addRepulsionToAllBoids(BoidUnit *unit,
     }
 
     if (current->isBoidUnit()) {
+      // ループ内の除算コストを避けるため、半径の逆数を先に計算しておく。
+      const float invRadius = 1.0f / (current->radius + 1e-5f);
       for (int gIdx : current->indices) {
         const float d = glm::length(current->buf->positions[gIdx] - current->center);
         // 端ほど 1.0、中心 0.5
-        const float w = 0.5f + 0.5f * (d / (current->radius + 1e-5f));
+        const float w = 0.5f + 0.5f * (d * invRadius);
         current->buf->accelerations[gIdx] += repulsion * w;
       }
       continue;
