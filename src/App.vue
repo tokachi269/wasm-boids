@@ -193,7 +193,7 @@
 </template>
 
 <script setup>
-import { inject, onMounted, reactive, ref, watch, toRaw } from "vue";
+import { inject, onMounted, onUnmounted, reactive, ref, watch, toRaw } from "vue";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import Settings from "./components/Settings.vue";
@@ -281,11 +281,11 @@ const DEFAULT_SETTINGS = [
     alignment: 8.0, // 整列
     alignmentRange: 1, // 整列範囲
     maxSpeed: 0.35, // 最大速度
-    maxTurnAngle: 0.3, // 最大旋回速度(rad/sec)
+    maxTurnAngle: 0.3, // 最大曲がり（曲率）
     maxNeighbors: 4, // 最大近傍数
     horizontalTorque: 0.03, // 水平化トルク
     torqueStrength: 1.0, // 回転トルク強度
-    lambda: 0.1, // 速度調整係数（減衰係数）
+    lambda: 0.102, // 速度調整係数（減衰係数）
     tau: 0.5, // 記憶時間
     predatorAlertRadius: 1.0, // 捕食者を察知する距離
     densityReturnStrength: 0.0, // 密度復帰強度
@@ -456,6 +456,55 @@ const startupClusterTarget = new THREE.Vector3(0, 0, 0);
 const startupClusterTargetScratch = new THREE.Vector3(0, 0, 0);
 
 const paused = ref(false);
+
+// タブ/ウィンドウが非アクティブのときは、背景音を自動でミュートする。
+// - ユーザーが別タブを見ている間に音が鳴り続けるのを防ぐ。
+// - 停止(pause)ではなくミュートで対応し、復帰時は直前の音量/ミュート状態へ戻す。
+const tabAudioAutoMuteState = {
+  active: false,
+  previousMuted: false,
+  previousVolume: 0.1,
+};
+
+function shouldAutoMuteByTabState() {
+  if (typeof document === "undefined") {
+    return false;
+  }
+  const hidden = Boolean(document.hidden);
+  const unfocused =
+    typeof document.hasFocus === "function" ? !document.hasFocus() : false;
+  return hidden || unfocused;
+}
+
+function applyBackgroundAudioAutoMute() {
+  const audioEl = backgroundAudio.value;
+  if (!audioEl) {
+    return;
+  }
+
+  const shouldMute = shouldAutoMuteByTabState();
+
+  if (shouldMute) {
+    // 既にミュート/無音なら、ユーザー側の状態として尊重して上書きしない。
+    if (audioEl.muted || !(audioEl.volume > 0)) {
+      return;
+    }
+    if (!tabAudioAutoMuteState.active) {
+      tabAudioAutoMuteState.previousMuted = audioEl.muted;
+      tabAudioAutoMuteState.previousVolume = audioEl.volume;
+      tabAudioAutoMuteState.active = true;
+    }
+    audioEl.muted = true;
+    return;
+  }
+
+  // 復帰時は「自動ミュートした分だけ」元へ戻す。
+  if (tabAudioAutoMuteState.active) {
+    audioEl.muted = tabAudioAutoMuteState.previousMuted;
+    audioEl.volume = tabAudioAutoMuteState.previousVolume;
+    tabAudioAutoMuteState.active = false;
+  }
+}
 
 // デバッグHUD（Species envelope の中心/半径を画面表示する）
 const speciesEnvelopeHudText = ref("");
@@ -786,7 +835,7 @@ function initThreeJS() {
   scene.add(ambientLight);
 
   // 太陽光（やや暖色のDirectionalLight）
-  dirLight = new THREE.DirectionalLight(toHex(OCEAN_COLORS.SUN_LIGHT), 20); // 暖色＆強め
+  dirLight = new THREE.DirectionalLight(toHex(OCEAN_COLORS.SUN_LIGHT), 25); // 暖色＆強め
   dirLight.position.set(300, 500, 200); // 高い位置から照らす
   dirLight.castShadow = true;
 
@@ -1102,6 +1151,9 @@ function initBackgroundAudioPlayback() {
   };
 
   tryPlay();
+
+  // 初期状態が「タブ非選択」の場合にも音が出ないようにする。
+  applyBackgroundAudioAutoMute();
 }
 
 function stepSimulationAndUpdateState(deltaTime) {
@@ -1359,8 +1411,8 @@ function loadBoidModel(callback) {
 
   let boidMaterial = new THREE.MeshStandardMaterial({
     color: 0xffffff, // 白色
-    roughness: 0.5,
-    metalness: 0.2,
+    roughness: 0.3,
+    metalness: 0.3,
     transparent: false, // 半透明を有効化
     alphaTest: 0.5, // アルファテストを設定
     map: texture, // テクスチャを設定
@@ -2120,6 +2172,20 @@ onMounted(() => {
   });
 
   window.addEventListener("keydown", handleKeydown);
+
+  // タブ/ウィンドウのアクティブ状態に応じて背景音を自動ミュートする。
+  // visibilitychange: タブ切替/最小化など
+  // blur/focus: アプリをアクティブにしているか
+  document.addEventListener("visibilitychange", applyBackgroundAudioAutoMute);
+  window.addEventListener("blur", applyBackgroundAudioAutoMute);
+  window.addEventListener("focus", applyBackgroundAudioAutoMute);
+});
+
+onUnmounted(() => {
+  window.removeEventListener("keydown", handleKeydown);
+  document.removeEventListener("visibilitychange", applyBackgroundAudioAutoMute);
+  window.removeEventListener("blur", applyBackgroundAudioAutoMute);
+  window.removeEventListener("focus", applyBackgroundAudioAutoMute);
 });
 
 watch(

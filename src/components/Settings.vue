@@ -113,7 +113,7 @@
         </div>
 
         <div class="setting-row">
-          <label :title="settingHelp.maxTurnAngle">最大旋回速度<br />(Max Turn Rate, rad/s):</label>
+          <label :title="settingHelp.maxTurnAngle">最大曲がり<br />(Max Curvature):</label>
           <input type="range" v-model.number="settings.maxTurnAngle" min="0" max="30" step="0.1" :title="settingHelp.maxTurnAngle" />
           <span v-if="!editingMaxTurnAngle" class="editable-value" @click="startEditMaxTurnAngle" :title="settingHelp.maxTurnAngle + '（クリックして編集）'">{{ settings.maxTurnAngle }}</span>
           <input v-else ref="maxTurnAngleInput" class="value-input" type="number" v-model.number="settings.maxTurnAngle" min="0" max="60" step="0.1" @blur="stopEditMaxTurnAngle" @keyup.enter="stopEditMaxTurnAngle" :title="settingHelp.maxTurnAngle" />
@@ -200,7 +200,7 @@ const settingHelp = {
   predatorAlertRadius: '捕食者に反応し始める距離。大きいほど早めに逃げる。',
   densityReturnStrength: '群れの密度が崩れたときに、元の密度へ戻ろうとする強さ。',
   maxSpeed: '移動速度の上限。',
-  maxTurnAngle: '向きを変える速さの上限（rad/s）。大きいほどキビキビ曲がる。',
+  maxTurnAngle: '移動距離あたりの曲がりやすさの上限。大きいほど小回りが利く（速度を変えても曲がり方が崩れにくい）。',
   maxNeighbors: '近傍として見る最大数。小さいと局所的、大きいと全体的な動きになる。',
   horizontalTorque: '上下方向の傾きを水平へ戻す強さ。',
   torqueStrength: '回転の反応の強さ。',

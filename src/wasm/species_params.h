@@ -10,6 +10,8 @@ struct SpeciesParams {
   float alignment = 0.05f;
   float maxSpeed = 1.0f;
   float minSpeed = 0.1f;
+  // maxTurnAngle は「最大曲率（移動距離あたりの回転量）」。
+  // 1秒あたりの角速度ではなく、curvature * speed * dt で1ステップの上限角を決める。
   float maxTurnAngle = 0.01f;
   float separationRange = 10.0f;
   float alignmentRange = 30.0f;

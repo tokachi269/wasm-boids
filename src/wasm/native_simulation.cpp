@@ -58,8 +58,8 @@ std::vector<SpeciesParams> NativeSimulation::getDefaultSettings() const {
   boids.alignment = 20.0f;
   boids.maxSpeed = 0.26f;
   boids.minSpeed = 0.0f;
-  // maxTurnAngle は「1秒あたりの旋回速度(rad/sec)」。
-  // 旧値 0.25(rad/step) を 60fps 換算して設定する。
+  // maxTurnAngle は「最大曲率（移動距離あたりの回転量）」。
+  // 角速度ではなく、speed に比例して旋回上限が決まる（速度を変えても曲がり方が崩れにくい）。
   boids.maxTurnAngle = 15.0f;
   boids.separationRange = 0.6f;
   boids.alignmentRange = 7.0f;
@@ -86,7 +86,7 @@ std::vector<SpeciesParams> NativeSimulation::getDefaultSettings() const {
   predator.alignment = 0.0f;
   predator.maxSpeed = 1.37f;
   predator.minSpeed = 0.4f;
-  // 捕食者はやや鋭く旋回できる想定。
+  // 捕食者はやや鋭く旋回できる想定（曲率を高めにする）。
   predator.maxTurnAngle = 12.0f;
   predator.separationRange = 14.0f;
   predator.alignmentRange = 11.0f;

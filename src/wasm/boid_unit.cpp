@@ -540,10 +540,12 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
     // - 判定自体は angle > maxTurnStep  <=>  dot < cos(maxTurnStep) で同値。
     const float dotProduct = glm::dot(oldDir, newDir);
     const float clampedDot = glm::clamp(dotProduct, -1.0f, 1.0f);
-    // maxTurnAngle は UI から渡される「1秒あたりの旋回速度(rad/sec)」。
-    // フレーム間隔(dt)が揺れても挙動が破綻しないよう、1ステップの上限角は
-    // turnRate * dt で算出する。
-    float maxTurnRate = globalSpeciesParams[sid].maxTurnAngle * stressFactor;
+    // maxTurnAngle は UI から渡される「最大曲率（移動距離あたりの回転量）」。
+    // 背景:
+    // - 角速度(rad/sec)を上限にすると、速度を上げたときに曲率(=ω/v)が下がり、
+    //   「同じ値なのに曲がり方が変わる」問題が起きる。
+    // - そこで「曲率」を上限にし、1ステップ上限角は curvature * speed * dt で算出する。
+    float maxTurnCurvature = globalSpeciesParams[sid].maxTurnAngle * stressFactor;
 
     // 捕食者が近いときの旋回上限ブースト（predatorThreat 由来）は撤去。
     // 理由:
@@ -553,7 +555,7 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
 
     if (globalSpeciesParams[sid].isPredator && !predatorOnBreak &&
         unit->buf->predatorTargetIndices[gIdx] >= 0) {
-      maxTurnRate *= 1.5f; // 捕食者の追跡時は回転制限を緩和
+      maxTurnCurvature *= 1.5f; // 捕食者の追跡時は回転制限を緩和
     }
     if (currentStress > 0.7f) {
       // 緊急時の旋回能力ブースト。
@@ -561,7 +563,7 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
       // currentStress ∈ [0.7, 1.0] -> factor ∈ [1.0, 1.6]
       float emergencyTurnFactor =
           1.0f + (currentStress - 0.7f) * (0.6f / 0.3f);
-      maxTurnRate *= emergencyTurnFactor;
+      maxTurnCurvature *= emergencyTurnFactor;
     }
 
     // 1ステップで許容する旋回角(rad)。
@@ -569,7 +571,9 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
     // 分離/逃避などのベクトルが揺れると「左右に振り子」のようなブルブルが起きやすい。
     // そのため上限を π ではなく控えめな角度に抑える。
     constexpr float kMaxTurnStepLimit = 1.2f; // 約69°
-    const float maxTurnStep = glm::clamp(maxTurnRate * dt, 0.0f, kMaxTurnStepLimit);
+    // speed がゼロ付近のときは方向ノイズだけが回ると破綻しやすいので、極小値で下駄を履かせる。
+    const float speedForTurn = glm::max(speed, 1e-4f);
+    const float maxTurnStep = glm::clamp(maxTurnCurvature * speedForTurn * dt, 0.0f, kMaxTurnStepLimit);
 
     // maxTurnStep が 0 のときは無駄な軸計算を避ける。
     if (maxTurnStep > 0.0f && clampedDot < std::cos(maxTurnStep)) {
@@ -2248,8 +2252,9 @@ void BoidUnit::computeBoidInteraction(float dt) {
               axis2 *= (1.0f / axisLen);
               float rot2 =
                   std::min(ang2, globalSpeciesParams[sid].torqueStrength * dt);
-              // maxTurnAngle は旋回速度(rad/sec)なので、1ステップ上限へ変換する。
-              rot2 = std::min(rot2, globalSpeciesParams[sid].maxTurnAngle * dt);
+              // maxTurnAngle は「最大曲率（距離あたりの回転量）」なので、
+              // 1ステップ上限角は curvature * speed * dt で算出する。
+              rot2 = std::min(rot2, globalSpeciesParams[sid].maxTurnAngle * velSpeed * dt);
               glm::vec3 newDir2 = approxRotate(forward2, axis2, rot2);
 
               // 速度ベクトルを回転後の方向に更新（sqrtの重複を避ける）

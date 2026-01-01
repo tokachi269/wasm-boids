@@ -5,24 +5,23 @@ const STORAGE_KEY = 'boids_settings';
 // - 重大な挙動変更（パラメータの意味変更/追加/削除）が入った場合に +1 する。
 // - メジャーが一致しない（または未保存=旧ユーザ）場合は、localStorage の設定を使わず
 //   デフォルト設定で上書きし、再アクセス時の「変な動き」を防ぐ。
-// 2026-01-01: 調整項目（cohesionBoost / separationMinFactor / alignmentBoost）削除のため +1
-const SETTINGS_SCHEMA_MAJOR_VERSION = 1;
+const SETTINGS_SCHEMA_MAJOR_VERSION = 2;
 const STORAGE_VERSION_KEY = 'boids_settings_schema_major';
 const DEFAULT_SPECIES_FALLBACK = {
   species: 'Species',
   count: 10000,
   cohesion: 12.5,
   cohesionRange: 5,
-  separation: 2.0,
+  separation: 2.15,
   separationRange: 0.4,
-  alignment: 7.0,
+  alignment: 8.0,
   alignmentRange: 1,
-  maxSpeed: 0.33,
+  maxSpeed: 0.35,
   minSpeed: 0,
-  // maxTurnAngle は「1秒あたりの旋回速度(rad/sec)」。
-  maxTurnAngle: 0.25,
+  // maxTurnAngle は「最大曲率（移動距離あたりの回転量）」。
+  maxTurnAngle: 0.75,
   maxNeighbors: 4,
-  horizontalTorque: 0.02,
+  horizontalTorque: 0.03,
   torqueStrength: 1.0,
   lambda: 0.8,
   tau: 0.8,
@@ -370,12 +369,8 @@ function sanitizeSpeciesEntry(entry = {}, fallback = DEFAULT_SPECIES_FALLBACK) {
   result.alignmentRange = Math.max(0, toFinite(merged.alignmentRange, base.alignmentRange ?? 0));
   result.maxSpeed = Math.max(0, toFinite(merged.maxSpeed, base.maxSpeed ?? 0));
   result.minSpeed = Math.max(0, toFinite(merged.minSpeed, base.minSpeed ?? 0));
-  result.maxTurnAngle = toFinite(merged.maxTurnAngle, base.maxTurnAngle ?? 0);
-  // 旧設定の互換: 以前は maxTurnAngle が「1ステップの最大旋回角(rad/step)」だった。
-  // 保存済みの値が旧レンジ(<=1.0)の場合は、おおよそ60fps相当として rad/sec に換算する。
-  if (result.maxTurnAngle > 0 && result.maxTurnAngle <= 1.0 && (base.maxTurnAngle ?? 0) > 1.0) {
-    result.maxTurnAngle *= 60;
-  }
+  // maxTurnAngle は「最大曲率（移動距離あたりの回転量）」。
+  result.maxTurnAngle = Math.max(0, toFinite(merged.maxTurnAngle, base.maxTurnAngle ?? 0));
   result.horizontalTorque = toFinite(merged.horizontalTorque, base.horizontalTorque ?? 0);
   result.torqueStrength = toFinite(merged.torqueStrength, base.torqueStrength ?? 0);
   result.lambda = toFinite(merged.lambda, base.lambda ?? 0);
