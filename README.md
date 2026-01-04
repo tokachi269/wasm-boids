@@ -68,7 +68,7 @@ Boids を直接全探索すると $O(N^2)$ になるため、個体群を「空�
 
 概ね次の処理順で 1 ステップを進めます。
 
-1. `dt` のサニタイズ（NaN/Inf などの伝播防止）
+1. `dt` の決定と取り扱い
 2. 個体更新（`updateRecursive`）
    - 近傍相互作用（分離・整列・凝集）
    - 捕食者の影響、ストレス/逃避などの補助項
@@ -82,68 +82,39 @@ Boids を直接全探索すると $O(N^2)$ になるため、個体群を「空�
    - 定期的に `build()` で再構築
    - さらに葉キャッシュを使って、分割/結合を少量ずつ進める
 
-処理の対応関係が追えるように、擬似コードにすると次のイメージです（厳密な実装の全分岐は省略）。
+処理の対応関係が追えるように、概念的な擬似コードにすると次のイメージです（厳密な実装の全分岐は省略）。
 
 ```text
 BoidTree::update(dt):
-   if frameCount % 4 == 0:
-      updateSpeciesEnvelopes()
+  (定期) 種族エンベロープ更新
 
-   if root:
-      setRenderPointersToReadBuffers()
-      root.updateRecursive(clamp(dt, 0, 0.1) * 5)
-      if dt > 0:
-         setRenderPointersToWriteBuffers()
-         swapReadWrite()
-         setRenderPointersToReadBuffers()
-   else:
-      setRenderPointersToReadBuffers()
+  if root:
+    個体更新（木を辿って葉で詳細計算）
+    dt > 0 なら read/write を swap
 
-   clusterDt += dt
-   if frameCount % 3 == 0:
-      updateSpeciesClusters(clusterDt)
-      updateSpeciesSchoolClusters(clusterDt)
-      clusterDt = 0
+  (定期) 小クラスター更新
+  (定期) 群れクラスター更新
 
-   if frameCount % 15 == 0:
-      leafCache = collectLeaves()
-      splitIndex = 0; mergeIndex = 0
+  (定期) 葉一覧（キャッシュ）を再収集
+  (定期) 木を再構築
 
-   if frameCount % 10 == 0:
-      build()
-      leafCache.clear()  // ポインタ無効化対策
-      splitIndex = 0; mergeIndex = 0
-
-   trySplitUpTo(12)
-   tryMergeUpTo(12)
+  (毎フレーム少量) split/merge を進める
 ```
 
-#### 実装上の間引き（重い処理は毎フレームやらない）
-
-現行実装では、デバッグ集計や木の調整は間引きます（数字は `boids_tree.cpp` の定数）。
-
-- 種族エンベロープ更新: 4フレームに1回（`kEnvelopeUpdateStride = 4`）
-- 小/大クラスター更新: 3フレームに1回（`kClusterUpdateStride = 3`）
-   - ただしEMAの時間スケールを維持するため、`dt` は蓄積してからまとめて渡します
-- 葉ノードの再収集（split/mergeの対象集め）: 15フレームに1回
-- 木の再構築（`build()`）: 10フレームに1回（`kTreeRebuildStride = 10`）
-
-この「毎フレーム必須なもの（物理/挙動）」と「多少遅れても見た目が破綻しないもの（デバッグ/再構築）」の分離が、ブラウザ上での安定性に効きます。
+重い集計（エンベロープ/クラスター/再構築）を毎フレーム行うとスパイクになりやすいため、
+「毎フレーム必須なもの（個体更新）」と「多少遅れても見た目が破綻しにくいもの（集計/再構築）」を分離して間引きます。
 
 #### split/merge を“少量ずつ”進める理由
 
 木を頻繁に完全再構築すると安定しますが重いので、完全再構築は間引きつつ、合間に局所調整として split/merge を少量ずつ進めます。
 
-- 15フレームごとに葉一覧（leafCache）を収集し、そこから分割/結合候補を順に処理します
-- 1フレームで処理する候補数に上限（例: 12件）を付け、スパイク（瞬間的な重さ）を避けます
-
-注意点として、`build()` はノードをプールへ返却して再利用します。
-そのため、再構築前に集めた `leafCache` はポインタが無効化されうるので、再構築直後に必ずクリアして安全性を保っています。
+- 定期的に葉一覧（leafCache）を収集し、そこから分割/結合候補を順に処理します
+- 1フレームで処理する候補数に上限を付け、スパイク（瞬間的な重さ）を避けます
 
 #### 分割判定/結合判定の目安
 
 分割/結合は `BoidUnit::needsSplit()` / `BoidUnit::canMergeWith()` が基準です。
-引数はコード上でのデフォルト値（例: `splitRadius=40` / `mergeDist=60` など）で、概ね次を見ています。
+概ね次を見ています。
 
 - split: ユニット半径が大きい、または向き/密度のばらつきが大きい、かつユニット内個体数が多い
 - merge: ユニット同士が近い、速度が十分揃っている、半径が過大でない、かつ合算個体数が上限以内
@@ -160,32 +131,24 @@ BoidTree::update(dt):
 - `forEachLeafIntersectingSphere(...)`: 交差する葉を列挙
 - `forEachLeafIntersectingSphereCancelable(...)`: 途中で打ち切れる版（必要数が集まれば十分な用途向け）
 
-Cancelable版は反復DFSで走査し、探索スタックを `thread_local` で再利用してアロケーション負荷を抑えています。
+Cancelable版は「必要数が揃えば探索を止める」ためのものです。
 
 #### 葉内の個体更新（BoidUnit側の概要）
 
 葉では、`indices` で参照できる個体群について、分離・整列・凝集のステアリングを合成して加速度（または目標速度）を作ります。
 探索コストが挙動に直結するため、近傍として参照する上限は `maxNeighbors` で明示的に制限します。
 
-代表的には次のような項目を順に適用し、最後に「物理的にあり得ない値」をクランプして破綻を防ぎます。
+代表的には次のような項目を順に適用します。
 
 - 近傍相互作用（分離・整列・凝集）: 各レンジ（`*Range`）内の近傍を集計し、強度（`cohesion/alignment/separation`）で重み付け
 - 捕食者影響: 非捕食者は捕食者を検知すると回避方向を加算（警戒距離は種族ごと）
 - 姿勢の追従: `torqueStrength` による方向合わせ、`horizontalTorque` による水平化
 - 旋回と速度の上限: `maxTurnAngle`（曲率）による旋回クランプ、`minSpeed/maxSpeed` による速度クランプ
 
-捕食者の影響（警戒距離）についても、毎フレーム「全種族を走査して最大警戒距離を求める」と重くなるため、
-種族パラメータ更新時に「全非捕食者の `predatorAlertRadius` の最大値」をキャッシュして探索半径に使います。
+捕食者の影響（警戒距離）についても、毎フレームの全走査を避けるため、
+種族パラメータ更新時に探索に必要な値を前計算してキャッシュします。
 
-### 4) 数値安定性（NaN/Infの連鎖を止める）
-
-大規模化すると「一度でもNaNが出ると全体に伝播して破綻する」パターンが出やすいので、
-`boid_unit.cpp` では正規化の0除算を避ける軽量ガード（長さ2の閾値判定）を入れています。
-isfinite系の重いチェックは避け、ホットパスでの分岐コストを最小化しています。
-
-また `boids_tree.cpp` 側では、`updateRecursive` に渡す `dt` をクランプして過大ステップを避けています。
-
-### 5) クラスター推定（species clusters / school clusters）
+### 4) クラスター推定（species clusters / school clusters）
 
 クラスターは「個体全数」ではなく「leaf（BoidUnit）単位」の近似集計を行います。
 
@@ -217,9 +180,9 @@ dist <= linkScale * (r_i + r_j)
 ```
 
 のように、半径の和を基準にして密集を判定します。
-中心は10秒スケールのEMAで追跡し、フレームごとの対応付けが多少ズレても“注視点が飛ぶ”のを避けます。
+中心はEMAで追跡し、フレームごとの対応付けが多少ズレても“注視点が飛ぶ”のを避けます。
 
-### 6) 旋回制限（maxTurnAngle の意味）
+### 5) 旋回制限（maxTurnAngle の意味）
 
 `maxTurnAngle` は「角速度（/sec）」ではなく「最大曲率（移動距離あたりの回転量）」として扱います。
 角速度上限だと速度を変えたときに曲率が変わり、同じ設定値でも曲がり方が変わってしまうためです。

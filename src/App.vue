@@ -265,6 +265,11 @@ function fetchTreeStructure() {
 const deviceProfile = detectDeviceProfile();
 const useLowSpecPreset =
   deviceProfile.isMobile || deviceProfile.hasIntegratedGpu;
+
+// 高DPI（devicePixelRatio>1）をそのまま使うと、ピクセル塗りつぶしが増えて
+// GPU/ポストプロセスがボトルネックになりやすい。
+// 60fpsを優先し、環境に応じて pixelRatio の上限を設ける。
+const MAX_RENDER_PIXEL_RATIO = useLowSpecPreset ? 1.0 : 1.5;
 // 画面ガワのデフォルト（画像の値）
 // NOTE: 個体数は重い環境でも動かしやすい値を優先する。
 const defaultBoidCount = 10000;
@@ -281,7 +286,7 @@ const DEFAULT_SETTINGS = [
     alignment: 8.0, // 整列
     alignmentRange: 1, // 整列範囲
     maxSpeed: 0.35, // 最大速度
-    maxTurnAngle: 0.3, // 最大曲がり（曲率）
+    maxTurnAngle: 0.75, // 最大曲がり（曲率）
     maxNeighbors: 4, // 最大近傍数
     horizontalTorque: 0.03, // 水平化トルク
     torqueStrength: 1.0, // 回転トルク強度
@@ -303,7 +308,7 @@ const DEFAULT_SETTINGS = [
     predatorAlertRadius: 0.0,
     densityReturnStrength: 0.0,
     maxSpeed: 2.0,
-    minSpeed: 0.0,
+    minSpeed: 1.5,
     maxTurnAngle: 0.4,
     maxNeighbors: 0,
     lambda: 0.05,
@@ -614,8 +619,17 @@ let frameCounter = 0;
 let flockReinitTimer = null; // 群れ再初期化の遅延タイマー
 
 let animationTimer = null;
-const FRAME_INTERVAL = 1000 / 1000; // アニメーションフレーム間隔（ミリ秒）
+// requestAnimationFrame で vsync に同期して更新する。
+// setTimeout の高頻度ループは余計なスケジューリング負荷を生みやすい。
 const COUNT_REINIT_DELAY_MS = 400; // 個体数変更後の再初期化待機時間
+
+function applyRendererPixelRatio() {
+  if (!renderer || typeof window === "undefined") {
+    return;
+  }
+  const dpr = window.devicePixelRatio || 1;
+  renderer.setPixelRatio(Math.min(dpr, MAX_RENDER_PIXEL_RATIO));
+}
 
 function positionStatsOverlay(element) {
   if (!element) return;
@@ -713,6 +727,9 @@ function applyShadowDebugState() {
     dirLight.castShadow = enabled;
     if (dirLight.shadow) {
       dirLight.shadow.autoUpdate = enabled;
+      // ON に戻した直後に「前回の shadow map のまま」にならないよう、更新要求を明示する。
+      // （autoUpdate が OFF の間は shadow map が更新されないため）
+      dirLight.shadow.needsUpdate = true;
     }
   }
   if (groundMesh) {
@@ -789,7 +806,7 @@ function initThreeJS() {
   // トーンマッピングを有効化し水中ライティングのダイナミクスを保つ。
   renderer.toneMapping = THREE.CineonToneMapping;
   renderer.toneMappingExposure = 0.8;
-  renderer.setPixelRatio(window.devicePixelRatio); // 高DPI対応
+  applyRendererPixelRatio();
   renderer.setSize(width, height);
   renderer.shadowMap.enabled = debugControls.enableShadows;
   renderer.shadowMap.type = THREE.PCFShadowMap; // 影を柔らかく
@@ -845,7 +862,13 @@ function initThreeJS() {
   dirLight.shadow.camera.top = 100;
   dirLight.shadow.camera.bottom = -100;
   dirLight.shadow.camera.near = 1;
-  dirLight.shadow.camera.far = 400;
+  // NOTE:
+  // DirectionalLight の shadow camera は光源位置を基準に depth 範囲を切る。
+  // ここが短すぎると「シーン全体が shadow map の far でクリップ」され、
+  // 影が常に OFF のように見える。
+  // （光源が (300,500,200) のため far=400 だと原点近傍まで届かない）
+  dirLight.shadow.camera.far = 1200;
+  dirLight.shadow.camera.updateProjectionMatrix();
 
   dirLight.shadow.mapSize.width = 768;
   dirLight.shadow.mapSize.height = 768;
@@ -947,6 +970,7 @@ function onWindowResize() {
   const height = window.innerHeight;
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
+  applyRendererPixelRatio();
   renderer.setSize(width, height);
   fogPipeline?.resize(width, height);
 }
@@ -1861,9 +1885,16 @@ let unitIdScratch = null;
 let unitIdScratchSize = 0;
 const unitColor = new THREE.Color();
 
-function animate() {
+function scheduleNextFrame() {
+  if (typeof requestAnimationFrame === "function") {
+    animationTimer = requestAnimationFrame(animate);
+  }
+}
+
+function animate(frameTimeMs) {
   stats?.begin();
-  const currentTime = performance.now();
+  const currentTime =
+    typeof frameTimeMs === "number" ? frameTimeMs : performance.now();
   const deltaTime = (currentTime - lastTime) / 1000;
   lastTime = currentTime;
 
@@ -1889,8 +1920,10 @@ function animate() {
       renderer.render(scene, camera);
     }
     stats?.end();
-    stats?.update();
-    animationTimer = setTimeout(animate, FRAME_INTERVAL);
+    if ((frameCounter & 1) === 0) {
+      stats?.update();
+    }
+    scheduleNextFrame();
     return;
   }
 
@@ -2068,7 +2101,7 @@ function animate() {
   stats?.end();
   stats?.update();
 
-  animationTimer = setTimeout(animate, FRAME_INTERVAL);
+  scheduleNextFrame();
 }
 
 function drawTreeStructure(treeData) {
@@ -2101,7 +2134,7 @@ function drawTreeStructure(treeData) {
 // シミュレーションを開始（群れ初期化 + アニメーションループ起動）
 function startSimulation() {
   reinitializeFlockNow();
-  animate();
+  scheduleNextFrame();
 }
 
 onMounted(() => {
@@ -2186,6 +2219,11 @@ onUnmounted(() => {
   document.removeEventListener("visibilitychange", applyBackgroundAudioAutoMute);
   window.removeEventListener("blur", applyBackgroundAudioAutoMute);
   window.removeEventListener("focus", applyBackgroundAudioAutoMute);
+
+  if (animationTimer && typeof cancelAnimationFrame === "function") {
+    cancelAnimationFrame(animationTimer);
+    animationTimer = null;
+  }
 });
 
 watch(

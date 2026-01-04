@@ -19,6 +19,11 @@ export class FogPipeline {
     this.renderer = null;
     this.scene = null;
     this.camera = null;
+
+    // ポストプロセスはフル解像度だと GPU のフラグメント負荷が支配的になりやすい。
+    // 見た目（Fog/SSAO/Bloom）を維持しつつ負荷を落とすため、内部レンダーターゲットを縮小して回す。
+    // NOTE: UI は増やさない方針のため、ここは固定スケール。
+    this.internalScale = 0.75;
   }
 
   /** HeightFog 用の ShaderPass を返します。 */
@@ -42,12 +47,18 @@ export class FogPipeline {
     this.scene = scene;
     this.camera = camera;
 
+    const scale = Math.max(0.25, Math.min(Number(this.internalScale) || 1.0, 1.0));
+    const scaledWidth = Math.max(1, Math.floor(width * scale));
+    const scaledHeight = Math.max(1, Math.floor(height * scale));
+
     // 深度テクスチャ付きのターゲットを確保し、fog パスへ共有する
     const rtOptions = { depthBuffer: true, stencilBuffer: false };
-    this.heightFogRenderTarget = new THREE.WebGLRenderTarget(width, height, rtOptions);
-    this.heightFogRenderTarget.depthTexture = new THREE.DepthTexture(width, height, THREE.FloatType);
+    this.heightFogRenderTarget = new THREE.WebGLRenderTarget(scaledWidth, scaledHeight, rtOptions);
+    // Fog は深度の「線形復元」に必要な精度があれば良い。
+    // Float 深度は帯域/互換性の面で重くなりやすいので、整数深度を優先する。
+    this.heightFogRenderTarget.depthTexture = new THREE.DepthTexture(scaledWidth, scaledHeight, THREE.UnsignedIntType);
     this.heightFogRenderTarget.depthTexture.format = THREE.DepthFormat;
-    this.heightFogRenderTarget.depthTexture.type = THREE.FloatType;
+    this.heightFogRenderTarget.depthTexture.type = THREE.UnsignedIntType;
     this.heightFogRenderTarget.depthTexture.needsUpdate = true;
 
     this.composer = new EffectComposer(renderer, this.heightFogRenderTarget);
@@ -57,7 +68,7 @@ export class FogPipeline {
     this.composer.addPass(renderPass);
 
     // 環境の陰影を補強する SSAO
-    const ssaoPass = new SSAOPass(scene, camera, width, height);
+    const ssaoPass = new SSAOPass(scene, camera, scaledWidth, scaledHeight);
     ssaoPass.kernelRadius = 5;     // サンプル半径（大きいほど広範囲な AO）
     ssaoPass.minDistance = 0.01;   // オクルージョン開始距離
     ssaoPass.maxDistance = 0.3;    // 影響を与える最大距離
@@ -67,7 +78,7 @@ export class FogPipeline {
     const bloomStrength = 1.0;   // ブルームの強さ
     const bloomRadius = 0.25;     // 発光の広がり
     const bloomThreshold = 0.85; // ブルームを適用する輝度
-    const bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), bloomStrength, bloomRadius, bloomThreshold);
+    const bloomPass = new UnrealBloomPass(new THREE.Vector2(scaledWidth, scaledHeight), bloomStrength, bloomRadius, bloomThreshold);
     this.composer.addPass(bloomPass);
 
     const shader = createHeightFogShader(this.config);
@@ -107,8 +118,11 @@ export class FogPipeline {
     if (!this.composer) {
       return;
     }
-    this.composer.setSize(width, height);
-    this.heightFogRenderTarget?.setSize(width, height);
+    const scale = Math.max(0.25, Math.min(Number(this.internalScale) || 1.0, 1.0));
+    const scaledWidth = Math.max(1, Math.floor(width * scale));
+    const scaledHeight = Math.max(1, Math.floor(height * scale));
+    this.composer.setSize(scaledWidth, scaledHeight);
+    this.heightFogRenderTarget?.setSize(scaledWidth, scaledHeight);
   }
 
   /** composer を使ってレンダリングするヘルパー。 */
@@ -157,6 +171,12 @@ export class FogPipeline {
 
   /** リソース解放。 */
   dispose() {
+    // HeightFog の距離カーブLUTは小さいが、ホットリロード等で積むとリークし得る。
+    // composer/material の破棄とは独立に明示的に解放する。
+    const lut = this.heightFogPass?.uniforms?.tDistanceCurveLut?.value ?? null;
+    if (lut && typeof lut.dispose === 'function') {
+      lut.dispose();
+    }
     this.heightFogPass = null;
     this.composer?.dispose?.();
     this.composer = null;
@@ -175,10 +195,19 @@ export function createHeightFogShader(config = {}) {
   const defaults = buildFogDefaults();
   const finalConfig = { ...defaults, ...config };
 
+  // 距離フォグのカーブはピクセルごとに逆変換すると高コスト。
+  // LUTにするとテクスチャ1回で済み、GPU負荷を安定して下げられる。
+  const distanceCurveLut = createOrUpdateDistanceCurveLutTexture(
+    null,
+    cloneVector2(finalConfig.distanceControlPoint1),
+    cloneVector2(finalConfig.distanceControlPoint2)
+  );
+
   return {
     uniforms: {
       tDiffuse: { value: null },
       tDepth: { value: null },
+      tDistanceCurveLut: { value: distanceCurveLut },
       cameraNear: { value: 0.1 },
       cameraFar: { value: 1000 },
       projectionMatrixInverse: { value: new THREE.Matrix4() },
@@ -187,8 +216,7 @@ export function createHeightFogShader(config = {}) {
       distanceStart: { value: finalConfig.distanceStart },                   // 距離フォグ開始位置
       distanceEnd: { value: finalConfig.distanceEnd },                       // 距離フォグ最大濃度距離
       distanceExponent: { value: finalConfig.distanceExponent },             // 距離カーブの鋭さ
-      distanceControlPoint1: { value: cloneVector2(finalConfig.distanceControlPoint1) }, // ベジェ制御点1
-      distanceControlPoint2: { value: cloneVector2(finalConfig.distanceControlPoint2) }, // ベジェ制御点2
+      // NOTE: 制御点はJS側LUT生成にのみ使う。シェーダには渡さない（ピクセルコスト削減）。
       surfaceLevel: { value: finalConfig.surfaceLevel },                     // 水面高さ（y）
       heightFalloff: { value: finalConfig.heightFalloff },                   // 深度減衰率
       heightExponent: { value: finalConfig.heightExponent },                 // 深度カーブの鋭さ
@@ -207,14 +235,13 @@ export function createHeightFogShader(config = {}) {
 
     uniform sampler2D tDiffuse;
     uniform sampler2D tDepth;
+    uniform sampler2D tDistanceCurveLut;
     uniform float cameraNear;
     uniform float cameraFar;
     uniform vec3 fogColor;
     uniform float distanceStart;
     uniform float distanceEnd;
     uniform float distanceExponent;
-    uniform vec2 distanceControlPoint1;
-    uniform vec2 distanceControlPoint2;
     uniform float surfaceLevel;
     uniform float heightFalloff;
     uniform float heightExponent;
@@ -222,37 +249,10 @@ export function createHeightFogShader(config = {}) {
     uniform mat4 projectionMatrixInverse;
     uniform mat4 cameraMatrixWorld;
 
-    float cubicBezier1D(float t, float p0, float p1, float p2, float p3) {
-      float u = 1.0 - t;
-      float uu = u * u;
-      float tt = t * t;
-      return u * uu * p0 + 3.0 * uu * t * p1 + 3.0 * u * tt * p2 + tt * t * p3;
-    }
-
-    float cubicBezierDerivative1D(float t, float p0, float p1, float p2, float p3) {
-      float u = 1.0 - t;
-      return 3.0 * u * u * (p1 - p0)
-           + 6.0 * u * t * (p2 - p1)
-           + 3.0 * t * t * (p3 - p2);
-    }
-
-    float cubicBezierInverse(float x, vec2 c1, vec2 c2) {
-      float t = clamp(x, 0.0, 1.0);
-      for (int i = 0; i < 5; i++) {
-        float current = cubicBezier1D(t, 0.0, c1.x, c2.x, 1.0) - x;
-        float slope = cubicBezierDerivative1D(t, 0.0, c1.x, c2.x, 1.0);
-        if (abs(slope) < 1e-5) {
-          break;
-        }
-        t -= current / slope;
-        t = clamp(t, 0.0, 1.0);
-      }
-      return t;
-    }
-
-    float sampleDistanceCurve(float x, vec2 c1, vec2 c2) {
-      float t = cubicBezierInverse(x, c1, c2);
-      return cubicBezier1D(t, 0.0, c1.y, c2.y, 1.0);
+    float sampleDistanceCurve(float x) {
+      // 256x1 LUT。LinearFilterで補間されるためバンディングを抑えられる。
+      float u = clamp(x, 0.0, 1.0);
+      return texture2D(tDistanceCurveLut, vec2(u, 0.5)).r;
     }
 
     void main() {
@@ -269,18 +269,26 @@ export function createHeightFogShader(config = {}) {
       vec4 clipPos = vec4(ndc, ndcZ, 1.0);
       vec4 viewPos = projectionMatrixInverse * clipPos;
       viewPos /= max(viewPos.w, 1e-5);
-      vec4 worldPos = cameraMatrixWorld * viewPos;
+      // height fog は world-space の Y（=水面からの深さ）だけ使うため、
+      // vec4 全体の変換は避け、Y 成分だけを計算して ALU を減らす。
+      float worldY =
+        cameraMatrixWorld[0][1] * viewPos.x +
+        cameraMatrixWorld[1][1] * viewPos.y +
+        cameraMatrixWorld[2][1] * viewPos.z +
+        cameraMatrixWorld[3][1] * viewPos.w;
 
-      float viewDistance = length(viewPos.xyz);
+      // Fog の距離は厳密なユークリッド距離でなくても見た目が崩れにくい。
+      // sqrt(length) はフラグメントコストになりやすいので、視線方向距離で近似する。
+      float viewDistance = abs(viewPos.z);
       float distanceFogNorm = clamp(
         (viewDistance - distanceStart) / max(distanceEnd - distanceStart, 1e-5),
         0.0,
         1.0
       );
-      float distanceFog = sampleDistanceCurve(distanceFogNorm, distanceControlPoint1, distanceControlPoint2);
+      float distanceFog = sampleDistanceCurve(distanceFogNorm);
       distanceFog = pow(distanceFog, distanceExponent);
 
-      float depthBelowSurface = max(surfaceLevel - worldPos.y, 0.0);
+      float depthBelowSurface = max(surfaceLevel - worldY, 0.0);
       float heightFactor = 1.0 - exp(-depthBelowSurface * heightFalloff);
       heightFactor = clamp(pow(heightFactor, heightExponent), 0.0, 1.0);
 
@@ -349,11 +357,12 @@ function applyFogConfigToUniforms(uniforms, config = {}) {
   if (uniforms.distanceExponent) {
     uniforms.distanceExponent.value = finalConfig.distanceExponent;
   }
-  if (uniforms.distanceControlPoint1?.value) {
-    uniforms.distanceControlPoint1.value.copy(cloneVector2(finalConfig.distanceControlPoint1));
-  }
-  if (uniforms.distanceControlPoint2?.value) {
-    uniforms.distanceControlPoint2.value.copy(cloneVector2(finalConfig.distanceControlPoint2));
+  if (uniforms.tDistanceCurveLut) {
+    uniforms.tDistanceCurveLut.value = createOrUpdateDistanceCurveLutTexture(
+      uniforms.tDistanceCurveLut.value,
+      cloneVector2(finalConfig.distanceControlPoint1),
+      cloneVector2(finalConfig.distanceControlPoint2)
+    );
   }
   if (uniforms.surfaceLevel) {
     uniforms.surfaceLevel.value = finalConfig.surfaceLevel;
@@ -367,4 +376,76 @@ function applyFogConfigToUniforms(uniforms, config = {}) {
   if (uniforms.maxOpacity) {
     uniforms.maxOpacity.value = finalConfig.maxOpacity;
   }
+}
+
+// ---- Distance curve LUT ----
+// ベジェ曲線の「x→y」対応は、シェーダで逆変換（Newton）すると高コスト。
+// JS側で256サンプルのLUTを生成し、シェーダは参照だけにする。
+function createOrUpdateDistanceCurveLutTexture(existingTexture, controlPoint1, controlPoint2) {
+  const size = 256;
+  const needsNew = !existingTexture ||
+    !(existingTexture instanceof THREE.DataTexture) ||
+    existingTexture.image?.width !== size ||
+    existingTexture.image?.height !== 1;
+
+  const c1 = controlPoint1 instanceof THREE.Vector2 ? controlPoint1 : new THREE.Vector2();
+  const c2 = controlPoint2 instanceof THREE.Vector2 ? controlPoint2 : new THREE.Vector2();
+
+  // 更新不要判定（同一値ならGPU転送を省く）
+  const last = existingTexture?.userData?.distanceCurveLut ?? null;
+  const same = last &&
+    last.c1x === c1.x && last.c1y === c1.y &&
+    last.c2x === c2.x && last.c2y === c2.y;
+  if (!needsNew && same) {
+    return existingTexture;
+  }
+
+  const data = needsNew ? new Uint8Array(size * 4) : existingTexture.image.data;
+
+  // cubic-bezier(0,0) -> (c1) -> (c2) -> (1,1)
+  const bezier1D = (t, p0, p1, p2, p3) => {
+    const u = 1 - t;
+    const uu = u * u;
+    const tt = t * t;
+    return u * uu * p0 + 3 * uu * t * p1 + 3 * u * tt * p2 + tt * t * p3;
+  };
+  const bezierDerivative1D = (t, p0, p1, p2, p3) => {
+    const u = 1 - t;
+    return 3 * u * u * (p1 - p0) + 6 * u * t * (p2 - p1) + 3 * t * t * (p3 - p2);
+  };
+
+  // xに対応するtをNewtonで求め、yを得る。
+  for (let i = 0; i < size; i += 1) {
+    const x = i / (size - 1);
+    let t = x;
+    for (let iter = 0; iter < 5; iter += 1) {
+      const current = bezier1D(t, 0, c1.x, c2.x, 1) - x;
+      const slope = bezierDerivative1D(t, 0, c1.x, c2.x, 1);
+      if (Math.abs(slope) < 1e-5) {
+        break;
+      }
+      t = Math.min(1, Math.max(0, t - current / slope));
+    }
+    const y = bezier1D(t, 0, c1.y, c2.y, 1);
+    const v = Math.min(255, Math.max(0, Math.round(y * 255)));
+    const base = i * 4;
+    data[base + 0] = v;
+    data[base + 1] = v;
+    data[base + 2] = v;
+    data[base + 3] = 255;
+  }
+
+  const texture = needsNew
+    ? new THREE.DataTexture(data, size, 1, THREE.RGBAFormat, THREE.UnsignedByteType)
+    : existingTexture;
+
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.generateMipmaps = false;
+  texture.needsUpdate = true;
+  texture.userData.distanceCurveLut = { c1x: c1.x, c1y: c1.y, c2x: c2.x, c2y: c2.y };
+
+  return texture;
 }

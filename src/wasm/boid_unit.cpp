@@ -2,6 +2,7 @@
 
 #include "boids_buffers.h"
 #include "boids_tree.h"
+#include "obstacle_field.h"
 #include "pool_accessor.h"
 #include "simulation_tuning.h"
 #include "spatial_query.h"
@@ -46,10 +47,8 @@ constexpr float kTwoPi = 6.28318530718f;
 // ------------------------------------------------------------
 // NaN/Inf を「作らない」ための最小限ガード
 // ------------------------------------------------------------
-// - glm::normalize(0) は NaN を返すことがあり、以降の acos/dot/quat で
-//   値が汚染されると「個体が停止する」「ガガガッと不自然に動く」原因になる。
-// - ここでは isfinite のような重い判定は避け、
-//   length2 の閾値チェック（分岐1回）だけで 0除算を防ぐ。
+// - 0ベクトルの正規化を避け、以降の計算へ NaN が伝播するのを防ぐ。
+// - isfinite のような重い判定は避け、length2 の閾値チェックだけで済ませる。
 constexpr float kSafeNormalizeEps2 = 1e-12f;
 
 inline glm::vec3 safeNormalizeOr(const glm::vec3 &v,
@@ -302,7 +301,7 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
       isPredator ? glm::clamp(predatorChaseTimer * 0.3f, 0.2f, 1.0f) : 1.0f;
 
     // UI から渡される「逃避優先度」。
-    // 重要: 「0に近い値でも逃げる」問題を避けるため、低値域はデッドゾーンで0扱いにする。
+    // 低値域はデッドゾーンで0扱いにする。
     // - 逃避優先度は“逃避処理のON/OFF兼スケール”として扱い、別ルートで逃げないようにする。
     // - isPredator の個体には適用しない（捕食者側の追跡/休憩は別の目的）。
     const float rawEscapeWeight =
@@ -371,7 +370,8 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
         const glm::vec3 desiredVel = approachDir * desiredSpeed;
         acceleration += (desiredVel - velocity) * predatorWarmup * 0.75f;
       }
-    } else if (unit->buf->stresses[gIdx] > 0.1f ||
+     } else if (unit->buf->stresses[gIdx] > 0.1f ||
+       unit->buf->predatorThreats[gIdx] > 0.02f ||
        glm::length2(unit->buf->predatorInfluences[gIdx]) > (0.001f * 0.001f)) {
       // -----------------------------------------------
       // 逃避挙動: 捕食者からの影響を逃走加速度に変換
@@ -403,28 +403,25 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
       threatState = glm::max(threatState, influenceThreat);
       float threatLevel = glm::clamp(threatState, 0.0f, 1.0f);
 
-      // 逃避ロジック整理（優先）
-      // これまで「回避→パニック」など段階が増え、
-      // 群れ行動(凝集/整列/分離)と逃避を“中途半端に”ブレンドする時間が長くなっていた。
-      // その結果、近距離で
-      // - 逃避方向の舵取り
-      // - 分離反発
-      // - 旋回制限
-      // - 速度クランプ
-      // が干渉して方向がブルブル（高周波）しやすい。
-      // maxEscapeWeight を 1 にすると消えるのは、逃避が優先され競合が減るため。
-      // ここではまず「回避（加算）/ 逃避モード（固定ブレンド）」の2状態に整理する。
-
-      // 逃避モードに入る条件（スムーズに動くよう閾値は少し高め）
-      // NOTE: predatorInfluences は後段で減衰しているため、ここが自然なヒステリシスになる。
-        const bool escapeMode = (threatLevel > 0.25f) ||
-              (predatorInfluenceMagnitude > 0.35f);
-
-      // 逃避優先度が小さいときに「常に少し回避」が残ると、
-      // 群れ行動（分離/整列等）との競合が増え、ブルブルの原因になりやすい。
-      // そのため escapeMode のときだけ逃避を合成する（低脅威時は逃避を発火させない）。
-        // このブロック内では escapeFeatureEnabled は true が保証される。
-        const float escapeBlend = escapeMode ? effectiveEscapeWeight : 0.0f;
+      // 逃避ブレンドは「閾値で突然ON」にすると体感として“反応が遅い”になりやすい。
+      // そこで threatLevel に応じて滑らかに立ち上げる。
+      // - 低脅威: 小さく回避し始める（群れ行動を壊さない）
+      // - 高脅威: 逃避を優先（分離/整列/凝集との干渉を抑える）
+      // predatorInfluences は後段で減衰するため、ヒステリシスとしても効く。
+      constexpr float kEscapeStartThreat = 0.08f;
+      constexpr float kEscapeFullThreat = 0.25f;
+      float escapeBlend = 0.0f;
+      if (threatLevel >= kEscapeStartThreat) {
+        float t = (threatLevel - kEscapeStartThreat) / (kEscapeFullThreat - kEscapeStartThreat);
+        t = glm::clamp(t, 0.0f, 1.0f);
+        // smoothstep: t^2*(3-2t)
+        const float smoothT = t * t * (3.0f - 2.0f * t);
+        escapeBlend = smoothT * effectiveEscapeWeight;
+      }
+      // 直接の影響が十分強い場合は即座にフル逃避へ。
+      if (predatorInfluenceMagnitude > 0.35f) {
+        escapeBlend = effectiveEscapeWeight;
+      }
 
       // 逃避加速度を計算（捕食者から遠ざかる方向）
         glm::vec3 escapeForce = storedInfluence;
@@ -444,13 +441,13 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
           escapeForce = (desiredVel - velocity) * fleeStrength;
         }
 
-      // 通常加速度と逃避加速度の合成（整理版）
-      // - 低脅威: 少しだけ回避（加算）
-      // - 逃避モード: 逃避を優先（固定割合でブレンドし、競合を減らす）
-        if (escapeBlend > 0.0f) {
-          acceleration =
-              acceleration * (1.0f - escapeBlend) + escapeForce * escapeBlend;
-        }
+      // 通常加速度と逃避加速度の合成
+      // - 低脅威: 小さくブレンドして“早めに”回避を開始
+      // - 高脅威: 逃避ブレンドが 1 に近づき、逃避を優先
+      if (escapeBlend > 0.0f) {
+        acceleration =
+            acceleration * (1.0f - escapeBlend) + escapeForce * escapeBlend;
+      }
 
       // threat レベルを時間経過で減衰
         float decayedThreat =
@@ -467,8 +464,7 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
     float stressFactor = 1.0f;
 
     // 逃避優先度が0（デッドゾーン含む）の場合、
-    // 捕食者由来の恐怖/ストレスで速度が上がるのは期待と違う。
-    // 「逃避OFF（=捕食者由来の速度/旋回ブーストもOFF）」として扱う。
+    // 捕食者由来の恐怖/ストレスを速度・旋回へ反映しない（逃避OFF扱い）。
     if (!globalSpeciesParams[sid].isPredator && !escapeFeatureEnabled) {
       currentStress = 0.0f;
       stressFactor = 1.0f;
@@ -540,18 +536,7 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
     // - 判定自体は angle > maxTurnStep  <=>  dot < cos(maxTurnStep) で同値。
     const float dotProduct = glm::dot(oldDir, newDir);
     const float clampedDot = glm::clamp(dotProduct, -1.0f, 1.0f);
-    // maxTurnAngle は UI から渡される「最大曲率（移動距離あたりの回転量）」。
-    // 背景:
-    // - 角速度(rad/sec)を上限にすると、速度を上げたときに曲率(=ω/v)が下がり、
-    //   「同じ値なのに曲がり方が変わる」問題が起きる。
-    // - そこで「曲率」を上限にし、1ステップ上限角は curvature * speed * dt で算出する。
     float maxTurnCurvature = globalSpeciesParams[sid].maxTurnAngle * stressFactor;
-
-    // 捕食者が近いときの旋回上限ブースト（predatorThreat 由来）は撤去。
-    // 理由:
-    // - predatorThreat はフレームごとに変動しやすく、旋回上限まで変動すると
-    //   方向が「過修正→反転」を繰り返してブルブル（高周波）しやすい。
-    // - 旋回は base maxTurnAngle / stressFactor / 1ステップ上限(kMaxTurnStepLimit) で十分制御できる。
 
     if (globalSpeciesParams[sid].isPredator && !predatorOnBreak &&
         unit->buf->predatorTargetIndices[gIdx] >= 0) {
@@ -666,22 +651,15 @@ void BoidUnit::computeBoundingSphere() {
       center += buf->positions[gIdx];
     center /= static_cast<float>(indices.size());
 
-    // 平均距離と分散を計算
-    // NOTE: 平均距離(mean)は距離そのものが必要なので sqrt は避けられない。
-    // ただし分散(sum2)は距離^2で足せるため、d*d の乗算は省ける。
-    float sum = 0.0f, sum2 = 0.0f;
+    // 半径は「中心からの最大距離」で決める。
+    // - leaf は毎フレーム更新されるため、sqrt 回数を最小化したい。
+    // - 最大距離ベースなら leaf 内の全個体を確実に包含でき、探索の取りこぼしを避けやすい。
+    float maxDistSq = 0.0f;
     for (int gIdx : indices) {
       const float d2 = glm::distance2(center, buf->positions[gIdx]);
-      const float d = (d2 > 0.0f) ? glm::sqrt(d2) : 0.0f;
-      sum += d;
-      sum2 += d2;
+      maxDistSq = std::max(maxDistSq, d2);
     }
-    float mean = sum / static_cast<float>(indices.size());
-    float var = sum2 / static_cast<float>(indices.size()) - mean * mean;
-    float stddev = var > 0.0f ? std::sqrt(var) : 0.0f;
-
-    // 平均 + α × 標準偏差（α = 1.0）で半径を決定
-    radius = mean + 1.0f * stddev;
+    radius = (maxDistSq > 0.0f) ? glm::sqrt(maxDistSq) : 0.0f;
 
     const SpeciesParams *densityParams = nullptr;
     SpeciesParams fallbackParams{};
@@ -766,57 +744,103 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
 
     auto *soa = predatorUnit->buf;
 
-    // 重要: 種族エンベローブ（ユニットcenter/radius）がズレている状況では、
-    //       エンベローブ中心からの球クエリで「本当に近いのに列挙されない」取りこぼしが起こり得る。
-    //       ここでは捕食者“個体”ごとに球クエリして、判定/方向ともに個体位置へ揃える。
-    //       捕食者数は少ない前提なので、P回クエリでも許容する。
+    // 捕食者の影響は「捕食者個体位置」を基準に球クエリする。
+    // - ユニットの center/radius に依存すると列挙漏れが起きるため。
+    // - 捕食者数は少ない想定なので、個体ごとのクエリを許容する。
     for (int predatorIdx : predatorUnit->indices) {
       const glm::vec3 predatorPos = soa->positions[predatorIdx];
-      spatial_query::forEachBoidInSphere(
-          BoidTree::instance(), predatorPos, predatorEffectRange,
+
+      // 捕食者スイープは「正確さ」より「それっぽさ」を優先できるため、
+      // 周辺列挙を上限つき + ランダムサンプルにして空間探索コストを抑える。
+      constexpr std::size_t kPredatorGuaranteedNearest = 8;
+        const std::size_t oversampleLimit = kPredatorCacheLimit;
+
+      struct PredatorSweepCandidate {
+        int index;
+        float distanceSq;
+      };
+      static thread_local std::vector<PredatorSweepCandidate> preyCandidates;
+      preyCandidates.clear();
+      if (preyCandidates.capacity() < oversampleLimit) {
+        preyCandidates.reserve(oversampleLimit);
+      }
+
+      spatial_query::forEachBoidInSphereLimited(
+          BoidTree::instance(), predatorPos, predatorEffectRange, oversampleLimit,
           [&](int idxB, const BoidUnit *leafNode) {
             if (!leafNode || leafNode == predatorUnit) {
               return;
             }
-
             const int sidB = soa->speciesIds[idxB];
+            if (sidB < 0 || sidB >= static_cast<int>(globalSpeciesParams.size())) {
+              return;
+            }
             if (globalSpeciesParams[sidB].isPredator) {
               return;
             }
-
-            const SpeciesParams &preyParams = globalSpeciesParams[sidB];
-            float alertRadius = std::max(preyParams.predatorAlertRadius, 0.0f);
-            if (alertRadius <= 0.0f) {
-              alertRadius = predatorEffectRange;
-            }
-            const float alertRadiusSq = alertRadius * alertRadius;
-
-            const glm::vec3 toTarget = soa->positions[idxB] - predatorPos;
-            const float d2 = glm::dot(toTarget, toTarget);
-            if (d2 >= alertRadiusSq) {
-              return;
-            }
-
-            // 同一点（d2=0）の normalize を避けて NaN 混入を防ぐ。
-            if (!(d2 > kSafeNormalizeEps2)) {
-              return;
-            }
-            const glm::vec3 escapeDir = toTarget * (1.0f / std::sqrt(d2));
-            const float normalizedDistance =
-                std::sqrt(std::max(d2, 1e-6f)) / alertRadius;
-            float escapeStrength =
-                glm::clamp(1.0f - normalizedDistance, 0.0f, 1.0f);
-            escapeStrength =
-                escapeStrength * escapeStrength * (3.0f - 2.0f * escapeStrength);
-
-            soa->predatorInfluences[idxB] += escapeDir * escapeStrength * 5.0f;
-            soa->predatorThreats[idxB] =
-                std::max(soa->predatorThreats[idxB], escapeStrength);
-
-            const float stressLevel =
-                glm::clamp(0.4f + escapeStrength * 0.6f, 0.0f, 1.0f);
-            soa->stresses[idxB] = std::max(soa->stresses[idxB], stressLevel);
+            const glm::vec3 preyPos = soa->positions[idxB];
+            const glm::vec3 toTarget = preyPos - predatorPos;
+            const float distSq = glm::dot(toTarget, toTarget);
+            preyCandidates.push_back({idxB, distSq});
           });
+
+        const std::size_t candidateCount = preyCandidates.size();
+        const std::size_t sampleCount = candidateCount;
+
+      const std::size_t guaranteeCount =
+          std::min<std::size_t>(kPredatorGuaranteedNearest, sampleCount);
+      if (guaranteeCount > 0 && candidateCount > guaranteeCount) {
+        // 最近傍は必ずサンプルに含めて、捕食者直近を空けやすくする。
+        std::nth_element(preyCandidates.begin(),
+                         preyCandidates.begin() + guaranteeCount,
+                         preyCandidates.end(),
+                         [](const PredatorSweepCandidate &a,
+                            const PredatorSweepCandidate &b) {
+                           return a.distanceSq < b.distanceSq;
+                         });
+      }
+
+      for (std::size_t i = 0; i < sampleCount; ++i) {
+        const int idxB = preyCandidates[i].index;
+        const int sidB = soa->speciesIds[idxB];
+        if (sidB < 0 || sidB >= static_cast<int>(globalSpeciesParams.size())) {
+          continue;
+        }
+        const SpeciesParams &preyParams = globalSpeciesParams[sidB];
+        float alertRadius = std::max(preyParams.predatorAlertRadius, 0.0f);
+        if (alertRadius <= 0.0f) {
+          alertRadius = predatorEffectRange;
+        }
+        const float alertRadiusSq = alertRadius * alertRadius;
+
+        const glm::vec3 toTarget = soa->positions[idxB] - predatorPos;
+        const float d2 = glm::dot(toTarget, toTarget);
+        if (d2 >= alertRadiusSq) {
+          continue;
+        }
+        // 同一点（d2=0）の normalize を避けて NaN 混入を防ぐ。
+        if (!(d2 > kSafeNormalizeEps2)) {
+          continue;
+        }
+
+        // 同じ距離に対する sqrt を二重に呼ばない（ホットパス削減）。
+        const float dist = std::sqrt(d2);
+        const float invDist = (dist > 0.0f) ? (1.0f / dist) : 0.0f;
+        const glm::vec3 escapeDir = toTarget * invDist;
+        const float normalizedDistance = dist / alertRadius;
+        float escapeStrength =
+            glm::clamp(1.0f - normalizedDistance, 0.0f, 1.0f);
+        escapeStrength =
+            escapeStrength * escapeStrength * (3.0f - 2.0f * escapeStrength);
+
+        soa->predatorInfluences[idxB] += escapeDir * escapeStrength * 5.0f;
+        soa->predatorThreats[idxB] =
+            std::max(soa->predatorThreats[idxB], escapeStrength);
+
+        const float stressLevel =
+            glm::clamp(0.4f + escapeStrength * 0.6f, 0.0f, 1.0f);
+        soa->stresses[idxB] = std::max(soa->stresses[idxB], stressLevel);
+      }
     }
 
     return true;
@@ -961,9 +985,8 @@ void BoidUnit::updateRecursive(float dt) {
   // ----------------------------------------------
   // 並列化の基本方針
   // ----------------------------------------------
-  // 以前は「leaf 1個 = 1タスク」で enqueue/future を大量発行していたため、
-  // mutex/condvar の競合（futex wait）と future の待機コストが支配的になっていた。
-  // ここでは leaf をチャンク分割し、少数タスクで処理する。
+  // leaf をチャンクにまとめ、少数タスクで処理する。
+  // - タスク/ future の発行が細かすぎると、待機・同期のオーバーヘッドが支配的になりやすい。
   auto &pool = getThreadPool();
   static std::vector<std::future<void>> asyncTasks;
   asyncTasks.clear();
@@ -1232,6 +1255,18 @@ void BoidUnit::computeBoidInteraction(float dt) {
   const float leafDensityValue = simpleDensity;
 
   // -----------------------------------------------
+  // 種族ごとに一定な値は先に計算して使い回す
+  // -----------------------------------------------
+  // NOTE:
+  // - computeBoidInteraction は N 個体ぶん繰り返すため、三角関数や sqrt を1回でも減らすと効く。
+  // - leaf は同種族で構成される前提（異種 merge は禁止済み）なので、ここでホイストする。
+  const SpeciesParams &leafParams = globalSpeciesParams[leafSpeciesId];
+  const float leafViewRange = glm::max(leafParams.cohesionRange, 0.0f);
+  const float leafViewRangeSq = leafViewRange * leafViewRange;
+  const float halfFovRad = glm::radians(leafParams.fieldOfViewDeg * 0.5f);
+  const float leafCosHalfFovSq = std::cos(halfFovRad) * std::cos(halfFovRad);
+
+  // -----------------------------------------------
   // 各 Boid（leafノード内）ごとの反復
   // -----------------------------------------------
   for (size_t index = 0; index < indices.size(); ++index) {
@@ -1258,13 +1293,10 @@ void BoidUnit::computeBoidInteraction(float dt) {
     const float selfRadiusAbs = std::max(selfParams.bodyRadius, 0.0f);
     const float baseCohesionStrength = glm::max(selfParams.cohesion, 0.0f);
     glm::vec3 longTermCohesion(0.0f);
-    // 以前はカプセル同士の最近接(closestPointsOnSegments)で強い反発を入れていたが、
-    // 近傍ごとに高コストで、さらに「相手の加速度まで書き換える」ため並列時の
-    // 競合や一斉挙動の原因になり得る。
-    // 現在は軽量な近接反発（距離ベース）で近接回避を担う。
+    // 近接回避は距離ベースの軽量反発で扱う。
+    // - 近傍ごとの高コスト計算や、相手状態の更新は避けて並列性を保つ。
     float threatLevel = glm::clamp(buf->predatorThreats[gIdx], 0.0f, 1.0f);
-    const float viewRangeSq = globalSpeciesParams[sid].cohesionRange *
-                              globalSpeciesParams[sid].cohesionRange;
+    const float viewRangeSq = leafViewRangeSq;
 
     // FastAttract 機能を廃止したため、状態は毎フレーム明示的にリセットする。
     // バッファを持ち越すと「過去のON状態」が残って挙動が不安定になり得る。
@@ -1351,10 +1383,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
         }
       }
     }
-    // 視界角度（FOV in degrees）の半分をラジアンに変換
-    float halfFovRad =
-        glm::radians(globalSpeciesParams[sid].fieldOfViewDeg * 0.5f);
-    float cosHalfFov = std::cos(halfFovRad);
+    const float cosHalfFovSq = leafCosHalfFovSq;
 
     candidates.clear();
     if (globalSpeciesParams[sid].isPredator) {
@@ -1530,10 +1559,8 @@ void BoidUnit::computeBoidInteraction(float dt) {
     auto &activeNeighbors =
         buf->boidActiveNeighbors[gIdx]; // 使用中slotのインデックス
 
-    // 近傍キャッシュは固定スロット数で管理する。
-    // maxNeighbors がこれを超えると「常に薄い」扱いになり、
-    // 近傍不足時の補助ロジックが過剰に働いて飛び散る原因になるため、
-    // ここで“実効 maxNeighbors”を揃える。
+    // 近傍キャッシュは固定スロット数で管理するため、maxNeighbors はその範囲にクランプする。
+    // - 設定値だけが大きいと「近傍不足」判定が常態化し、補助ロジックが過剰に走りやすい。
     const int neighborSlotLimit = static_cast<int>(
       std::min<std::size_t>(cohesionMemories.size(), SoABuffers::NeighborSlotCount));
     const int maxNeighbors = glm::clamp(globalSpeciesParams[sid].maxNeighbors, 0,
@@ -1589,13 +1616,17 @@ void BoidUnit::computeBoidInteraction(float dt) {
         glm::vec3 diff = buf->positions[gNeighbor] - pos;
         float distSq = glm::dot(diff, diff);
         if (distSq >= viewRangeSq)
-          continue; // 速度ゼロでなければ視界内かどうかを確認（最適化版）
+          continue; // 速度ゼロでなければ視界内かどうかを確認（sqrt を避ける版）
         if (hasVel) {
-          // 平方根計算を回避：内積の比較でFOVチェック
-          float diffDot = glm::dot(forward, diff);
-          float requiredDot = cosHalfFov * glm::sqrt(distSq);
-          if (diffDot < requiredDot)
+          // FOV判定: diffDot >= cosHalfFov * |diff|
+          // sqrt を避けるために二乗比較へ変形する。
+          const float diffDot = glm::dot(forward, diff);
+          if (diffDot <= 0.0f) {
             continue;
+          }
+          if (diffDot * diffDot < cosHalfFovSq * distSq) {
+            continue;
+          }
         }
         candidates.emplace_back(distSq, (int)i);
       }
@@ -1704,8 +1735,10 @@ void BoidUnit::computeBoidInteraction(float dt) {
               // 視界判定（速度がゼロに近い場合は無条件許可）
               if (hasVel) {
                 const float diffDot = glm::dot(forward, diff);
-                const float requiredDot = cosHalfFov * glm::sqrt(distSq);
-                if (diffDot < requiredDot) {
+                if (diffDot <= 0.0f) {
+                  return;
+                }
+                if (diffDot * diffDot < cosHalfFovSq * distSq) {
                   return;
                 }
               }
@@ -1793,6 +1826,12 @@ void BoidUnit::computeBoidInteraction(float dt) {
       // wSep は separationRange で正規化済みなので、閾値判定で個体数を数える。
       int crowdCloseCount = 0;
 
+      // 近接反発（めり込み）を検出した場合だけ、速度を落として詰まり感を軽減する。
+      // NOTE:
+      // - 追加の重い計算は行わず、既に計算している penetrationRatio の最大値だけ保持する。
+      // - 近いが接触していない（=wSep だけ高い）ケースでは減速しない。
+      float maxPenetrationRatio = 0.0f;
+
       // ---- 近傍(leaf内) ----
       for (size_t i = 0; i < neighborSlots; ++i) {
         if (!activeNeighbors.test(i)) {
@@ -1844,13 +1883,20 @@ void BoidUnit::computeBoidInteraction(float dt) {
           const float dist = glm::sqrt(distSq);
           const float penetration = glm::max(closeCheckRange - dist, 0.0f);
           const float penetrationRatio = penetration / glm::max(closeCheckRange, 1e-5f);
+          maxPenetrationRatio = glm::max(maxPenetrationRatio, penetrationRatio);
           // めり込みが深いほど急激に強くする（魚が重なるのを防ぐ定石）。
           // - 浅い接触では安定性を優先し、過剰反発を避ける
           // - 深いめり込みでは強制的に押し戻す（重なりを残さない）
           float response = penetrationRatio * penetrationRatio;
           response *= response; // 4乗
+          // めり込みが深いほど追加で強く押し返す。
+          // - 浅い接触: ほぼ影響なし（挙動のガタつき回避）
+          // - 深いめり込み: 速やかに解消（重なり残りを抑える）
+          // 追加ブーストは penetrationRatio^2 ベースにし、分岐なしで安定させる。
+          const float overlapBoost = 1.0f + (penetrationRatio * penetrationRatio) * 3.0f;
+
           // 係数は速度と separation に応じてスケール。極端な発散は後段の加速度クリップで抑える。
-          const float impulse = response * glm::max(selfParams.separation, 0.02f) *
+          const float impulse = response * overlapBoost * glm::max(selfParams.separation, 0.02f) *
                                 (1.0f + selfParams.maxSpeed) * 18.0f;
           buf->accelerations[gIdx] += (diff * (1.0f / dist)) * (-impulse);
         }
@@ -1965,9 +2011,11 @@ void BoidUnit::computeBoidInteraction(float dt) {
           const float dist = glm::sqrt(distSq);
           const float penetration = glm::max(closeCheckRange - dist, 0.0f);
           const float penetrationRatio = penetration / glm::max(closeCheckRange, 1e-5f);
+          maxPenetrationRatio = glm::max(maxPenetrationRatio, penetrationRatio);
           float response = penetrationRatio * penetrationRatio;
           response *= response; // 4乗
-          const float impulse = response * glm::max(selfParams.separation, 0.02f) *
+          const float overlapBoost = 1.0f + (penetrationRatio * penetrationRatio) * 3.0f;
+          const float impulse = response * overlapBoost * glm::max(selfParams.separation, 0.02f) *
                                 (1.0f + selfParams.maxSpeed) * 18.0f;
           buf->accelerations[gIdx] += (diff * (1.0f / dist)) * (-impulse);
         }
@@ -2197,11 +2245,9 @@ void BoidUnit::computeBoidInteraction(float dt) {
           const float dirLen2 = glm::length2(globalDir);
           if (dirLen2 > EPS) {
             globalDir *= 1.0f / glm::sqrt(dirLen2);
-            // 以前は「群れ半径(schoolRadius)で正規化した距離」に応じて引力を変えていたが、
-            // 半径が巨大になった場合に normalizedDist が極端に小さくなり、
-            // 群れ中心へほぼ向かわない（=中心誘導が死ぬ）問題が起きる。
-            // ここでは半径に依存せず、常に群れ中心へ向かうようにする。
-            // ただし中心付近の微小な揺れを抑えるため、近接時だけ軽く減衰させる。
+            // 大クラスタ引力は半径に依存させず、常に中心方向へ寄せる。
+            // - 半径が大きいケースでも誘導が弱まりすぎないようにする。
+            // - 中心付近の微小な揺れは、近接時だけ軽く減衰させる。
             const float nearAttenuation =
                 glm::smoothstep(0.15f, 2.0f, clusterDist);
             const float clusterPull = baseCohesionStrength * nearAttenuation *
@@ -2268,6 +2314,14 @@ void BoidUnit::computeBoidInteraction(float dt) {
         }
       }
       // --- 最終的な加速度をバッファに書き込み ---
+      if (maxPenetrationRatio > 0.0f) {
+        // 密集して動けないときは、その分「速度を落として押し合い」を解消しやすくする。
+        // - 速度が高いほど詰まりが悪化しやすいので、速度に比例した抵抗（drag）を与える。
+        // - 深いめり込みほど強く、浅い接触ではほぼ効かない。
+        const float slowSignal = glm::smoothstep(0.10f, 0.55f, maxPenetrationRatio);
+        const float kCrowdingDrag = 10.0f;
+        buf->accelerations[gIdx] += (-vel) * (slowSignal * kCrowdingDrag);
+      }
       buf->accelerations[gIdx] +=
           totalSeparation + combinedAlignment + combinedCohesion;
     }
@@ -2510,10 +2564,8 @@ std::vector<BoidUnit *> BoidUnit::splitByClustering(int numClusters) {
 bool BoidUnit::canMergeWith(const BoidUnit &other, float mergeDist,
                             float velThresh, float maxRadius,
                             int maxBoids) const {
-  // 異なる種族同士を merge すると、mergeWith() が buf->speciesIds を上書きし、
-  // 捕食者が“通常Boid化”してしまう。
-  // その結果、時間経過で「捕食者が仲良く泳ぐ」「以降まったく逃げない」などの
-  // 破綻した挙動になり得るため、ここで明示的に禁止する。
+  // 異なる種族同士の merge は禁止する。
+  // - mergeWith() は buf->speciesIds を上書きするため、種族の意味（捕食者/獲物等）が崩れる。
   if (speciesId != other.speciesId) {
     return false;
   }
