@@ -49,7 +49,7 @@ export class WasmtimeBridge {
 
     // cwrap された wasm 関数を遅延束縛で保持
     this.stepSimulationHandle = this.createWrappedFunction('stepSimulation', 'number', ['number']);
-    this.buildHandle = this.createWrappedFunction('build', 'void', ['number', 'number']);
+    this.buildHandle = this.createWrappedFunction('build', 'void', ['number']);
     this.exportTreeStructureHandle = this.createWrappedFunction('exportTreeStructure', 'object', []);
     this.boidUnitMappingPtrHandle = this.createWrappedFunction('boidUnitMappingPtr', 'number', []);
     this.currentFirstBoidXHandle = this.createWrappedFunction('currentFirstBoidX', 'number', []);
@@ -69,6 +69,12 @@ export class WasmtimeBridge {
     // Species school clusters debug export
     this.speciesSchoolClustersPtrHandle = this.createWrappedFunction('speciesSchoolClustersPtr', 'number', []);
     this.speciesSchoolClustersCountHandle = this.createWrappedFunction('speciesSchoolClustersCount', 'number', []);
+
+    this.configureGroundPlaneHandle = this.createWrappedFunction(
+      'configureGroundPlane',
+      'void',
+      ['boolean', 'number', 'number', 'number', 'number'],
+    );
   }
 
   getSimulationTuningParams() {
@@ -101,6 +107,26 @@ export class WasmtimeBridge {
         toNumber(params.schoolPullCoefficient, 0.0008)
       ),
     });
+  }
+
+  configureGroundPlane(options) {
+    if (!this.wasm) {
+      return;
+    }
+    const handle = this.ensureHandle(this.configureGroundPlaneHandle, 'configureGroundPlane');
+    if (!handle || !options) {
+      return;
+    }
+    const toNumber = (value, fallback) => {
+      const num = Number(value);
+      return Number.isFinite(num) ? num : fallback;
+    };
+    const enabled = options.enabled !== false;
+    const height = toNumber(options.height, 0);
+    const blendDistance = Math.max(0, toNumber(options.blendDistance, 2));
+    const stiffness = Math.max(0, toNumber(options.stiffness, 18));
+    const damping = Math.max(0, toNumber(options.damping, 8));
+    handle(enabled, height, blendDistance, stiffness, damping);
   }
 
   /**
@@ -401,9 +427,9 @@ export class WasmtimeBridge {
   }
 
   /** wasm 側の空間インデックス生成をトリガー */
-  buildSpatialIndex(arg0, arg1) {
+  buildSpatialIndex(maxPerUnit) {
     const handle = this.ensureHandle(this.buildHandle, 'build');
-    handle(arg0, arg1);
+    handle(maxPerUnit);
   }
 
   /** wasm から木構造データを取得 */

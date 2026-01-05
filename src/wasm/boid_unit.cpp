@@ -300,6 +300,14 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
     const float predatorWarmup =
       isPredator ? glm::clamp(predatorChaseTimer * 0.3f, 0.2f, 1.0f) : 1.0f;
 
+    // 障害物（まずは地面）とのソフト制約を評価し、事前に逃がす。
+    const glm::vec3 obstacleAvoidance =
+        obstacle_field::computeAvoidance(position, velocity);
+    if (obstacleAvoidance.x != 0.0f || obstacleAvoidance.y != 0.0f ||
+        obstacleAvoidance.z != 0.0f) {
+      acceleration += obstacleAvoidance;
+    }
+
     // UI から渡される「逃避優先度」。
     // 低値域はデッドゾーンで0扱いにする。
     // - 逃避優先度は“逃避処理のON/OFF兼スケール”として扱い、別ルートで逃げないようにする。
@@ -611,6 +619,8 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
     const glm::vec3 newVelocity = newDir * finalSpeed;
     unit->buf->velocitiesWrite[gIdx] = newVelocity;
     unit->buf->positionsWrite[gIdx] = position + newVelocity * dt;
+    obstacle_field::resolvePenetration(unit->buf->positionsWrite[gIdx],
+                       unit->buf->velocitiesWrite[gIdx]);
     unit->buf->accelerations[gIdx] = glm::vec3(0.0f);
     unit->buf->predatorInfluences[gIdx] *= 0.7f; // 適度に保持して逃走を継続（保持しすぎると過剰反応になる）
     unit->buf->orientationsWrite[gIdx] = BoidUnit::dirToQuatRollZero(newDir);
@@ -1243,7 +1253,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
   // thread_local で確保コストを抑えつつ再利用。上限超過時は後段で縮小する。
   static thread_local std::vector<std::pair<float, int>> candidates;
   static thread_local std::vector<int> predatorTargetCandidates;
-  // KD-tree から「ユニット外」の近傍を補うための一時バッファ。
+  // SpatialIndex（球クエリ）から「ユニット外」の近傍を補うための一時バッファ。
   // 既存の activeNeighbors/cohesionMemories は leaf 内 index 前提なので、
   // 外部近傍はフレーム内の加速度計算にのみ利用し、メモリ構造は崩さない。
   static thread_local std::vector<int> externalNeighbors;
@@ -1687,7 +1697,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
     }
 
     // -------------------------------------------------------
-    // 4.5. KD-tree (SpatialIndex) からユニット外の近傍を補う
+    // 4.5. SpatialIndex（球クエリ）からユニット外の近傍を補う
     // -------------------------------------------------------
     // 目的: ユニット境界で近傍が途切れて「チンダル現象」的な散り方になるのを抑える。
     // 注意: 完全に正しい kNN を保証するものではない（球内列挙+上限）。
@@ -1978,7 +1988,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
         sumAlign += buf->velocities[gNeighbor] * memoryFade;
       }
 
-      // ---- 近傍(ユニット外: KD-tree 球検索) ----
+      // ---- 近傍(ユニット外: SpatialIndex 球検索) ----
       // こちらはメモリ構造を持たないため、フレーム内の力学合算のみ行う。
       for (int gNeighbor : externalNeighbors) {
         if (gNeighbor < 0) {

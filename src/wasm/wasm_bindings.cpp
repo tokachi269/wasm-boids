@@ -1,6 +1,7 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #include "boids_tree.h"
 #include "boid.h"
+#include "obstacle_field.h"
 #include "species_params.h"
 #include "simulation_tuning.h"
 #include <glm/glm.hpp>
@@ -40,6 +41,12 @@ void setSimulationTuningParams(const SimulationTuningParams &params) {
     gSimulationTuning = params;
     gSimulationTuning.maxEscapeWeight = std::clamp(gSimulationTuning.maxEscapeWeight, 0.0f, 1.0f);
     gSimulationTuning.schoolPullCoefficient = std::max(gSimulationTuning.schoolPullCoefficient, 0.0f);
+}
+
+void configureGroundPlaneFromJS(bool enabled, float height, float blendDistance,
+                                float stiffness, float damping) {
+    obstacle_field::configureGroundPlane(enabled, height, blendDistance,
+                                         stiffness, damping);
 }
 
 EMSCRIPTEN_BINDINGS(my_module)
@@ -115,5 +122,6 @@ value_object<SimulationTuningParams>("SimulationTuningParams")
     function("getSimulationTuningParams", &getSimulationTuningParams);
     function("setSimulationTuningParams", &setSimulationTuningParams);
     function("callInitBoids", &callInitBoids); // 新しい関数を登録
+    function("configureGroundPlane", &configureGroundPlaneFromJS);
 }
 

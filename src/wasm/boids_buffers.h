@@ -56,7 +56,7 @@ struct SoABuffers {
   std::vector<std::bitset<NeighborSlotCount>>
       boidActiveNeighbors; // 使用中slotのインデックス
   // boidActiveNeighbors の各 slot に対応する「近傍Boidのグローバルindex」。
-  // これにより BoidUnit(葉) の indices 順序に依存せず、KD-tree/SpatialIndex の結果を
+  // これにより BoidUnit(葉) の indices 順序に依存せず、SpatialIndex（球クエリ）の結果を
   // 安定してキャッシュできる。
   std::vector<std::array<int, NeighborSlotCount>> boidNeighborIndices;
 

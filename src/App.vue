@@ -844,6 +844,16 @@ function initThreeJS() {
   groundMesh.receiveShadow = true; // 影を受ける
   scene.add(groundMesh);
 
+  if (wasmBridge) {
+    wasmBridge.configureGroundPlane({
+      enabled: true,
+      height: groundMesh.position.y,
+      blendDistance: 1,
+      stiffness: 22,
+      damping: 10,
+    });
+  }
+
   // ライト
   const ambientLight = new THREE.AmbientLight(
     toHex(OCEAN_COLORS.AMBIENT_LIGHT),
@@ -1292,7 +1302,7 @@ function reinitializeFlockNow() {
     }
   }
   try {
-    wasmBridge.buildSpatialIndex(16, 0);
+    wasmBridge.buildSpatialIndex(16);
   } catch (error) {
     console.error(
       "WasmtimeBridge.buildSpatialIndex の呼び出しに失敗しました",

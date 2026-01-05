@@ -776,37 +776,10 @@ void BoidTree::build(int maxPerUnit) {
   // printTree(root, 0);
   setRenderPointersToReadBuffers();
 }
-// void BoidTree::build(int maxPerUnit, int level) {
-//   // rootが存在する場合は再利用して再構築
-//   if (root) {
-//     std::vector<BoidUnit *> existingUnits;
-//     collectLeaves(root, existingUnits); // 既存の葉ノードを収集
 
-//     // 新しいルートノードを作成
-//     auto *newRoot = new BoidUnit();
-//     newRoot->buf = &buf; // 中央バッファを共有
-//     newRoot->level = level;
-
-//     // 既存のユニットを再利用して再構築
-//     rebuildTreeWithUnits(newRoot, existingUnits, maxPerUnit, level);
-
-//     // 古いルートを削除
-//     delete root;
-//     root = newRoot;
-//   } else {
-//     // rootが存在しない場合は新規作成
-//     root = new BoidUnit();
-//     root->buf = &buf; // 中央バッファを共有
-//     maxBoidsPerUnit = maxPerUnit;
-//     root->level = level;
-
-//     // すべての Boid インデックスを作成
-//     std::vector<int> indices(buf.positions.size());
-//     std::iota(indices.begin(), indices.end(), 0);
-
-//     buildRecursive(root, indices, maxPerUnit, level);
-//   }
-// }
+// NOTE:
+// 過去に build(maxPerUnit, level) も存在しましたが、現在は build(maxPerUnit) に統一しています。
+// インデックス構築の呼び出し側(API)を単純化し、誤解を減らすのが目的です。
 
 // 既存のユニットを再利用して木構造を再構築する関数
 void BoidTree::rebuildTreeWithUnits(BoidUnit *node,
