@@ -7,12 +7,16 @@
 #include "species_params.h"
 #include "boids_buffers.h"
 #include "spatial_index.h"
+#include "boid_tree_spatial_index.h"
 
-class BoidTree : public SpatialIndex
+// 群れシミュレーションの世界状態（更新ループ・SoAバッファ・デバッグ集計）を保持する。
+// かつては BoidUnit ツリー実装まで抱えていたため BoidTree と呼んでいたが、
+// SpatialIndex 実装を分離したことで実態は「シミュレーション本体」なので改名する。
+class BoidSimulation : public SpatialIndex
 {
 public:
-    static BoidTree& instance() {
-        static BoidTree instance; // シングルトンインスタンス
+    static BoidSimulation& instance() {
+        static BoidSimulation instance; // シングルトンインスタンス
         return instance;
     }
     struct LeafCacheEntry {
@@ -25,7 +29,7 @@ public:
     std::vector<LeafCacheEntry> leafCache;
     int splitIndex = 0;
     int mergeIndex = 0;
-    int maxBoidsPerUnit = 16;
+    int maxBoidsPerUnit = 32;
     SoABuffers buf;              // 中央バッファに一本化
     struct SpeciesEnvelope {
         glm::vec3 center = glm::vec3(0.0f);
@@ -85,39 +89,49 @@ public:
     // BoidUnit プール
     std::stack<BoidUnit*> unitPool;
 
+    // 現在使用中の SpatialIndex 実装。
+    // - 既定は BoidUnit ツリーを使う BoidTreeSpatialIndex。
+    // - 将来的に UniformGrid/BVH などへ差し替えるための注入ポイント。
+    BoidTreeSpatialIndex treeSpatialIndex_;
+    const SpatialIndex *activeSpatialIndex_ = &treeSpatialIndex_;
+
     // クラスター更新を間引く際の dt 蓄積（時間スケールのEMAを保つ）
     float clusterUpdateDtAccumulator_ = 0.0f;
     
-    BoidTree();
-    ~BoidTree();
-    
-    // プール管理
-    BoidUnit* getUnitFromPool();
-    void returnUnitToPool(BoidUnit* unit);
-    void clearPool();
+    BoidSimulation();
+    ~BoidSimulation();
+
+    // ---- 参照専用の軽量アクセサ（外部からの直アクセスを減らす） ----
+    int getFrameCount() const { return frameCount; }
+    int getMaxBoidsPerUnit() const { return maxBoidsPerUnit; }
+    const SoABuffers& getBuffers() const { return buf; }
+
+    // 空間インデックス（現状は BoidUnit ツリー）を保持値で再構築する。
+    void rebuildSpatialIndex() { build(); }
+
+    // JS 側の色分け等に使う speciesIds 配列。
+    uintptr_t getSpeciesIdsPtr() const {
+        const auto &ids = buf.speciesIds;
+        return ids.empty() ? 0 : reinterpret_cast<uintptr_t>(ids.data());
+    }
+
+    // SoA ダブルバッファの読み取り側→書き込み側を同期する（デバッグ/可視化用途）。
+    void syncWriteFromReadBuffers() { buf.syncWriteFromRead(); }
     
     void setFlockSize(int newSize, float posRange, float velRange);
     void initializeBoids(const std::vector<SpeciesParams> &speciesParamsList, float posRange, float velRange);
-    void initializeBoidMemories(const std::vector<SpeciesParams> &speciesParamsList);
-    void build(int maxPerUnit = 16);
-    void buildRecursive(BoidUnit *node, const std::vector<int> &indices, int maxPerUnit);
+    // 空間インデックスを再構築する（maxBoidsPerUnit を使用）。
+    void build();
     void update(float dt = 1.0f);
-    void trySplitRecursive(BoidUnit *node);
     // バッファ更新
     uintptr_t getPositionsPtr();
     uintptr_t getVelocitiesPtr();
     uintptr_t getOrientationsPtr();
     int getBoidCount() const;
-    void collectLeaves(const BoidUnit *node, std::vector<BoidUnit *> &leaves) const;
     std::unordered_map<int, int> collectBoidUnitMapping();
     void setUnitSimpleDensity(int unitId, float value);
     uintptr_t getUnitSimpleDensityPtr();
     int getUnitSimpleDensityCount() const;
-    void updateSpeciesEnvelopes();
-    void updateSpeciesClusters(float dt);
-    void updateSpeciesSchoolClusters(float dt);
-    const SpeciesEnvelope *getSpeciesEnvelope(int speciesId) const;
-    const std::vector<SpeciesCluster> *getSpeciesClusters(int speciesId) const;
     const std::vector<SpeciesSchoolCluster> *getSpeciesSchoolClusters(int speciesId) const;
     uintptr_t getSpeciesEnvelopePtr();
     int getSpeciesEnvelopeCount() const;
@@ -138,9 +152,6 @@ public:
      * - これを毎回スキャンすると非常に重いので、setGlobalSpeciesParams() でキャッシュする。
      */
     float getMaxPredatorAlertRadius() const { return maxPredatorAlertRadius_; }
-    void rebuildTreeWithUnits(BoidUnit *node,
-                              const std::vector<BoidUnit *> &units,
-                              int maxPerUnit);
 
     // SpatialIndex implementation
     void forEachLeaf(const LeafVisitor &visitor) const override;
@@ -156,76 +167,57 @@ public:
      *
      * 注意:
      * - SpatialIndex の仮想インターフェースは互換性維持のため変更しない。
-     * - BoidTree 固有の高速パスとして提供する。
+    * - BoidSimulation 固有の高速パスとして提供する。
      */
     template <typename CancelableVisitor>
     void forEachLeafIntersectingSphereCancelable(const glm::vec3 &center, float radius,
                                                  CancelableVisitor &&visitor) const {
-        if (!root) {
+        // BoidUnit ツリーが有効な場合は tree 実装の cancelable を使う。
+        // 将来的に別の SpatialIndex 実装へ差し替えた場合は、最後まで走査するフォールバックになる。
+        if (activeSpatialIndex_ == &treeSpatialIndex_) {
+            treeSpatialIndex_.forEachLeafIntersectingSphereCancelable(center, radius,
+                std::forward<CancelableVisitor>(visitor));
             return;
         }
 
-        // 反復DFS。現在の実装（forEachLeafIntersectingSphereRecursive）と同様の安全策を持つ。
-        // NOTE: 空間探索はフレーム内で多回呼ばれるため、ローカルvectorの生成・破棄が
-        // allocator負荷として顕在化しやすい。thread_local で再利用してコストを抑える。
-        static thread_local std::vector<std::pair<const BoidUnit *, const BoidUnit *>> stack;
-        stack.clear();
-        if (stack.capacity() < 256) {
-            stack.reserve(256);
-        }
-        stack.emplace_back(root, nullptr);
-
-        constexpr std::size_t kMaxTraversalSteps = 5'000'000;
-        std::size_t steps = 0;
-
-        while (!stack.empty()) {
-            const auto currentPair = stack.back();
-            stack.pop_back();
-            const BoidUnit *current = currentPair.first;
-            const BoidUnit *parent = currentPair.second;
-
-            if (!current) {
-                continue;
-            }
-            if (++steps > kMaxTraversalSteps) {
-                return;
-            }
-
-            const glm::vec3 delta = current->center - center;
-            const float maxDist = current->radius + radius;
-            if (glm::dot(delta, delta) > maxDist * maxDist) {
-                continue;
-            }
-
-            if (current->children.empty()) {
-                SpatialLeaf leaf{current->indices.data(), current->indices.size(), current};
-                if (!visitor(leaf)) {
-                    return;
-                }
-                continue;
-            }
-
-            for (auto it = current->children.rbegin(); it != current->children.rend(); ++it) {
-                const BoidUnit *child = *it;
-                if (!child) {
-                    continue;
-                }
-                if (child == current || child == parent) {
-                    continue;
-                }
-                stack.emplace_back(child, current);
-            }
-        }
+        // フォールバック: cancelできない場合は最後まで走査する。
+        forEachLeafIntersectingSphere(center, radius, [&](const SpatialLeaf &leaf) {
+            (void)visitor(leaf);
+        });
     }
 
 private:
+    // ---- 内部実装（外部から呼ばれないので private に寄せる） ----
+    // プール管理
+    BoidUnit* getUnitFromPool();
+    void returnUnitToPool(BoidUnit* unit);
+    void clearPool();
+
+    void initializeBoidMemories(const std::vector<SpeciesParams> &speciesParamsList);
+    void buildRecursive(BoidUnit *node, const std::vector<int> &indices);
+    void trySplitRecursive(BoidUnit *node);
+    void collectLeaves(const BoidUnit *node, std::vector<BoidUnit *> &leaves) const;
+
+    void updateSpeciesEnvelopes();
+    void updateSpeciesClusters(float dt);
+    void updateSpeciesSchoolClusters(float dt);
+    const SpeciesEnvelope *getSpeciesEnvelope(int speciesId) const;
+    const std::vector<SpeciesCluster> *getSpeciesClusters(int speciesId) const;
+
+    enum DebugRequestBits : uint8_t {
+        kDebugRequestSpeciesEnvelopes = 1 << 0,
+        kDebugRequestSpeciesClusters = 1 << 1,
+        kDebugRequestSpeciesSchoolClusters = 1 << 2,
+    };
+
+    // 可視化データの更新は「要求があった間だけ」有効化して、普段のコストを削る。
+    uint8_t debugRequestBits_ = 0;
+    int debugLastRequestFrame_ = -1000000;
+
+    void markDebugRequest(uint8_t bits);
+
     void returnNodeToPool(BoidUnit* node);
     void collectLeavesForCache(BoidUnit *node, BoidUnit *parent);
-    void forEachLeafRecursive(const BoidUnit *node, const LeafVisitor &visitor) const;
-    void forEachLeafIntersectingSphereRecursive(const BoidUnit *node,
-                                                const glm::vec3 &center,
-                                                float radius,
-                                                const LeafVisitor &visitor) const;
     // レンダリング用ポインタを読み取りバッファに設定（描画時に使用）
     void setRenderPointersToReadBuffers();
     // レンダリング用ポインタを書き込みバッファに設定（デバッグ用）

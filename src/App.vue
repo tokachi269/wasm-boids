@@ -212,10 +212,6 @@ if (!wasmModule) {
 
 const wasmBridge = wasmModule ? new WasmtimeBridge(wasmModule) : null;
 
-if (typeof window !== "undefined" && wasmBridge) {
-  window.readLbvhStats = () => wasmBridge.getLbvhQueryStatsSnapshot();
-}
-
 // const getUnitCount = wasmModule.cwrap('getUnitCount', 'number', []);
 // const getUnitParentIndicesPtr = wasmModule.cwrap('getUnitParentIndicesPtr', 'number', []);
 
@@ -260,7 +256,7 @@ function detectDeviceProfile() {
 }
 
 function fetchTreeStructure() {
-  return wasmBridge?.exportTreeStructure() ?? null;
+  return wasmBridge?.getDiagnostics?.({ treeStructure: true })?.treeStructure ?? null;
 }
 const deviceProfile = detectDeviceProfile();
 const useLowSpecPreset =
@@ -272,7 +268,7 @@ const useLowSpecPreset =
 const MAX_RENDER_PIXEL_RATIO = useLowSpecPreset ? 1.0 : 1.5;
 // 画面ガワのデフォルト（画像の値）
 // NOTE: 個体数は重い環境でも動かしやすい値を優先する。
-const defaultBoidCount = 10000;
+const defaultBoidCount = useLowSpecPreset ? 5000 : 10000;
 
 const DEFAULT_SETTINGS = [
   {
@@ -283,16 +279,16 @@ const DEFAULT_SETTINGS = [
     cohesionRange: 5, // 凝集範囲
     separation: 2.15, // 分離
     separationRange: 0.4, // 分離範囲
-    alignment: 8.0, // 整列
+    alignment: 10.0, // 整列
     alignmentRange: 1, // 整列範囲
     maxSpeed: 0.35, // 最大速度
     maxTurnAngle: 0.75, // 最大曲がり（曲率）
     maxNeighbors: 4, // 最大近傍数
     horizontalTorque: 0.03, // 水平化トルク
     torqueStrength: 1.0, // 回転トルク強度
-    lambda: 0.102, // 速度調整係数（減衰係数）
+    lambda: 0.1, // 速度調整係数（減衰係数）
     tau: 0.5, // 記憶時間
-    predatorAlertRadius: 1.0, // 捕食者を察知する距離
+    predatorAlertRadius: 1.5, // 捕食者を察知する距離
     densityReturnStrength: 0.0, // 密度復帰強度
     isPredator: false,
   },
@@ -307,8 +303,8 @@ const DEFAULT_SETTINGS = [
     alignmentRange: 1.0,
     predatorAlertRadius: 0.0,
     densityReturnStrength: 0.0,
-    maxSpeed: 2.0,
-    minSpeed: 1.5,
+    maxSpeed: 1.0,
+    minSpeed: 0.5,
     maxTurnAngle: 0.4,
     maxNeighbors: 0,
     lambda: 0.05,
@@ -321,7 +317,7 @@ const DEFAULT_SETTINGS = [
 
 const DEFAULT_TUNING_SETTINGS = {
   threatDecay: 1.0, // 脅威減衰速度（1/sec）
-  maxEscapeWeight: 3.5, // 逃避方向の最大割合（0〜1）
+  maxEscapeWeight: 0.7, // 逃避方向の最大割合（0〜1）
   baseEscapeStrength: 5.0, // 逃避舵取り強度（目標速度へ寄せる強さ）
   fastAttractStrength: 2.0, // 近傍不足時の補助凝集強度（0で無効）
   schoolPullCoefficient: 0.00003, // 大クラスタ引力係数
@@ -388,8 +384,7 @@ function applySystemSettingsToWasm() {
   if (!wasmBridge) {
     return;
   }
-  const payload = sanitizeTuningParams(systemSettings);
-  wasmBridge.setSimulationTuningParams(payload);
+  wasmBridge.applyTuningParams(sanitizeTuningParams(systemSettings));
 }
 
 // 設定配列のディープコピーを作成（再初期化時の状態復元用）
@@ -844,16 +839,6 @@ function initThreeJS() {
   groundMesh.receiveShadow = true; // 影を受ける
   scene.add(groundMesh);
 
-  if (wasmBridge) {
-    wasmBridge.configureGroundPlane({
-      enabled: true,
-      height: groundMesh.position.y,
-      blendDistance: 1,
-      stiffness: 22,
-      damping: 10,
-    });
-  }
-
   // ライト
   const ambientLight = new THREE.AmbientLight(
     toHex(OCEAN_COLORS.AMBIENT_LIGHT),
@@ -1256,24 +1241,6 @@ function getSpeciesSignature(specList = settings) {
     .join("|");
 }
 
-// 現在の種族設定から WASM 用のベクタを生成
-function createSpeciesParamsVector() {
-  if (!wasmBridge) {
-    console.warn("WasmtimeBridge が初期化されていません");
-    return null;
-  }
-
-  const rawSettings = toRaw(settings);
-  const source = Array.isArray(rawSettings)
-    ? rawSettings
-    : Array.from(settings ?? []);
-  const vector = wasmBridge.buildSpeciesParams(source);
-  if (!vector) {
-    console.warn("WasmtimeBridge.buildSpeciesParams の呼び出しに失敗しました");
-  }
-  return vector;
-}
-
 // 群れを再初期化（個体数・種族変更時に即座実行）
 function reinitializeFlockNow() {
   if (!wasmModule || !wasmBridge) return;
@@ -1285,29 +1252,26 @@ function reinitializeFlockNow() {
     pendingSettingsSnapshot || snapshotSettingsList(settings);
   const targetSignature = getSpeciesSignature(newSettingsRef);
 
-  const vector = createSpeciesParamsVector();
-  if (!vector) {
-    console.error("Failed to create species parameter vector");
+  try {
+    // 初期化手順は Bridge に集約
+    wasmBridge.initializeFlock(newSettingsRef, {
+      spatialScale: 1,
+      posRange: 4,
+      velRange: 0.25,
+      groundPlane: {
+        enabled: true,
+        height: groundMesh?.position?.y ?? -10,
+        blendDistance: 1,
+        stiffness: 22,
+        damping: 10,
+      },
+    });
+  } catch (error) {
+    console.error("群れの再初期化に失敗しました", error);
     applySettingsSnapshot(previousSettingsSnapshot);
     pendingStateForReinitialize = null;
     pendingSettingsSnapshot = null;
     return;
-  }
-
-  try {
-    wasmModule.callInitBoids(vector, 1, 4, 0.25);
-  } finally {
-    if (typeof vector.delete === "function") {
-      vector.delete();
-    }
-  }
-  try {
-    wasmBridge.buildSpatialIndex(16);
-  } catch (error) {
-    console.error(
-      "WasmtimeBridge.buildSpatialIndex の呼び出しに失敗しました",
-      error
-    );
   }
   const total = getTotalBoidCount();
   cachedTotalBoidCount = total;
@@ -1939,7 +1903,7 @@ function animate(frameTimeMs) {
 
   const { positions, orientations, velocities } = getWasmViews(count);
   if ((frameCounter++ & 63) === 0) {
-    wasmBridge?.currentFirstBoidX();
+    wasmBridge?.getDiagnostics?.({ firstBoidX: true });
   }
 
   const predatorCount = getPredatorCount();
@@ -1960,7 +1924,8 @@ function animate(frameTimeMs) {
     instancedMeshHigh.instanceColor &&
     instancedMeshLow.instanceColor
   ) {
-    const unitMappings = wasmBridge?.getUnitMappings(count);
+    const diagnostics = wasmBridge?.getDiagnostics?.({ boidCount: count, unitMappings: true, unitDensities: true }) ?? null;
+    const unitMappings = diagnostics?.unitMappings ?? null;
     const highCount = updateInfo?.highCount ?? visibleCount;
     const lowCount = updateInfo?.lowCount ?? visibleCount;
     const highMap = updateInfo?.highInstanceToBoid ?? null;
@@ -1979,7 +1944,7 @@ function animate(frameTimeMs) {
         }
       }
 
-      const unitDensities = wasmBridge?.getUnitSimpleDensities?.();
+      const unitDensities = diagnostics?.unitDensities ?? null;
       const densityCount = unitDensities?.length ?? 0;
       const densityScale = 0.18;
       const hueSpan = 0.45;
@@ -2057,7 +2022,7 @@ function animate(frameTimeMs) {
   // species envelope は「表示ON」のときだけ取得する。
   let envelopeData = null;
   if (wasmBridge && showSpeciesEnvelopes.value) {
-    envelopeData = wasmBridge.getSpeciesEnvelopes?.();
+    envelopeData = wasmBridge.getDiagnostics?.({ speciesEnvelopes: true })?.speciesEnvelopes ?? null;
   }
 
   if (showSpeciesEnvelopes.value) {
@@ -2075,14 +2040,14 @@ function animate(frameTimeMs) {
   // 起動直後だけ、クラスタ中心に注視点を滑らかに合わせる。
   let startupClusterData = null;
   if (wasmBridge && shouldAutoLookAtClusterCenter()) {
-    startupClusterData = wasmBridge.getSpeciesClusters?.();
+    startupClusterData = wasmBridge.getDiagnostics?.({ speciesClusters: true })?.speciesClusters ?? null;
   }
   updateStartupCameraLookAt(startupClusterData, deltaTime);
 
   // クラスター表示も更新頻度を間引く（中心推定の確認用途）
   if (showSpeciesClusters.value && wasmBridge) {
     if ((frameCounter & 3) === 0) {
-      const clusterData = wasmBridge.getSpeciesClusters?.();
+      const clusterData = wasmBridge.getDiagnostics?.({ speciesClusters: true })?.speciesClusters ?? null;
       renderSpeciesClusters(clusterData);
     }
   } else if (clusterMesh) {
@@ -2092,7 +2057,7 @@ function animate(frameTimeMs) {
   // 大クラスター（群れクラスタ）表示も更新頻度を間引く
   if (showSpeciesSchoolClusters.value && wasmBridge) {
     if ((frameCounter & 3) === 0) {
-      const schoolClusterData = wasmBridge.getSpeciesSchoolClusters?.();
+      const schoolClusterData = wasmBridge.getDiagnostics?.({ speciesSchoolClusters: true })?.speciesSchoolClusters ?? null;
       renderSpeciesSchoolClusters(schoolClusterData);
     }
   } else if (schoolClusterMesh) {
@@ -2279,18 +2244,7 @@ watch(
 watch(
   settings,
   () => {
-    if (wasmModule && wasmModule.setGlobalSpeciesParamsFromJS) {
-      const vector = createSpeciesParamsVector();
-      if (vector) {
-        try {
-          wasmModule.setGlobalSpeciesParamsFromJS(vector, 1);
-        } finally {
-          if (typeof vector.delete === "function") {
-            vector.delete();
-          }
-        }
-      }
-    }
+    wasmBridge?.applySpeciesParams(toRaw(settings), { spatialScale: 1 });
 
     saveToStorage();
 

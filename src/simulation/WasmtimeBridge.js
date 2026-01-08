@@ -48,51 +48,129 @@ export class WasmtimeBridge {
     this.cachedSpeciesSchoolClusterView = null;
 
     // cwrap された wasm 関数を遅延束縛で保持
-    this.stepSimulationHandle = this.createWrappedFunction('stepSimulation', 'number', ['number']);
-    this.buildHandle = this.createWrappedFunction('build', 'void', ['number']);
-    this.exportTreeStructureHandle = this.createWrappedFunction('exportTreeStructure', 'object', []);
-    this.boidUnitMappingPtrHandle = this.createWrappedFunction('boidUnitMappingPtr', 'number', []);
-    this.currentFirstBoidXHandle = this.createWrappedFunction('currentFirstBoidX', 'number', []);
-    this.speciesIdsPtrHandle = this.createWrappedFunction('speciesIdsPtr', 'number', []);
-    this.syncReadToWriteBuffersHandle = this.createWrappedFunction('syncReadToWriteBuffers', 'void', []);
-    this.getSimulationTuningParamsHandle = this.createWrappedFunction('getSimulationTuningParams', 'object', []);
-    this.setSimulationTuningParamsHandle = this.createWrappedFunction('setSimulationTuningParams', 'void', ['object']);
-    this.unitSimpleDensityPtrHandle = this.createWrappedFunction('unitSimpleDensityPtr', 'number', []);
-    this.unitSimpleDensityCountHandle = this.createWrappedFunction('unitSimpleDensityCount', 'number', []);
-    this.speciesEnvelopesPtrHandle = this.createWrappedFunction('speciesEnvelopesPtr', 'number', []);
-    this.speciesEnvelopesCountHandle = this.createWrappedFunction('speciesEnvelopesCount', 'number', []);
+    this.stepSimulationHandle = createWrappedFunction(this.wasm, 'stepSimulation', 'number', ['number']);
+    // 空間インデックス再構築（引数なし）
+    this.buildHandle = createWrappedFunction(this.wasm, 'build', 'void', []);
+    this.exportTreeStructureHandle = createWrappedFunction(this.wasm, 'exportTreeStructure', 'object', []);
+    this.boidUnitMappingPtrHandle = createWrappedFunction(this.wasm, 'boidUnitMappingPtr', 'number', []);
+    this.currentFirstBoidXHandle = createWrappedFunction(this.wasm, 'currentFirstBoidX', 'number', []);
+    this.speciesIdsPtrHandle = createWrappedFunction(this.wasm, 'speciesIdsPtr', 'number', []);
+    this.syncReadToWriteBuffersHandle = createWrappedFunction(this.wasm, 'syncReadToWriteBuffers', 'void', []);
+    this.setSimulationTuningParamsHandle = createWrappedFunction(this.wasm, 'setSimulationTuningParams', 'void', ['object']);
+    this.unitSimpleDensityPtrHandle = createWrappedFunction(this.wasm, 'unitSimpleDensityPtr', 'number', []);
+    this.unitSimpleDensityCountHandle = createWrappedFunction(this.wasm, 'unitSimpleDensityCount', 'number', []);
+    this.speciesEnvelopesPtrHandle = createWrappedFunction(this.wasm, 'speciesEnvelopesPtr', 'number', []);
+    this.speciesEnvelopesCountHandle = createWrappedFunction(this.wasm, 'speciesEnvelopesCount', 'number', []);
 
     // Species clusters debug export
-    this.speciesClustersPtrHandle = this.createWrappedFunction('speciesClustersPtr', 'number', []);
-    this.speciesClustersCountHandle = this.createWrappedFunction('speciesClustersCount', 'number', []);
+    this.speciesClustersPtrHandle = createWrappedFunction(this.wasm, 'speciesClustersPtr', 'number', []);
+    this.speciesClustersCountHandle = createWrappedFunction(this.wasm, 'speciesClustersCount', 'number', []);
 
     // Species school clusters debug export
-    this.speciesSchoolClustersPtrHandle = this.createWrappedFunction('speciesSchoolClustersPtr', 'number', []);
-    this.speciesSchoolClustersCountHandle = this.createWrappedFunction('speciesSchoolClustersCount', 'number', []);
+    this.speciesSchoolClustersPtrHandle = createWrappedFunction(this.wasm, 'speciesSchoolClustersPtr', 'number', []);
+    this.speciesSchoolClustersCountHandle = createWrappedFunction(this.wasm, 'speciesSchoolClustersCount', 'number', []);
 
-    this.configureGroundPlaneHandle = this.createWrappedFunction(
+    this.configureGroundPlaneHandle = createWrappedFunction(
+      this.wasm,
       'configureGroundPlane',
       'void',
       ['boolean', 'number', 'number', 'number', 'number'],
     );
+    this.cachedUnitMappingsPtr = 0;
+    this.cachedUnitMappingsCount = 0;
+    this.cachedUnitMappingsView = null;
+    this.cachedUnitMappingsBuffer = null;
+
+    // 解析/デバッグ用の戻り値は同一オブジェクトを使い回す（毎フレームのGCを避ける）。
+    this.cachedDiagnostics = {
+      treeStructure: null,
+      firstBoidX: 0,
+      unitMappings: null,
+      unitDensities: null,
+      speciesEnvelopes: null,
+      speciesClusters: null,
+      speciesSchoolClusters: null,
+    };
   }
 
-  getSimulationTuningParams() {
+  /** 群れの初期化を 1 箇所に集約（呼び順を隠蔽） */
+  initializeFlock(settings, options = {}) {
     if (!this.wasm) {
-      return null;
+      return 0;
     }
-    const handle = this.ensureHandle(this.getSimulationTuningParamsHandle, 'getSimulationTuningParams');
-    return handle ? handle() : null;
+
+    const spatialScale = Number.isFinite(options.spatialScale)
+      ? Number(options.spatialScale)
+      : 1;
+    const posRange = Number.isFinite(options.posRange) ? Number(options.posRange) : 4;
+    const velRange = Number.isFinite(options.velRange) ? Number(options.velRange) : 0.25;
+
+    // 種族設定を wasm 側の VectorSpeciesParams に変換
+    const source = Array.isArray(settings) ? settings : Array.from(settings ?? []);
+    const vector = buildSpeciesParams(this.wasm, source);
+    if (!vector) {
+      return 0;
+    }
+
+    // wasm 側で初期化
+    try {
+      if (typeof this.wasm.callInitBoids !== 'function') {
+        throw new Error('WasmtimeBridge: callInitBoids が見つかりません');
+      }
+      this.wasm.callInitBoids(vector, spatialScale, posRange, velRange);
+    } finally {
+      if (typeof vector.delete === 'function') {
+        vector.delete();
+      }
+    }
+
+    // 初期化時に環境（地面など）を先に適用して、以降の更新に影響を漏らさない。
+    if (options.groundPlane) {
+      applyGroundPlane(this.configureGroundPlaneHandle, options.groundPlane);
+    }
+
+    // 空間インデックスを再構築
+    ensureHandle(this.buildHandle, 'build')();
+
+    // 最新ポインタを更新して総数を返す
+    return this.stepSimulation(0);
   }
 
-  setSimulationTuningParams(params) {
+  /** 種族設定を wasm へ反映（vector生成/破棄まで含める） */
+  applySpeciesParams(settings, options = {}) {
+    if (!this.wasm || typeof this.wasm.setGlobalSpeciesParamsFromJS !== 'function') {
+      return false;
+    }
+
+    const spatialScale = Number.isFinite(options.spatialScale)
+      ? Number(options.spatialScale)
+      : 1;
+
+    const source = Array.isArray(settings) ? settings : Array.from(settings ?? []);
+    const vector = buildSpeciesParams(this.wasm, source);
+    if (!vector) {
+      return false;
+    }
+
+    try {
+      this.wasm.setGlobalSpeciesParamsFromJS(vector, spatialScale);
+    } finally {
+      if (typeof vector.delete === 'function') {
+        vector.delete();
+      }
+    }
+    return true;
+  }
+
+  /** チューニング反映（呼び出し側はこれだけ使う） */
+  applyTuningParams(params) {
     if (!this.wasm) {
       return;
     }
-    const handle = this.ensureHandle(this.setSimulationTuningParamsHandle, 'setSimulationTuningParams');
-    if (!handle || !params) {
+    if (!params) {
       return;
     }
+    const handle = ensureHandle(this.setSimulationTuningParamsHandle, 'setSimulationTuningParams');
     const toNumber = (value, fallback) => {
       const num = Number(value);
       return Number.isFinite(num) ? num : fallback;
@@ -102,83 +180,67 @@ export class WasmtimeBridge {
       maxEscapeWeight: toNumber(params.maxEscapeWeight, 1.0),
       baseEscapeStrength: toNumber(params.baseEscapeStrength, 3.0),
       fastAttractStrength: toNumber(params.fastAttractStrength, 1.0),
-      schoolPullCoefficient: Math.max(
-        0,
-        toNumber(params.schoolPullCoefficient, 0.0008)
-      ),
+      schoolPullCoefficient: Math.max(0, toNumber(params.schoolPullCoefficient, 0.0008)),
     });
   }
 
-  configureGroundPlane(options) {
+  /** 地面設定（初期化手順からだけ呼ぶ） */
+  /** 解析/デバッグ用データをまとめて返す（必要なものだけ取る） */
+  getDiagnostics(options = {}) {
     if (!this.wasm) {
-      return;
-    }
-    const handle = this.ensureHandle(this.configureGroundPlaneHandle, 'configureGroundPlane');
-    if (!handle || !options) {
-      return;
-    }
-    const toNumber = (value, fallback) => {
-      const num = Number(value);
-      return Number.isFinite(num) ? num : fallback;
-    };
-    const enabled = options.enabled !== false;
-    const height = toNumber(options.height, 0);
-    const blendDistance = Math.max(0, toNumber(options.blendDistance, 2));
-    const stiffness = Math.max(0, toNumber(options.stiffness, 18));
-    const damping = Math.max(0, toNumber(options.damping, 8));
-    handle(enabled, height, blendDistance, stiffness, damping);
-  }
-
-  /**
-   * 種族設定から wasm に渡すベクタを生成。
-   * App.vue::createSpeciesParamsVector を移植してください。
-   */
-  buildSpeciesParams(settings) {
-    if (!Array.isArray(settings)) {
       return null;
     }
 
-    // wasm 側の VectorSpeciesParams を生成し、一件ずつ型を整えて push
-    const vector = new this.wasm.VectorSpeciesParams();
-    settings.forEach((raw, index) => {
-      if (!raw) {
-        return;
+    const resolved = (options && typeof options === 'object') ? options : {};
+    const boidCount = Number.isFinite(resolved.boidCount) ? Math.max(0, Math.floor(resolved.boidCount)) : 0;
+    const includeTreeStructure = Boolean(resolved.treeStructure);
+    const includeFirstBoidX = Boolean(resolved.firstBoidX);
+    const includeUnitMappings = Boolean(resolved.unitMappings);
+    const includeUnitDensities = Boolean(resolved.unitDensities);
+    const includeSpeciesEnvelopes = Boolean(resolved.speciesEnvelopes);
+    const includeSpeciesClusters = Boolean(resolved.speciesClusters);
+    const includeSpeciesSchoolClusters = Boolean(resolved.speciesSchoolClusters);
+
+    const result = this.cachedDiagnostics;
+    result.treeStructure =
+      includeTreeStructure && typeof this.exportTreeStructureHandle === 'function'
+        ? this.exportTreeStructureHandle()
+        : null;
+
+    result.firstBoidX =
+      includeFirstBoidX && typeof this.currentFirstBoidXHandle === 'function'
+        ? this.currentFirstBoidXHandle()
+        : 0;
+
+    // ユニットマッピング（boidIndex -> unitId）は必要時だけ作る。
+    if (includeUnitMappings && boidCount > 0 && typeof this.boidUnitMappingPtrHandle === 'function') {
+      const ptr = this.boidUnitMappingPtrHandle();
+      const heapBufferI32 = this.wasm.HEAP32.buffer;
+      if (ptr && (
+        this.cachedUnitMappingsView === null ||
+        this.cachedUnitMappingsPtr !== ptr ||
+        this.cachedUnitMappingsCount !== boidCount ||
+        this.cachedUnitMappingsBuffer !== heapBufferI32
+      )) {
+        this.cachedUnitMappingsPtr = ptr;
+        this.cachedUnitMappingsCount = boidCount;
+        this.cachedUnitMappingsBuffer = heapBufferI32;
+        this.cachedUnitMappingsView = new Int32Array(heapBufferI32, ptr, boidCount * 2);
       }
+      result.unitMappings = this.cachedUnitMappingsView;
+    } else {
+      result.unitMappings = null;
+    }
 
-      const toNumber = (value, fallback = 0) => {
-        const num = Number(value);
-        return Number.isFinite(num) ? num : fallback;
-      };
+    // ユニット密度
+    result.unitDensities = includeUnitDensities ? getUnitSimpleDensitiesInternal(this) : null;
 
-      vector.push_back({
-        species: typeof raw.species === 'string' ? raw.species : `Species ${index + 1}`,
-        count: Math.max(0, Math.floor(toNumber(raw.count, 0))),
-        speciesId: Math.max(0, Math.floor(toNumber(raw.speciesId, index))),
-        cohesion: toNumber(raw.cohesion, 0),
-        separation: toNumber(raw.separation, 0),
-        alignment: toNumber(raw.alignment, 0),
-        maxSpeed: toNumber(raw.maxSpeed, 1),
-        minSpeed: toNumber(raw.minSpeed, 0),
-        maxTurnAngle: toNumber(raw.maxTurnAngle, 0),
-        separationRange: toNumber(raw.separationRange, 0),
-        alignmentRange: toNumber(raw.alignmentRange, 0),
-        cohesionRange: toNumber(raw.cohesionRange, 0),
-        maxNeighbors: Math.max(0, Math.floor(toNumber(raw.maxNeighbors, 0))),
-        lambda: toNumber(raw.lambda, 0),
-        tau: toNumber(raw.tau, 0),
-        horizontalTorque: toNumber(raw.horizontalTorque, 0),
-        velocityEpsilon: toNumber(raw.velocityEpsilon, 0.0001),
-        torqueStrength: toNumber(raw.torqueStrength, 0),
-        // 形状パラメータは省略された場合もデフォルト値で補完しておく。
-        bodyHeadLength: toNumber(raw.bodyHeadLength, -0.15),
-        bodyTailLength: toNumber(raw.bodyTailLength, 0.33),
-        bodyRadius: toNumber(raw.bodyRadius, 0.035),
-        predatorAlertRadius: toNumber(raw.predatorAlertRadius, 1.0),
-        isPredator: Boolean(raw.isPredator),
-        densityReturnStrength: toNumber(raw.densityReturnStrength ?? raw.centerAttractStrength, 0.0),
-      });
-    });
-    return vector;
+    // 種族の可視化データ
+    result.speciesEnvelopes = includeSpeciesEnvelopes ? getSpeciesEnvelopesInternal(this) : null;
+    result.speciesClusters = includeSpeciesClusters ? getSpeciesClustersInternal(this) : null;
+    result.speciesSchoolClusters = includeSpeciesSchoolClusters ? getSpeciesSchoolClustersInternal(this) : null;
+
+    return result;
   }
 
   /**
@@ -186,7 +248,7 @@ export class WasmtimeBridge {
    * App.vue::stepSimulationAndUpdateState を移植。
    */
   stepSimulation(deltaTime) {
-    const handle = this.ensureHandle(this.stepSimulationHandle, 'stepSimulation');
+    const handle = ensureHandle(this.stepSimulationHandle, 'stepSimulation');
 
     const { wasm } = this;
     const dt = Number.isFinite(deltaTime) ? deltaTime : 0;
@@ -422,242 +484,10 @@ export class WasmtimeBridge {
     }
 
     if (restored > 0) {
-      this.syncReadToWriteBuffers();
-    }
-  }
-
-  /** wasm 側の空間インデックス生成をトリガー */
-  buildSpatialIndex(maxPerUnit) {
-    const handle = this.ensureHandle(this.buildHandle, 'build');
-    handle(maxPerUnit);
-  }
-
-  /** wasm から木構造データを取得 */
-  exportTreeStructure() {
-    if (typeof this.exportTreeStructureHandle !== 'function') {
-      return null;
-    }
-    return this.exportTreeStructureHandle();
-  }
-
-  /** デバッグ用の先頭 Boid の X 座標取得 */
-  currentFirstBoidX() {
-    if (typeof this.currentFirstBoidXHandle !== 'function') {
-      return 0;
-    }
-    return this.currentFirstBoidXHandle();
-  }
-
-  /** ユニット ID と Boid インデックスのマッピングバッファを返す */
-  getUnitMappings(count) {
-    if (!count || count <= 0 || typeof this.boidUnitMappingPtrHandle !== 'function') {
-      return null;
-    }
-
-    const ptr = this.boidUnitMappingPtrHandle();
-    if (!ptr) {
-      return null;
-    }
-
-    return new Int32Array(this.wasm.HEAP32.buffer, ptr, count * 2);
-  }
-
-  /** ユニット密度スカラーの Float32Array を返す */
-  getUnitSimpleDensities() {
-    if (!this.wasm) {
-      return null;
-    }
-    if (
-      typeof this.unitSimpleDensityPtrHandle !== 'function' ||
-      typeof this.unitSimpleDensityCountHandle !== 'function'
-    ) {
-      return null;
-    }
-
-    const count = this.unitSimpleDensityCountHandle();
-    const ptr = this.unitSimpleDensityPtrHandle();
-    if (!ptr || !count || count <= 0) {
-      this.cachedUnitDensityPtr = 0;
-      this.cachedUnitDensityCount = 0;
-      this.cachedUnitDensityView = null;
-      return null;
-    }
-
-    const heapBuffer = this.wasm.HEAPF32.buffer;
-    if (
-      this.cachedUnitDensityView === null ||
-      this.cachedUnitDensityPtr !== ptr ||
-      this.cachedUnitDensityCount !== count ||
-      this.cachedHeapBuffer !== heapBuffer
-    ) {
-      this.cachedUnitDensityPtr = ptr;
-      this.cachedUnitDensityCount = count;
-      this.cachedUnitDensityView = new Float32Array(heapBuffer, ptr, count);
-    }
-
-    return this.cachedUnitDensityView;
-  }
-
-  /** 種族エンベロープ (center.xyz, radius, count) の Float32Array を返す */
-  getSpeciesEnvelopes() {
-    if (!this.wasm) {
-      return null;
-    }
-
-    if (
-      typeof this.speciesEnvelopesPtrHandle !== 'function' ||
-      typeof this.speciesEnvelopesCountHandle !== 'function'
-    ) {
-      return null;
-    }
-
-    const floatCount = this.speciesEnvelopesCountHandle();
-    const ptr = this.speciesEnvelopesPtrHandle();
-    if (!ptr || !floatCount || floatCount <= 0) {
-      this.cachedSpeciesEnvelopePtr = 0;
-      this.cachedSpeciesEnvelopeCount = 0;
-      this.cachedSpeciesEnvelopeView = null;
-      return null;
-    }
-
-    const heapBuffer = this.wasm.HEAPF32.buffer;
-    if (
-      this.cachedSpeciesEnvelopeView === null ||
-      this.cachedSpeciesEnvelopePtr !== ptr ||
-      this.cachedSpeciesEnvelopeCount !== floatCount ||
-      this.cachedHeapBuffer !== heapBuffer
-    ) {
-      this.cachedSpeciesEnvelopePtr = ptr;
-      this.cachedSpeciesEnvelopeCount = floatCount;
-      this.cachedSpeciesEnvelopeView = new Float32Array(heapBuffer, ptr, floatCount);
-      this.cachedHeapBuffer = heapBuffer;
-    }
-
-    const envelopeCount = Math.floor(floatCount / 5);
-    return {
-      buffer: this.cachedSpeciesEnvelopeView,
-      count: envelopeCount,
-    };
-  }
-
-  /** 種族クラスター (speciesId, center.xyz, radius, weight) の Float32Array を返す */
-  getSpeciesClusters() {
-    if (!this.wasm) {
-      return null;
-    }
-
-    if (
-      typeof this.speciesClustersPtrHandle !== 'function' ||
-      typeof this.speciesClustersCountHandle !== 'function'
-    ) {
-      return null;
-    }
-
-    const floatCount = this.speciesClustersCountHandle();
-    const ptr = this.speciesClustersPtrHandle();
-    if (!ptr || !floatCount || floatCount <= 0) {
-      this.cachedSpeciesClusterPtr = 0;
-      this.cachedSpeciesClusterCount = 0;
-      this.cachedSpeciesClusterView = null;
-      return null;
-    }
-
-    const heapBuffer = this.wasm.HEAPF32.buffer;
-    if (
-      this.cachedSpeciesClusterView === null ||
-      this.cachedSpeciesClusterPtr !== ptr ||
-      this.cachedSpeciesClusterCount !== floatCount ||
-      this.cachedHeapBuffer !== heapBuffer
-    ) {
-      this.cachedSpeciesClusterPtr = ptr;
-      this.cachedSpeciesClusterCount = floatCount;
-      this.cachedSpeciesClusterView = new Float32Array(heapBuffer, ptr, floatCount);
-      this.cachedHeapBuffer = heapBuffer;
-    }
-
-    const clusterCount = Math.floor(floatCount / 6);
-    return {
-      buffer: this.cachedSpeciesClusterView,
-      count: clusterCount,
-    };
-  }
-
-  /** 種族の群れクラスタ (speciesId, center.xyz, radius, weight) の Float32Array を返す */
-  getSpeciesSchoolClusters() {
-    if (!this.wasm) {
-      return null;
-    }
-
-    if (
-      typeof this.speciesSchoolClustersPtrHandle !== 'function' ||
-      typeof this.speciesSchoolClustersCountHandle !== 'function'
-    ) {
-      return null;
-    }
-
-    const floatCount = this.speciesSchoolClustersCountHandle();
-    const ptr = this.speciesSchoolClustersPtrHandle();
-    if (!ptr || !floatCount || floatCount <= 0) {
-      this.cachedSpeciesSchoolClusterPtr = 0;
-      this.cachedSpeciesSchoolClusterCount = 0;
-      this.cachedSpeciesSchoolClusterView = null;
-      return null;
-    }
-
-    const heapBuffer = this.wasm.HEAPF32.buffer;
-    if (
-      this.cachedSpeciesSchoolClusterView === null ||
-      this.cachedSpeciesSchoolClusterPtr !== ptr ||
-      this.cachedSpeciesSchoolClusterCount !== floatCount ||
-      this.cachedHeapBuffer !== heapBuffer
-    ) {
-      this.cachedSpeciesSchoolClusterPtr = ptr;
-      this.cachedSpeciesSchoolClusterCount = floatCount;
-      this.cachedSpeciesSchoolClusterView = new Float32Array(heapBuffer, ptr, floatCount);
-      this.cachedHeapBuffer = heapBuffer;
-    }
-
-    const clusterCount = Math.floor(floatCount / 6);
-    return {
-      buffer: this.cachedSpeciesSchoolClusterView,
-      count: clusterCount,
-    };
-  }
-
-  /** wasm の triple buffer 読み書きを同期 */
-  syncReadToWriteBuffers() {
-    if (typeof this.syncReadToWriteBuffersHandle === 'function') {
-      this.syncReadToWriteBuffersHandle();
-    }
-  }
-
-  /** cwrap または素の関数を返し、存在しなければ null */
-  createWrappedFunction(name, returnType, argTypes) {
-    const { wasm } = this;
-    if (!wasm) {
-      return null;
-    }
-
-    if (typeof wasm[name] === 'function') {
-      return wasm[name].bind(wasm);
-    }
-
-    if (typeof wasm.cwrap === 'function') {
-      try {
-        return wasm.cwrap(name, returnType, argTypes);
-      } catch (error) {
-        console.warn(`WasmtimeBridge: ${name} のラップに失敗`, error);
+      if (typeof this.syncReadToWriteBuffersHandle === 'function') {
+        this.syncReadToWriteBuffersHandle();
       }
     }
-    return null;
-  }
-
-  /** ハンドルが未初期化でないことを確認 */
-  ensureHandle(handle, name) {
-    if (typeof handle !== 'function') {
-      throw new Error(`WasmtimeBridge: ${name} ハンドルが初期化されていません`);
-    }
-    return handle;
   }
 }
 
@@ -676,4 +506,253 @@ function buildSpeciesRanges(list = []) {
     offset += count;
   }
   return ranges;
+}
+
+// cwrap または素の関数を返し、存在しなければ null
+function createWrappedFunction(wasm, name, returnType, argTypes) {
+  if (!wasm) {
+    return null;
+  }
+
+  if (typeof wasm[name] === 'function') {
+    return wasm[name].bind(wasm);
+  }
+
+  if (typeof wasm.cwrap === 'function') {
+    try {
+      return wasm.cwrap(name, returnType, argTypes);
+    } catch (error) {
+      console.warn(`WasmtimeBridge: ${name} のラップに失敗`, error);
+    }
+  }
+  return null;
+}
+
+// ハンドルが未初期化でないことを確認
+function ensureHandle(handle, name) {
+  if (typeof handle !== 'function') {
+    throw new Error(`WasmtimeBridge: ${name} ハンドルが初期化されていません`);
+  }
+  return handle;
+}
+
+// 地面設定は初期化手順からのみ適用する
+function applyGroundPlane(configureGroundPlaneHandle, options) {
+  if (!options) {
+    return;
+  }
+  const handle = ensureHandle(configureGroundPlaneHandle, 'configureGroundPlane');
+
+  const toNumber = (value, fallback) => {
+    const num = Number(value);
+    return Number.isFinite(num) ? num : fallback;
+  };
+
+  const enabled = options.enabled !== false;
+  const height = toNumber(options.height, 0);
+  const blendDistance = Math.max(0, toNumber(options.blendDistance, 2));
+  const stiffness = Math.max(0, toNumber(options.stiffness, 18));
+  const damping = Math.max(0, toNumber(options.damping, 8));
+  handle(enabled, height, blendDistance, stiffness, damping);
+}
+
+// 種族設定を wasm VectorSpeciesParams に変換
+function buildSpeciesParams(wasm, settings) {
+  if (!wasm || !Array.isArray(settings)) {
+    return null;
+  }
+
+  const vector = new wasm.VectorSpeciesParams();
+  settings.forEach((raw, index) => {
+    if (!raw) {
+      return;
+    }
+
+    const toNumber = (value, fallback = 0) => {
+      const num = Number(value);
+      return Number.isFinite(num) ? num : fallback;
+    };
+
+    vector.push_back({
+      species: typeof raw.species === 'string' ? raw.species : `Species ${index + 1}`,
+      count: Math.max(0, Math.floor(toNumber(raw.count, 0))),
+      speciesId: Math.max(0, Math.floor(toNumber(raw.speciesId, index))),
+      cohesion: toNumber(raw.cohesion, 0),
+      separation: toNumber(raw.separation, 0),
+      alignment: toNumber(raw.alignment, 0),
+      maxSpeed: toNumber(raw.maxSpeed, 1),
+      minSpeed: toNumber(raw.minSpeed, 0),
+      maxTurnAngle: toNumber(raw.maxTurnAngle, 0),
+      separationRange: toNumber(raw.separationRange, 0),
+      alignmentRange: toNumber(raw.alignmentRange, 0),
+      cohesionRange: toNumber(raw.cohesionRange, 0),
+      maxNeighbors: Math.max(0, Math.floor(toNumber(raw.maxNeighbors, 0))),
+      lambda: toNumber(raw.lambda, 0),
+      tau: toNumber(raw.tau, 0),
+      horizontalTorque: toNumber(raw.horizontalTorque, 0),
+      velocityEpsilon: toNumber(raw.velocityEpsilon, 0.0001),
+      torqueStrength: toNumber(raw.torqueStrength, 0),
+      // 形状パラメータは省略された場合もデフォルト値で補完しておく。
+      bodyHeadLength: toNumber(raw.bodyHeadLength, -0.15),
+      bodyTailLength: toNumber(raw.bodyTailLength, 0.33),
+      bodyRadius: toNumber(raw.bodyRadius, 0.035),
+      predatorAlertRadius: toNumber(raw.predatorAlertRadius, 1.0),
+      isPredator: Boolean(raw.isPredator),
+      densityReturnStrength: toNumber(raw.densityReturnStrength ?? raw.centerAttractStrength, 0.0),
+    });
+  });
+
+  return vector;
+}
+
+function getUnitSimpleDensitiesInternal(bridge) {
+  if (!bridge?.wasm) {
+    return null;
+  }
+  if (
+    typeof bridge.unitSimpleDensityPtrHandle !== 'function' ||
+    typeof bridge.unitSimpleDensityCountHandle !== 'function'
+  ) {
+    return null;
+  }
+
+  const count = bridge.unitSimpleDensityCountHandle();
+  const ptr = bridge.unitSimpleDensityPtrHandle();
+  if (!ptr || !count || count <= 0) {
+    bridge.cachedUnitDensityPtr = 0;
+    bridge.cachedUnitDensityCount = 0;
+    bridge.cachedUnitDensityView = null;
+    return null;
+  }
+
+  const heapBuffer = bridge.wasm.HEAPF32.buffer;
+  if (
+    bridge.cachedUnitDensityView === null ||
+    bridge.cachedUnitDensityPtr !== ptr ||
+    bridge.cachedUnitDensityCount !== count ||
+    bridge.cachedHeapBuffer !== heapBuffer
+  ) {
+    bridge.cachedUnitDensityPtr = ptr;
+    bridge.cachedUnitDensityCount = count;
+    bridge.cachedUnitDensityView = new Float32Array(heapBuffer, ptr, count);
+  }
+
+  return bridge.cachedUnitDensityView;
+}
+
+function getSpeciesEnvelopesInternal(bridge) {
+  if (!bridge?.wasm) {
+    return null;
+  }
+  if (
+    typeof bridge.speciesEnvelopesPtrHandle !== 'function' ||
+    typeof bridge.speciesEnvelopesCountHandle !== 'function'
+  ) {
+    return null;
+  }
+
+  const floatCount = bridge.speciesEnvelopesCountHandle();
+  const ptr = bridge.speciesEnvelopesPtrHandle();
+  if (!ptr || !floatCount || floatCount <= 0) {
+    bridge.cachedSpeciesEnvelopePtr = 0;
+    bridge.cachedSpeciesEnvelopeCount = 0;
+    bridge.cachedSpeciesEnvelopeView = null;
+    return null;
+  }
+
+  const heapBuffer = bridge.wasm.HEAPF32.buffer;
+  if (
+    bridge.cachedSpeciesEnvelopeView === null ||
+    bridge.cachedSpeciesEnvelopePtr !== ptr ||
+    bridge.cachedSpeciesEnvelopeCount !== floatCount ||
+    bridge.cachedHeapBuffer !== heapBuffer
+  ) {
+    bridge.cachedSpeciesEnvelopePtr = ptr;
+    bridge.cachedSpeciesEnvelopeCount = floatCount;
+    bridge.cachedSpeciesEnvelopeView = new Float32Array(heapBuffer, ptr, floatCount);
+    bridge.cachedHeapBuffer = heapBuffer;
+  }
+
+  return {
+    buffer: bridge.cachedSpeciesEnvelopeView,
+    count: Math.floor(floatCount / 5),
+  };
+}
+
+function getSpeciesClustersInternal(bridge) {
+  if (!bridge?.wasm) {
+    return null;
+  }
+  if (
+    typeof bridge.speciesClustersPtrHandle !== 'function' ||
+    typeof bridge.speciesClustersCountHandle !== 'function'
+  ) {
+    return null;
+  }
+
+  const floatCount = bridge.speciesClustersCountHandle();
+  const ptr = bridge.speciesClustersPtrHandle();
+  if (!ptr || !floatCount || floatCount <= 0) {
+    bridge.cachedSpeciesClusterPtr = 0;
+    bridge.cachedSpeciesClusterCount = 0;
+    bridge.cachedSpeciesClusterView = null;
+    return null;
+  }
+
+  const heapBuffer = bridge.wasm.HEAPF32.buffer;
+  if (
+    bridge.cachedSpeciesClusterView === null ||
+    bridge.cachedSpeciesClusterPtr !== ptr ||
+    bridge.cachedSpeciesClusterCount !== floatCount ||
+    bridge.cachedHeapBuffer !== heapBuffer
+  ) {
+    bridge.cachedSpeciesClusterPtr = ptr;
+    bridge.cachedSpeciesClusterCount = floatCount;
+    bridge.cachedSpeciesClusterView = new Float32Array(heapBuffer, ptr, floatCount);
+    bridge.cachedHeapBuffer = heapBuffer;
+  }
+
+  return {
+    buffer: bridge.cachedSpeciesClusterView,
+    count: Math.floor(floatCount / 6),
+  };
+}
+
+function getSpeciesSchoolClustersInternal(bridge) {
+  if (!bridge?.wasm) {
+    return null;
+  }
+  if (
+    typeof bridge.speciesSchoolClustersPtrHandle !== 'function' ||
+    typeof bridge.speciesSchoolClustersCountHandle !== 'function'
+  ) {
+    return null;
+  }
+
+  const floatCount = bridge.speciesSchoolClustersCountHandle();
+  const ptr = bridge.speciesSchoolClustersPtrHandle();
+  if (!ptr || !floatCount || floatCount <= 0) {
+    bridge.cachedSpeciesSchoolClusterPtr = 0;
+    bridge.cachedSpeciesSchoolClusterCount = 0;
+    bridge.cachedSpeciesSchoolClusterView = null;
+    return null;
+  }
+
+  const heapBuffer = bridge.wasm.HEAPF32.buffer;
+  if (
+    bridge.cachedSpeciesSchoolClusterView === null ||
+    bridge.cachedSpeciesSchoolClusterPtr !== ptr ||
+    bridge.cachedSpeciesSchoolClusterCount !== floatCount ||
+    bridge.cachedHeapBuffer !== heapBuffer
+  ) {
+    bridge.cachedSpeciesSchoolClusterPtr = ptr;
+    bridge.cachedSpeciesSchoolClusterCount = floatCount;
+    bridge.cachedSpeciesSchoolClusterView = new Float32Array(heapBuffer, ptr, floatCount);
+    bridge.cachedHeapBuffer = heapBuffer;
+  }
+
+  return {
+    buffer: bridge.cachedSpeciesSchoolClusterView,
+    count: Math.floor(floatCount / 6),
+  };
 }

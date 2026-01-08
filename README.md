@@ -19,7 +19,7 @@
 
 ### シミュレーション（C++ / WASM）
 
-- `src/wasm/boids_tree.cpp`: 空間階層（BoidTree）、種族エンベロープ、クラスター推定
+- `src/wasm/boids_simulation.cpp`: 空間階層（BoidSimulation）、種族エンベロープ、クラスター推定
 - `src/wasm/boid_unit.cpp`: 個体更新（近傍相互作用、捕食者、旋回制限など）
 - `src/wasm/species_params.h`: 種族パラメータ
 - `src/wasm/simulation_tuning.*`: システム調整値（逃避など）
@@ -41,7 +41,7 @@
 
 ## アルゴリズム概要（深掘り）
 
-この章は、主に `src/wasm/boids_tree.cpp` と `src/wasm/boid_unit.cpp` の現行実装に合わせて説明します。
+この章は、主に `src/wasm/boids_simulation.cpp` と `src/wasm/boid_unit.cpp` の現行実装に合わせて説明します。
 Boidsの基本3規則（分離・整列・凝集）自体の説明は最小限にし、「大規模化のために何をどう近似/分割しているか」を中心に書きます。
 
 ### 1) 空間階層（BoidTree / BoidUnit）

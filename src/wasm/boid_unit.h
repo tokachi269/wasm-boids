@@ -39,7 +39,7 @@ public:
 
     // デストラクタ：プールシステムを使用するため、childrenの削除は行わない
     ~BoidUnit() {
-        // プールシステムを使用するため、childrenの削除は BoidTree が管理
+        // プールシステムを使用するため、childrenの削除は BoidSimulation が管理
         children.clear();
     }
 

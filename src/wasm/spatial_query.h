@@ -24,7 +24,7 @@ inline void forEachBoidInSphere(const SpatialIndex &index,
 
 namespace detail {
 
-// BoidTree など cancelable API を持つ型ならそちらを使う（SFINAE）。
+// BoidSimulation など cancelable API を持つ型ならそちらを使う（SFINAE）。
 template <typename Index, typename CancelableVisitor>
 inline auto forEachLeafIntersectingSphereCancelable(
     const Index &index, const glm::vec3 &center, float radius,

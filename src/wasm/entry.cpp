@@ -1,5 +1,5 @@
 #include "entry.h"
-#include "boids_tree.h"
+#include "boids_simulation.h"
 #include "scale_utils.h"
 #include <cstdint>
 #include <iostream>
@@ -44,38 +44,40 @@ float debugFirstBoidX() {
 
 uintptr_t stepSimulation(float dt) {
   if (dt > 0.0f) {
-    BoidTree::instance().update(dt);
+    BoidSimulation::instance().update(dt);
   }
 
-  gStepState.positions = BoidTree::instance().getPositionsPtr();
-  gStepState.velocities = BoidTree::instance().getVelocitiesPtr();
-  gStepState.orientations = BoidTree::instance().getOrientationsPtr();
-  gStepState.count = BoidTree::instance().getBoidCount();
+  gStepState.positions = BoidSimulation::instance().getPositionsPtr();
+  gStepState.velocities = BoidSimulation::instance().getVelocitiesPtr();
+  gStepState.orientations = BoidSimulation::instance().getOrientationsPtr();
+  gStepState.count = BoidSimulation::instance().getBoidCount();
 
   return reinterpret_cast<uintptr_t>(&gStepState);
 }
 
 float currentFirstBoidX() { return debugFirstBoidX(); }
 
-void build(int maxPerUnit = 16) { BoidTree::instance().build(maxPerUnit); }
-uintptr_t posPtr() { return BoidTree::instance().getPositionsPtr(); }
-uintptr_t velPtr() { return BoidTree::instance().getVelocitiesPtr(); }
-uintptr_t oriPtr() { return BoidTree::instance().getOrientationsPtr(); }
-int boidCount() { return BoidTree::instance().getBoidCount(); }
-void update(float dt) { BoidTree::instance().update(dt); }
+// 空間インデックス（現状は BoidUnit ツリー）を再構築。
+// maxBoidsPerUnit は BoidSimulation 側の保持値を使う。
+void build() { BoidSimulation::instance().build(); }
+uintptr_t posPtr() { return BoidSimulation::instance().getPositionsPtr(); }
+uintptr_t velPtr() { return BoidSimulation::instance().getVelocitiesPtr(); }
+uintptr_t oriPtr() { return BoidSimulation::instance().getOrientationsPtr(); }
+int boidCount() { return BoidSimulation::instance().getBoidCount(); }
+void update(float dt) { BoidSimulation::instance().update(dt); }
 void setFlockSize(int newSize, float posRange, float velRange) {
-  BoidTree::instance().setFlockSize(newSize, posRange, velRange);
+  BoidSimulation::instance().setFlockSize(newSize, posRange, velRange);
 }
 
 void setSpeciesParams(const SpeciesParams &params,
                       float spatialScale /*=1.0f*/) {
-  BoidTree::instance().setGlobalSpeciesParams(
+  BoidSimulation::instance().setGlobalSpeciesParams(
       scaledParams(params, spatialScale));
 }
 uintptr_t boidUnitMappingPtr() {
   static std::vector<std::pair<int, int>> boidUnitMappingVec;
   boidUnitMappingVec.clear();
-  const auto &mapping = BoidTree::instance().collectBoidUnitMapping();
+  const auto &mapping = BoidSimulation::instance().collectBoidUnitMapping();
   boidUnitMappingVec.reserve(mapping.size());
   for (const auto &kv : mapping) {
     boidUnitMappingVec.push_back(kv);
@@ -84,7 +86,7 @@ uintptr_t boidUnitMappingPtr() {
 }
 
 uintptr_t speciesIdsPtr() {
-  const auto &ids = BoidTree::instance().buf.speciesIds;
+  const auto &ids = BoidSimulation::instance().buf.speciesIds;
   if (ids.empty()) {
     return 0;
   }
@@ -92,42 +94,42 @@ uintptr_t speciesIdsPtr() {
 }
 
 uintptr_t unitSimpleDensityPtr() {
-  return BoidTree::instance().getUnitSimpleDensityPtr();
+  return BoidSimulation::instance().getUnitSimpleDensityPtr();
 }
 
 int unitSimpleDensityCount() {
-  return BoidTree::instance().getUnitSimpleDensityCount();
+  return BoidSimulation::instance().getUnitSimpleDensityCount();
 }
 
 uintptr_t EMSCRIPTEN_KEEPALIVE speciesEnvelopesPtr() {
-  return BoidTree::instance().getSpeciesEnvelopePtr();
+  return BoidSimulation::instance().getSpeciesEnvelopePtr();
 }
 
 int EMSCRIPTEN_KEEPALIVE speciesEnvelopesCount() {
-  return BoidTree::instance().getSpeciesEnvelopeCount();
+  return BoidSimulation::instance().getSpeciesEnvelopeCount();
 }
 
 // Species clusters debug export
 // 1クラスターあたり 6 float: speciesId, center.xyz, radius, weight
 uintptr_t EMSCRIPTEN_KEEPALIVE speciesClustersPtr() {
-  return BoidTree::instance().getSpeciesClustersPtr();
+  return BoidSimulation::instance().getSpeciesClustersPtr();
 }
 
 int EMSCRIPTEN_KEEPALIVE speciesClustersCount() {
-  return BoidTree::instance().getSpeciesClustersCount();
+  return BoidSimulation::instance().getSpeciesClustersCount();
 }
 
 // Species school clusters debug export
 // 1クラスターあたり 6 float: speciesId, center.xyz, radius, weight
 uintptr_t EMSCRIPTEN_KEEPALIVE speciesSchoolClustersPtr() {
-  return BoidTree::instance().getSpeciesSchoolClustersPtr();
+  return BoidSimulation::instance().getSpeciesSchoolClustersPtr();
 }
 
 int EMSCRIPTEN_KEEPALIVE speciesSchoolClustersCount() {
-  return BoidTree::instance().getSpeciesSchoolClustersCount();
+  return BoidSimulation::instance().getSpeciesSchoolClustersCount();
 }
 
 void syncReadToWriteBuffers() {
-  BoidTree::instance().buf.syncWriteFromRead();
+  BoidSimulation::instance().buf.syncWriteFromRead();
 }
 }

@@ -99,7 +99,8 @@ set(COMMON_SOURCES
     src/wasm/boid_factory.cpp
     src/wasm/entry.cpp
     src/wasm/boid_unit.cpp
-    src/wasm/boids_tree.cpp
+    src/wasm/boids_simulation.cpp
+    src/wasm/boid_tree_spatial_index.cpp
     src/wasm/main.cpp
     src/wasm/obstacle_field.cpp
     src/wasm/simulation_tuning.cpp

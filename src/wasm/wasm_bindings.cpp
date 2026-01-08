@@ -1,5 +1,5 @@
 #define GLM_ENABLE_EXPERIMENTAL
-#include "boids_tree.h"
+#include "boids_simulation.h"
 #include "boid.h"
 #include "obstacle_field.h"
 #include "species_params.h"
@@ -18,7 +18,7 @@ void setGlobalSpeciesParamsFromJS(const std::vector<SpeciesParams>& speciesParam
 {
     for (const auto& params : speciesParamsList) {
         // スケール適用して登録
-        BoidTree::instance().setGlobalSpeciesParams(scaledParams(params, spatialScale));
+        BoidSimulation::instance().setGlobalSpeciesParams(scaledParams(params, spatialScale));
     }
 }
 void callInitBoids(const std::vector<SpeciesParams>& speciesParamsList, float spatialScale = 1.0f, float posRange = 1.0f, float velRange = 1.0f) {
@@ -27,7 +27,7 @@ void callInitBoids(const std::vector<SpeciesParams>& speciesParamsList, float sp
     for (const auto& params : speciesParamsList) {
         scaledList.push_back(scaledParams(params, spatialScale));
     }
-    BoidTree::instance().initializeBoids(scaledList, posRange, velRange);
+    BoidSimulation::instance().initializeBoids(scaledList, posRange, velRange);
 }
 
 // JavaScript 側でグローバルチューニングパラメータを取得
@@ -96,18 +96,18 @@ value_object<SimulationTuningParams>("SimulationTuningParams")
         .property("stress", &Boid::stress)
         .property("speciesId", &Boid::speciesId);
 
-    class_<BoidTree>("BoidTree")
+    class_<BoidSimulation>("BoidSimulation")
         .constructor<>()
-        .function("build", &BoidTree::build)
-        .function("update", &BoidTree::update)
-        .function("setFlockSize", &BoidTree::setFlockSize)
-        .function("getPositionsPtr", &BoidTree::getPositionsPtr)
-        .function("getVelocitiesPtr", &BoidTree::getVelocitiesPtr)
-        .function("getBoidCount", &BoidTree::getBoidCount)
-        .function("initializeBoids", &BoidTree::initializeBoids)
-        .function("getGlobalSpeciesParams", &BoidTree::getGlobalSpeciesParams)
-        .function("setGlobalSpeciesParams", &BoidTree::setGlobalSpeciesParams)
-        .property("root", &BoidTree::root, allow_raw_pointers());
+        .function("build", &BoidSimulation::build)
+        .function("update", &BoidSimulation::update)
+        .function("setFlockSize", &BoidSimulation::setFlockSize)
+        .function("getPositionsPtr", &BoidSimulation::getPositionsPtr)
+        .function("getVelocitiesPtr", &BoidSimulation::getVelocitiesPtr)
+        .function("getBoidCount", &BoidSimulation::getBoidCount)
+        .function("initializeBoids", &BoidSimulation::initializeBoids)
+        .function("getGlobalSpeciesParams", &BoidSimulation::getGlobalSpeciesParams)
+        .function("setGlobalSpeciesParams", &BoidSimulation::setGlobalSpeciesParams)
+        .property("root", &BoidSimulation::root, allow_raw_pointers());
 
     class_<BoidUnit>("BoidUnit")
         .property("center", &BoidUnit::center)

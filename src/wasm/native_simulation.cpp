@@ -1,5 +1,5 @@
 #include "native_simulation.h"
-#include "boids_tree.h"
+#include "boids_simulation.h"
 #include "platform_utils.h"
 #include "scale_utils.h"
 
@@ -38,7 +38,7 @@ void NativeSimulation::run() {
   std::signal(SIGINT, handleSignal); // Ctrl+C で停止可能
 
   settings_ = ensureSettingsFields(loadSettings()); // 設定値の取得・補完
-  startSimulation();                                // BoidTree 初期化
+  startSimulation();                                // BoidSimulation 初期化
   animate();                                        // メインループ開始
 }
 
@@ -152,7 +152,7 @@ int NativeSimulation::calculateTotalBoidCount(
   return sum;
 }
 
-// BoidTree の初期化（個体生成・空間分割構築）
+// BoidSimulation の初期化（個体生成・空間分割構築）
 void NativeSimulation::startSimulation() {
   std::vector<SpeciesParams> scaled;
   scaled.reserve(settings_.size());
@@ -160,16 +160,17 @@ void NativeSimulation::startSimulation() {
     scaled.push_back(scaledParams(params, options_.spatialScale));
   }
 
-  BoidTree::instance().initializeBoids(scaled, options_.positionRange,
+  BoidSimulation::instance().initializeBoids(scaled, options_.positionRange,
                                        options_.velocityRange);
-  BoidTree::instance().build(options_.maxBoidsPerUnit);
+  BoidSimulation::instance().maxBoidsPerUnit = options_.maxBoidsPerUnit;
+  BoidSimulation::instance().build();
 
   const int totalBoids = calculateTotalBoidCount(settings_);
   logger::log("Simulation initialized with " + std::to_string(totalBoids) +
               " boids.");
 }
 
-// メインループ（フレームごとに BoidTree を更新）
+// メインループ（フレームごとに BoidSimulation を更新）
 void NativeSimulation::animate() {
   using clock = std::chrono::steady_clock;
   auto last = clock::now();
@@ -181,7 +182,7 @@ void NativeSimulation::animate() {
     last = now;
 
     if (!paused_) {
-      BoidTree::instance().update(deltaSeconds); // BoidTree の物理更新
+      BoidSimulation::instance().update(deltaSeconds); // BoidSimulation の物理更新
     }
 
     // 指定間隔ごとに統計ログ出力
@@ -207,7 +208,7 @@ void NativeSimulation::scheduleNextFrame() {
 // フレームごとの統計（平均位置・速度）を出力
 void NativeSimulation::printFrameSummary(std::size_t frame,
                                          float deltaSeconds) const {
-  const auto &buf = BoidTree::instance().buf;
+  const auto &buf = BoidSimulation::instance().buf;
   if (buf.positions.empty()) {
     logger::log("Frame " + std::to_string(frame) + ": no boids available.");
     return;
