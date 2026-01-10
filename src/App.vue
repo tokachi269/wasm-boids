@@ -205,6 +205,9 @@ import { ParticleField } from "./rendering/ParticleField.js";
 import { WasmtimeBridge } from "./simulation/WasmtimeBridge.js";
 import { createFlockSettingsStore } from "./state/FlockSettingsStore.js";
 
+// WASM 側の初期配置レンジ（posRange）。描画側の位置量子化レンジ決定にも使う。
+const DEFAULT_SIMULATION_POS_RANGE = 4;
+
 const wasmModule = inject("wasmModule");
 if (!wasmModule) {
   console.error("wasmModule not provided");
@@ -279,16 +282,16 @@ const DEFAULT_SETTINGS = [
     cohesionRange: 5, // 凝集範囲
     separation: 2.15, // 分離
     separationRange: 0.4, // 分離範囲
-    alignment: 10.0, // 整列
+    alignment: 8.0, // 整列
     alignmentRange: 1, // 整列範囲
     maxSpeed: 0.35, // 最大速度
     maxTurnAngle: 0.75, // 最大曲がり（曲率）
     maxNeighbors: 4, // 最大近傍数
     horizontalTorque: 0.03, // 水平化トルク
     torqueStrength: 1.0, // 回転トルク強度
-    lambda: 0.1, // 速度調整係数（減衰係数）
+    lambda: 0.102, // 速度調整係数（減衰係数）
     tau: 0.5, // 記憶時間
-    predatorAlertRadius: 1.5, // 捕食者を察知する距離
+    predatorAlertRadius: 1.0, // 捕食者を察知する距離
     densityReturnStrength: 0.0, // 密度復帰強度
     isPredator: false,
   },
@@ -303,8 +306,8 @@ const DEFAULT_SETTINGS = [
     alignmentRange: 1.0,
     predatorAlertRadius: 0.0,
     densityReturnStrength: 0.0,
-    maxSpeed: 1.0,
-    minSpeed: 0.5,
+    maxSpeed: 2.0,
+    minSpeed: 1.5,
     maxTurnAngle: 0.4,
     maxNeighbors: 0,
     lambda: 0.05,
@@ -317,7 +320,7 @@ const DEFAULT_SETTINGS = [
 
 const DEFAULT_TUNING_SETTINGS = {
   threatDecay: 1.0, // 脅威減衰速度（1/sec）
-  maxEscapeWeight: 0.7, // 逃避方向の最大割合（0〜1）
+  maxEscapeWeight: 3.5, // 逃避方向の最大割合（0〜1）
   baseEscapeStrength: 5.0, // 逃避舵取り強度（目標速度へ寄せる強さ）
   fastAttractStrength: 2.0, // 近傍不足時の補助凝集強度（0で無効）
   schoolPullCoefficient: 0.00003, // 大クラスタ引力係数
@@ -613,6 +616,16 @@ let glContext = null;
 let frameCounter = 0;
 let flockReinitTimer = null; // 群れ再初期化の遅延タイマー
 
+// モバイルはWebGL context喪失が起きやすいので、復旧のための状態を持つ。
+let rendererCanvas = null;
+let webglContextLost = false;
+let webglRecoveryTimer = null;
+let webglRecoveryAttempt = 0;
+let boidAssetsReady = false;
+let resizeHooked = false;
+// WebGL2 が不安定な端末では、いったん WebGL1 に固定して再生成ループを避ける。
+let forceWebgl1 = false;
+
 let animationTimer = null;
 // requestAnimationFrame で vsync に同期して更新する。
 // setTimeout の高頻度ループは余計なスケジューリング負荷を生みやすい。
@@ -782,9 +795,145 @@ function rebuildFogPipeline() {
   }
 }
 
+function clearWebglRecoveryTimer() {
+  if (webglRecoveryTimer) {
+    clearTimeout(webglRecoveryTimer);
+    webglRecoveryTimer = null;
+  }
+}
+
+function detachRendererCanvas() {
+  const canvas = renderer?.domElement ?? rendererCanvas;
+  if (!canvas) {
+    return;
+  }
+  if (canvas.parentElement) {
+    canvas.parentElement.removeChild(canvas);
+  }
+}
+
+function disposeRendererAndPipeline() {
+  if (fogPipeline) {
+    fogPipeline.dispose();
+    fogPipeline = null;
+  }
+
+  if (renderer) {
+    rendererCanvas = renderer.domElement;
+    renderer.dispose?.();
+  }
+  renderer = null;
+  glContext = null;
+}
+
+function createWebglContext(canvas, preferWebgl2) {
+  const attrs = {
+    alpha: false,
+    antialias: true,
+    depth: true,
+    stencil: false,
+    preserveDrawingBuffer: false,
+    powerPreference: 'high-performance',
+    failIfMajorPerformanceCaveat: false,
+  };
+
+  if (preferWebgl2) {
+    const gl2 = canvas.getContext('webgl2', attrs);
+    if (gl2) {
+      return gl2;
+    }
+  }
+
+  // WebGL2 が取れない端末向けのフォールバック。
+  return canvas.getContext('webgl', attrs) || canvas.getContext('experimental-webgl', attrs);
+}
+
+function onWebglContextLost(event) {
+  // 既定動作（自動リロード等）を止め、こちらで復旧を試みる。
+  event?.preventDefault?.();
+  webglContextLost = true;
+  console.warn('WebGL context lost. Scheduling recovery...');
+
+  // ループを止めて、再生成後に再開する。
+  if (animationTimer && typeof cancelAnimationFrame === 'function') {
+    cancelAnimationFrame(animationTimer);
+    animationTimer = null;
+  }
+
+  // GPU側はステートレスになるので、レンダラー/パイプラインだけ作り直す。
+  // NOTE: WebGL2 が不安定な端末では喪失→再生成でブラウザにブロックされやすい。
+  // 一度でも WebGL2 で喪失したら WebGL1 を優先し、安定性を取る。
+  if (renderer?.capabilities?.isWebGL2) {
+    forceWebgl1 = true;
+    // WebGL2 コンテキストを持つ canvas は WebGL1 に切替できないため、次回は作り直す。
+    rendererCanvas = null;
+  }
+  disposeRendererAndPipeline();
+  scheduleWebglRecovery('contextlost');
+}
+
+function onWebglContextRestored() {
+  webglContextLost = false;
+  console.warn('WebGL context restored. Reinitializing renderer...');
+  scheduleWebglRecovery('contextrestored');
+}
+
+function scheduleWebglRecovery(reason) {
+  if (webglRecoveryTimer) {
+    return;
+  }
+
+  // 連続で失敗するとブラウザがブロックするため、指数バックオフで再試行する。
+  const delayMs = Math.min(8000, 500 * Math.pow(2, webglRecoveryAttempt));
+  webglRecoveryAttempt = Math.min(webglRecoveryAttempt + 1, 6);
+
+  webglRecoveryTimer = setTimeout(() => {
+    webglRecoveryTimer = null;
+    try {
+      const ok = initThreeJS();
+      if (!ok) {
+        scheduleWebglRecovery('retry:' + reason);
+        return;
+      }
+
+      // stats-gl は renderer を差し替えると参照が古くなるため、可能なら再パッチする。
+      if (stats && typeof stats.patchThreeRenderer === 'function') {
+        stats.patchThreeRenderer(renderer);
+      }
+
+      // GPUは失われるので、boidsは次フレームの update() で再送される。
+      // モデルロード済みならインスタンシングを作り直して描画を復帰する。
+      if (boidAssetsReady) {
+        initInstancedBoids(cachedTotalBoidCount || totalBoids.value || 0);
+      }
+
+      // ループが止まっていれば再開。
+      if (!animationTimer) {
+        scheduleNextFrame();
+      }
+
+      // 復旧に成功したらカウンタをリセット。
+      webglRecoveryAttempt = 0;
+      clearWebglRecoveryTimer();
+    } catch (error) {
+      console.warn('WebGL recovery failed:', error);
+      scheduleWebglRecovery('error:' + reason);
+    }
+  }, delayMs);
+}
+
 function initThreeJS() {
   const width = window.innerWidth;
   const height = window.innerHeight;
+
+  // 既存のレンダラを捨てて作り直す（context lost 復旧用）。
+  detachRendererCanvas();
+  disposeRendererAndPipeline();
+
+  // 以前の scene を保持したまま再生成するとメモリが積み上がるので、都度作り直す。
+  scene = null;
+  camera = null;
+  controls = null;
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color(OCEAN_COLORS.DEEP_BLUE);
@@ -794,19 +943,49 @@ function initThreeJS() {
   camera.position.set(3, -5, 3);
   camera.lookAt(0, 0, 0);
 
+  // まず WebGL2 を試し、ダメなら WebGL1 にフォールバックする。
+  // NOTE: 端末によっては WebGL2 が常に失敗する（省電力/制限/一時ブロック等）。
+  const canvas = rendererCanvas || document.createElement('canvas');
+  const preferWebgl2 = !forceWebgl1;
+  const context = createWebglContext(canvas, preferWebgl2);
+  if (!context) {
+    console.warn('Failed to create WebGL context (webgl2/webgl).');
+    rendererCanvas = canvas;
+    // 復旧ループへ回す（ここでは例外にしない）。
+    scheduleWebglRecovery('init');
+    return false;
+  }
+
+  // WebGL2 を期待していたのに WebGL1 にフォールバックした場合は、以降も WebGL1 を優先する。
+  // （WebGL2 を毎回試して失敗→ブロック、を避ける）
+  const isWebgl2 = (typeof WebGL2RenderingContext !== 'undefined') && (context instanceof WebGL2RenderingContext);
+  if (preferWebgl2 && !isWebgl2) {
+    forceWebgl1 = true;
+  }
+
   renderer = new THREE.WebGLRenderer({
+    canvas,
+    context,
     antialias: true,
-    depth: true, // 深度バッファを有効化
+    depth: true,
   });
+  // テクスチャは sRGB 前提で運用しているため、出力色空間も明示して「くすみ」を避ける。
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
   // トーンマッピングを有効化し水中ライティングのダイナミクスを保つ。
   renderer.toneMapping = THREE.CineonToneMapping;
-  renderer.toneMappingExposure = 0.8;
+  renderer.toneMappingExposure = 1.5;
   applyRendererPixelRatio();
   renderer.setSize(width, height);
   renderer.shadowMap.enabled = debugControls.enableShadows;
   renderer.shadowMap.type = THREE.PCFShadowMap; // 影を柔らかく
 
   glContext = renderer.getContext();
+
+  // context lost/restore を拾って自動復旧する。
+  // 同一canvasを使い回すことで「作りすぎブロック」を避ける。
+  rendererCanvas = renderer.domElement;
+  rendererCanvas.addEventListener('webglcontextlost', onWebglContextLost, false);
+  rendererCanvas.addEventListener('webglcontextrestored', onWebglContextRestored, false);
 
   threeContainer.value.appendChild(renderer.domElement);
 
@@ -842,12 +1021,12 @@ function initThreeJS() {
   // ライト
   const ambientLight = new THREE.AmbientLight(
     toHex(OCEAN_COLORS.AMBIENT_LIGHT),
-    0.9
+    0.8
   );
   scene.add(ambientLight);
 
   // 太陽光（やや暖色のDirectionalLight）
-  dirLight = new THREE.DirectionalLight(toHex(OCEAN_COLORS.SUN_LIGHT), 25); // 暖色＆強め
+  dirLight = new THREE.DirectionalLight(toHex(OCEAN_COLORS.SUN_LIGHT), 15); // 暖色＆強め
   dirLight.position.set(300, 500, 200); // 高い位置から照らす
   dirLight.castShadow = true;
 
@@ -857,11 +1036,6 @@ function initThreeJS() {
   dirLight.shadow.camera.top = 100;
   dirLight.shadow.camera.bottom = -100;
   dirLight.shadow.camera.near = 1;
-  // NOTE:
-  // DirectionalLight の shadow camera は光源位置を基準に depth 範囲を切る。
-  // ここが短すぎると「シーン全体が shadow map の far でクリップ」され、
-  // 影が常に OFF のように見える。
-  // （光源が (300,500,200) のため far=400 だと原点近傍まで届かない）
   dirLight.shadow.camera.far = 1200;
   dirLight.shadow.camera.updateProjectionMatrix();
 
@@ -877,7 +1051,13 @@ function initThreeJS() {
   applyTailAnimationDebugState();
   applyWorldAxisGridState();
   // ウィンドウリサイズ対応
-  window.addEventListener("resize", onWindowResize);
+  if (!resizeHooked) {
+    resizeHooked = true;
+    window.addEventListener("resize", onWindowResize);
+  }
+
+  webglContextLost = false;
+  return true;
 }
 
 /**
@@ -1036,9 +1216,8 @@ let instancedMeshLow = null;
 const OCEAN_COLORS = {
   SKY_HIGHLIGHT: "#4fbaff",
   SKY_BLUE: "#15a1ff",
-  DEEP_BLUE: "#002968",
+  DEEP_BLUE: "#05337a",
   SEAFLOOR: "#777465",
-  FOG: "#153a6c",
   AMBIENT_LIGHT: "#59a5eb",
   SUN_LIGHT: "#5389b7",
   SIDE_LIGHT1: "#6ba3d0",
@@ -1052,15 +1231,16 @@ const toHex = (colorStr) => parseInt(colorStr.replace("#", "0x"), 16);
 // 距離と深度で濃さが変わる海中フォグ設定
 const heightFogConfig = {
   color: new THREE.Color(OCEAN_COLORS.DEEP_BLUE), // 遠景で溶け込む深海色
-  distanceStart: 4.0, // カメラからこの距離まではフォグゼロ
-  distanceEnd: 60.0, // この距離でフォグが最大になる
-  distanceExponent: 0.4, // 距離カーブの滑らかさ
-  distanceControlPoint1: new THREE.Vector2(0.2, 0.8), // 距離ベジェ曲線の制御点（開始側）
-  distanceControlPoint2: new THREE.Vector2(0.75, 0.95), // 距離ベジェ曲線の制御点（終端側）
+  distanceStart: 0.0, // カメラからこの距離まではフォグゼロ
+  distanceEnd: 20.0, // この距離でフォグが最大になる
+  // 早めに濃くしつつ、中距離は輪郭が残り、遠距離でさらに濃くするカーブ。
+  distanceExponent: 0.3, // 距離カーブの滑らかさ（小さいほど早めに濃くなる）
+  distanceControlPoint1: new THREE.Vector2(0.15, 0.20), // 距離ベジェ曲線の制御点（開始側）
+  distanceControlPoint2: new THREE.Vector2(0.88, 0.90), // 距離ベジェ曲線の制御点（終端側）
   surfaceLevel: 100.0, // 水面の高さ。ここから下がるほど暗くなる
-  heightFalloff: 0.01, // 深度による減衰率
+  heightFalloff: 0.015, // 深度による減衰率
   heightExponent: 1, // 深度カーブの強さ
-  maxOpacity: 1.2, // 最大フォグ率
+  maxOpacity: 1.0, // 最大フォグ率
 };
 
 function createOceanSphere() {
@@ -1256,7 +1436,7 @@ function reinitializeFlockNow() {
     // 初期化手順は Bridge に集約
     wasmBridge.initializeFlock(newSettingsRef, {
       spatialScale: 1,
-      posRange: 4,
+      posRange: DEFAULT_SIMULATION_POS_RANGE,
       velRange: 0.25,
       groundPlane: {
         enabled: true,
@@ -1860,12 +2040,23 @@ let unitIdScratchSize = 0;
 const unitColor = new THREE.Color();
 
 function scheduleNextFrame() {
+  if (webglContextLost || !renderer || !scene || !camera) {
+    // 描画不能な場合は復旧を優先する。
+    if (!renderer) {
+      scheduleWebglRecovery('raf');
+    }
+    return;
+  }
   if (typeof requestAnimationFrame === "function") {
     animationTimer = requestAnimationFrame(animate);
   }
 }
 
 function animate(frameTimeMs) {
+  if (webglContextLost || !renderer || !scene || !camera) {
+    scheduleWebglRecovery('animate');
+    return;
+  }
   stats?.begin();
   const currentTime =
     typeof frameTimeMs === "number" ? frameTimeMs : performance.now();
@@ -1913,7 +2104,9 @@ function animate(frameTimeMs) {
     orientations,
     velocities,
     cameraPosition: camera.position,
+    originPosition: controls?.target,
     predatorCount,
+    posRange: DEFAULT_SIMULATION_POS_RANGE,
   });
 
   const visibleCount =
@@ -2109,6 +2302,7 @@ function drawTreeStructure(treeData) {
 // シミュレーションを開始（群れ初期化 + アニメーションループ起動）
 function startSimulation() {
   reinitializeFlockNow();
+  // WebGL が初期化できていない端末では、復旧後にループが再開される。
   scheduleNextFrame();
 }
 
@@ -2124,6 +2318,8 @@ onMounted(() => {
   initThreeJS();
   loadBoidModel(() => {
     console.log("Boid model loaded successfully.");
+
+    boidAssetsReady = true;
 
     stats = new StatsGl({
       trackGPU: true,
@@ -2165,7 +2361,9 @@ onMounted(() => {
 
     initPromise
       .then(() => {
-        if (typeof stats?.patchThreeRenderer === "function") {
+        // WebGL context が取れていない場合は renderer が null になり得る。
+        // その場合は scheduleWebglRecovery 側で renderer 復旧後に patch する。
+        if (renderer && typeof stats?.patchThreeRenderer === "function") {
           stats.patchThreeRenderer(renderer);
         }
         ensureStatsOverlay();
@@ -2187,6 +2385,16 @@ onMounted(() => {
   document.addEventListener("visibilitychange", applyBackgroundAudioAutoMute);
   window.addEventListener("blur", applyBackgroundAudioAutoMute);
   window.addEventListener("focus", applyBackgroundAudioAutoMute);
+
+  // タブ復帰時に context が失われていたら復旧を試みる。
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      scheduleWebglRecovery('visibility');
+    }
+  });
+  window.addEventListener('focus', () => {
+    scheduleWebglRecovery('focus');
+  });
 });
 
 onUnmounted(() => {
@@ -2199,6 +2407,9 @@ onUnmounted(() => {
     cancelAnimationFrame(animationTimer);
     animationTimer = null;
   }
+
+  clearWebglRecoveryTimer();
+  disposeRendererAndPipeline();
 });
 
 watch(

@@ -39,6 +39,18 @@ export class BoidInstancing {
     this.predatorModel = null;
     this.predatorMeshes = [];
     this.predatorMeshCountCache = -1;
+
+    // instancePos を 16bit normalized で送るための量子化設定
+    // extent は「原点からの半径[m]」で、ローカル範囲は [-extent, extent]（全幅 2*extent）
+    this.positionQuantization = {
+      // NOTE: ここは「安全側の下限値」。実運用では update() の posRange ヒントで拡張される。
+      extent: 64,
+      originSnap: 1.0,
+    };
+    this.positionQuantUniforms = {
+      uInstanceOrigin: { value: new THREE.Vector3() },
+      uInstanceExtent: { value: this.positionQuantization.extent },
+    };
   }
 
   init(scene, {
@@ -105,8 +117,9 @@ export class BoidInstancing {
 
     this.instancedMeshHigh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
     this.instancedMeshLow.instanceMatrix.setUsage(THREE.StaticDrawUsage);
-    this.instancedMeshHigh.count = count;
-    this.instancedMeshLow.count = count;
+    // 初期フレームで「未初期化の位置」が表示されないよう、update で詰めるまでは描画しない
+    this.instancedMeshHigh.count = 0;
+    this.instancedMeshLow.count = 0;
 
     this.previousVelocities = null;
     this.previousLodFlags = null;
@@ -136,6 +149,8 @@ update({
   velocities,
   cameraPosition,
   predatorCount = 0,
+  posRange,
+  originPosition,
 }) {
   if (!this.instancedMeshHigh || !this.instancedMeshLow || !this.bufferSetHigh || !this.bufferSetLow) {
     return { visibleCount: 0, lodFlags: null };
@@ -179,6 +194,28 @@ update({
   const camX = cameraPosition?.x ?? 0;
   const camY = cameraPosition?.y ?? 0;
   const camZ = cameraPosition?.z ?? 0;
+
+  // NOTE: camera が群れから離れても量子化が破綻しないよう、可能なら「注視点」を原点に使う。
+  const originBaseX = originPosition?.x ?? camX;
+  const originBaseY = originPosition?.y ?? camY;
+  const originBaseZ = originPosition?.z ?? camZ;
+
+  // カメラ近傍を基準にして instancePos を量子化（GPU 側で origin/extent から復号）
+  // posRange は「初期配置レンジ」なので、移動や群れの広がりも考慮して少し余裕を持たせる。
+  const extentFromPosRange = Number.isFinite(posRange) && posRange > 0
+    ? posRange * 16
+    : 0;
+  const extent = Math.max(this.positionQuantization.extent, extentFromPosRange);
+  const snap = this.positionQuantization.originSnap;
+  const originX = snap > 0 ? Math.floor(originBaseX / snap) * snap : originBaseX;
+  const originY = snap > 0 ? Math.floor(originBaseY / snap) * snap : originBaseY;
+  const originZ = snap > 0 ? Math.floor(originBaseZ / snap) * snap : originBaseZ;
+
+  // uniform は共有参照なので、ここを更新すれば全インスタンス材質に反映される
+  this.positionQuantUniforms.uInstanceOrigin.value.set(originX, originY, originZ);
+  this.positionQuantUniforms.uInstanceExtent.value = extent;
+
+  const invExtent = extent > 0 ? 1.0 / extent : 0.0;
 
   // 捕食者は末尾に詰めている想定（C++ 側の出力仕様に合わせる）
   const predatorStartIndex = predatorCount > 0 ? Math.max(0, count - predatorCount) : count;
@@ -273,9 +310,20 @@ update({
       const outQuat = writeIndex * 4;
       const outTail = writeIndex * 3;
 
-      highPosArray[outPos] = px;
-      highPosArray[outPos + 1] = py;
-      highPosArray[outPos + 2] = pz;
+      // 16bit normalized: 0..1 に正規化して Uint16 へパック
+      {
+        const lx = Math.max(-extent, Math.min(extent, px - originX));
+        const ly = Math.max(-extent, Math.min(extent, py - originY));
+        const lz = Math.max(-extent, Math.min(extent, pz - originZ));
+
+        const nx = Math.max(0, Math.min(1, lx * 0.5 * invExtent + 0.5));
+        const ny = Math.max(0, Math.min(1, ly * 0.5 * invExtent + 0.5));
+        const nz = Math.max(0, Math.min(1, lz * 0.5 * invExtent + 0.5));
+
+        highPosArray[outPos] = ((nx * 65535 + 0.5) | 0);
+        highPosArray[outPos + 1] = ((ny * 65535 + 0.5) | 0);
+        highPosArray[outPos + 2] = ((nz * 65535 + 0.5) | 0);
+      }
       highQuatArray[outQuat] = qx;
       highQuatArray[outQuat + 1] = qy;
       highQuatArray[outQuat + 2] = qz;
@@ -301,9 +349,20 @@ update({
       const outQuat = writeIndex * 4;
       const outTail = writeIndex * 3;
 
-      lowPosArray[outPos] = px;
-      lowPosArray[outPos + 1] = py;
-      lowPosArray[outPos + 2] = pz;
+      // 16bit normalized: 0..1 に正規化して Uint16 へパック
+      {
+        const lx = Math.max(-extent, Math.min(extent, px - originX));
+        const ly = Math.max(-extent, Math.min(extent, py - originY));
+        const lz = Math.max(-extent, Math.min(extent, pz - originZ));
+
+        const nx = Math.max(0, Math.min(1, lx * 0.5 * invExtent + 0.5));
+        const ny = Math.max(0, Math.min(1, ly * 0.5 * invExtent + 0.5));
+        const nz = Math.max(0, Math.min(1, lz * 0.5 * invExtent + 0.5));
+
+        lowPosArray[outPos] = ((nx * 65535 + 0.5) | 0);
+        lowPosArray[outPos + 1] = ((ny * 65535 + 0.5) | 0);
+        lowPosArray[outPos + 2] = ((nz * 65535 + 0.5) | 0);
+      }
       lowQuatArray[outQuat] = qx;
       lowQuatArray[outQuat + 1] = qy;
       lowQuatArray[outQuat + 2] = qz;
@@ -405,10 +464,15 @@ update({
         });
       }
 
+      // instancePos の復号に必要な uniform（共有参照）
+      shader.uniforms.uInstanceOrigin = this.positionQuantUniforms.uInstanceOrigin;
+      shader.uniforms.uInstanceExtent = this.positionQuantUniforms.uInstanceExtent;
+
       shader.vertexShader = shader.vertexShader
         .replace(
           '#include <common>',
-          `#include <common>\nattribute vec3 instancePos;\nattribute vec4 instanceQuat;\nattribute float aBodyCoord;\nattribute float instanceTailPhase;\nattribute vec3 instanceTailParams;\nuniform float uTailTime;\nuniform float uTailAmplitude;\nuniform float uTailFrequency;\nuniform float uTailPhaseStride;\nuniform float uTailTurnStrength;\nuniform float uTailSpeedScale;\nuniform vec3 uTailRight;\nuniform vec3 uTailForward;\nuniform vec3 uTailUp;\nuniform float uTailEnable;\nuniform sampler2D uSinLut;\nuniform float uLutSize;\nvec3 quatTransform(vec3 v, vec4 q) {\n  vec3 t = 2.0 * cross(q.xyz, v);\n  return v + q.w * t + cross(q.xyz, t);\n}\nvec2 sampleSinCos(float angle) {\n  float u = fract(angle * 0.15915494309189535);\n  u = u * (uLutSize - 1.0) + 0.5;\n  vec4 lutSample = texture(uSinLut, vec2(u / uLutSize, 0.5));\n  return lutSample.rg * 2.0 - 1.0;\n}`
+          `#include <common>\nattribute vec3 instancePos;\nattribute vec4 instanceQuat;\nattribute float aBodyCoord;\nattribute float instanceTailPhase;\nattribute vec3 instanceTailParams;\nuniform vec3 uInstanceOrigin;\nuniform float uInstanceExtent;\nuniform float uTailTime;\nuniform float uTailAmplitude;\nuniform float uTailFrequency;\nuniform float uTailPhaseStride;\nuniform float uTailTurnStrength;\nuniform float uTailSpeedScale;\nuniform vec3 uTailRight;\nuniform vec3 uTailForward;\nuniform vec3 uTailUp;\nuniform float uTailEnable;\nuniform sampler2D uSinLut;\nuniform float uLutSize;\nvec3 quatTransform(vec3 v, vec4 q) {\n  vec3 t = 2.0 * cross(q.xyz, v);\n  return v + q.w * t + cross(q.xyz, t);\n}\nvec3 decodeInstancePos(vec3 packed01) {\n  // Uint16 normalized (0..1) を [-extent, extent] のローカル座標へ復号
+  vec3 local = (packed01 * 2.0 - 1.0) * uInstanceExtent;\n  return uInstanceOrigin + local;\n}\nvec2 sampleSinCos(float angle) {\n  float u = fract(angle * 0.15915494309189535);\n  u = u * (uLutSize - 1.0) + 0.5;\n  vec4 lutSample = texture(uSinLut, vec2(u / uLutSize, 0.5));\n  return lutSample.rg * 2.0 - 1.0;\n}`
         )
         .replace(
           '#include <instancing_vertex>',
@@ -420,7 +484,7 @@ update({
         )
         .replace(
           '#include <begin_vertex>',
-          `#include <begin_vertex>\nvec3 tailParams = instanceTailParams;\nif (uTailEnable > 0.5) {\n  float driveRaw = tailParams.z;\n  if (driveRaw > 0.01) {\n    float drive = clamp(driveRaw, 0.0, 1.0);\n    vec3 originalPos = transformed;\n    vec3 right = normalize(uTailRight);\n    vec3 forward = normalize(uTailForward);\n    vec3 up = normalize(uTailUp);\n\n    float localX = dot(originalPos, right);\n    float localY = dot(originalPos, forward);\n    float localZ = dot(originalPos, up);\n\n    float bodyCoord = clamp(aBodyCoord, 0.0, 1.0);\n    float tailWeight = smoothstep(0.0, 0.35, bodyCoord);\n    float speedFactor = clamp(tailParams.x * uTailSpeedScale, 0.0, 2.0);\n\n    float phase = instanceTailPhase + uTailTime * uTailFrequency;\n    float wavePhase = phase + bodyCoord * uTailPhaseStride;\n    vec2 waveSC = sampleSinCos(wavePhase);\n    float wag = waveSC.x * uTailAmplitude * drive;\n    float turnOffset = tailParams.y * uTailTurnStrength * drive;\n    float motion = wag * (0.4 + 0.6 * speedFactor) + turnOffset;\n\n    float tipDamping = 1.0 - smoothstep(0.7, 1.0, bodyCoord) * 0.3;\n    float bendStrength = mix(0.02, 1.0, tailWeight) * tipDamping;\n\n    float bendAngle = motion * bendStrength;\n    vec2 bendSC = sampleSinCos(bendAngle);\n    float s = bendSC.x;\n    float c = bendSC.y;\n    float rotX = localX * c - localY * s;\n    float rotY = localX * s + localY * c;\n\n    float sway = motion * 0.4 * tipDamping;\n    rotX += sway * (0.05 + 0.95 * bodyCoord);\n\n    vec3 rotated = right * rotX + forward * rotY + up * localZ;\n    transformed = rotated;\n  }\n}\ntransformed = quatTransform(transformed, instanceQuat) + instancePos;`
+          `#include <begin_vertex>\nvec3 tailParams = instanceTailParams;\nif (uTailEnable > 0.5) {\n  float driveRaw = tailParams.z;\n  if (driveRaw > 0.01) {\n    float drive = clamp(driveRaw, 0.0, 1.0);\n    vec3 originalPos = transformed;\n    vec3 right = normalize(uTailRight);\n    vec3 forward = normalize(uTailForward);\n    vec3 up = normalize(uTailUp);\n\n    float localX = dot(originalPos, right);\n    float localY = dot(originalPos, forward);\n    float localZ = dot(originalPos, up);\n\n    float bodyCoord = clamp(aBodyCoord, 0.0, 1.0);\n    float tailWeight = smoothstep(0.0, 0.35, bodyCoord);\n    float speedFactor = clamp(tailParams.x * uTailSpeedScale, 0.0, 2.0);\n\n    float phase = instanceTailPhase + uTailTime * uTailFrequency;\n    float wavePhase = phase + bodyCoord * uTailPhaseStride;\n    vec2 waveSC = sampleSinCos(wavePhase);\n    float wag = waveSC.x * uTailAmplitude * drive;\n    float turnOffset = tailParams.y * uTailTurnStrength * drive;\n    float motion = wag * (0.4 + 0.6 * speedFactor) + turnOffset;\n\n    float tipDamping = 1.0 - smoothstep(0.7, 1.0, bodyCoord) * 0.3;\n    float bendStrength = mix(0.02, 1.0, tailWeight) * tipDamping;\n\n    float bendAngle = motion * bendStrength;\n    vec2 bendSC = sampleSinCos(bendAngle);\n    float s = bendSC.x;\n    float c = bendSC.y;\n    float rotX = localX * c - localY * s;\n    float rotY = localX * s + localY * c;\n\n    float sway = motion * 0.4 * tipDamping;\n    rotX += sway * (0.05 + 0.95 * bodyCoord);\n\n    vec3 rotated = right * rotX + forward * rotY + up * localZ;\n    transformed = rotated;\n  }\n}\ntransformed = quatTransform(transformed, instanceQuat) + decodeInstancePos(instancePos);`
         )
         .replace(
           '#include <beginnormal_vertex>',
@@ -491,9 +555,21 @@ update({
     return attributes;
   }
 
+  createNormalizedAttributeSet(count, itemSize, ArrayType) {
+    const length = count * itemSize;
+    const attributes = [];
+    for (let i = 0; i < this.tripleBufferSize; i++) {
+      const attr = new THREE.InstancedBufferAttribute(new ArrayType(length), itemSize, true);
+      attr.setUsage(this.streamUsage);
+      attributes.push(attr);
+    }
+    return attributes;
+  }
+
   createBufferSet(count) {
     return {
-      pos: this.createAttributeSet(count, 3),
+      // instancePos は Uint16 normalized (0..1) として送る
+      pos: this.createNormalizedAttributeSet(count, 3, Uint16Array),
       quat: this.createAttributeSet(count, 4),
       tailPhase: this.createAttributeSet(count, 1),
       tailParams: this.createAttributeSet(count, 3),
@@ -504,11 +580,8 @@ update({
     // 初期状態では全インスタンスを画面外へ退避させておく
     for (const attr of bufferSet.pos) {
       const array = attr.array;
-      for (let i = 0; i < array.length; i += 3) {
-        array[i] = this.hiddenPosition;
-        array[i + 1] = this.hiddenPosition;
-        array[i + 2] = this.hiddenPosition;
-      }
+      // Uint16 normalized の場合、描画しない（mesh.count=0）前提でゼロクリア
+      array.fill(0);
     }
     for (const attr of bufferSet.quat) {
       const array = attr.array;

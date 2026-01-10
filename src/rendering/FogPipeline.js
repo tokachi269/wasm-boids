@@ -22,7 +22,6 @@ export class FogPipeline {
 
     // ポストプロセスはフル解像度だと GPU のフラグメント負荷が支配的になりやすい。
     // 見た目（Fog/SSAO/Bloom）を維持しつつ負荷を落とすため、内部レンダーターゲットを縮小して回す。
-    // NOTE: UI は増やさない方針のため、ここは固定スケール。
     this.internalScale = 0.75;
   }
 
@@ -75,9 +74,9 @@ export class FogPipeline {
     this.composer.addPass(ssaoPass);
 
     // ハイライトを強調するブルーム
-    const bloomStrength = 1.0;   // ブルームの強さ
-    const bloomRadius = 0.25;     // 発光の広がり
-    const bloomThreshold = 0.85; // ブルームを適用する輝度
+    const bloomStrength = 6.0;   // ブルームの強さ
+    const bloomRadius = 0.1;     // 発光の広がり
+    const bloomThreshold = 0.83; // ブルームを適用する輝度
     const bloomPass = new UnrealBloomPass(new THREE.Vector2(scaledWidth, scaledHeight), bloomStrength, bloomRadius, bloomThreshold);
     this.composer.addPass(bloomPass);
 
@@ -105,7 +104,8 @@ export class FogPipeline {
       material.depthWrite = false;
       material.transparent = false;
       material.blending = THREE.NoBlending;
-      material.toneMapped = true;
+      // RenderPass 側でトーンマッピング済みの絵を扱うため二重適用を避ける。
+      material.toneMapped = false;
       material.needsUpdate = true;
     }
 
@@ -130,6 +130,9 @@ export class FogPipeline {
     if (!this.composer) {
       return;
     }
+
+    // NOTE: 色処理（toneMapping / exposure）は renderer 側に統一する。
+    // HeightFogShader は「フォグ合成のみ」を担当し、二重適用を避ける。
     this.composer.render(delta);
   }
 
@@ -146,6 +149,13 @@ export class FogPipeline {
       return;
     }
     const { uniforms } = pass;
+
+    // renderer 側の露出をフォグへ同期する（フォグも明るさ調整に追従させる）。
+    if (uniforms.uExposure) {
+      const exposure = Number(this.renderer?.toneMappingExposure);
+      uniforms.uExposure.value = Number.isFinite(exposure) ? exposure : 1.0;
+    }
+
     if (uniforms.cameraNear) {
       uniforms.cameraNear.value = targetCamera.near;
     }
@@ -208,6 +218,9 @@ export function createHeightFogShader(config = {}) {
       tDiffuse: { value: null },
       tDepth: { value: null },
       tDistanceCurveLut: { value: distanceCurveLut },
+      // renderer の露出（toneMappingExposure）をフォグにも反映する。
+      // NOTE: フォグが固定色だと露出や明るさ調整に追従しないため、見た目の一貫性が崩れやすい。
+      uExposure: { value: 1.0 },
       cameraNear: { value: 0.1 },
       cameraFar: { value: 1000 },
       projectionMatrixInverse: { value: new THREE.Matrix4() },
@@ -236,6 +249,7 @@ export function createHeightFogShader(config = {}) {
     uniform sampler2D tDiffuse;
     uniform sampler2D tDepth;
     uniform sampler2D tDistanceCurveLut;
+    uniform float uExposure;
     uniform float cameraNear;
     uniform float cameraFar;
     uniform vec3 fogColor;
@@ -254,6 +268,7 @@ export function createHeightFogShader(config = {}) {
       float u = clamp(x, 0.0, 1.0);
       return texture2D(tDistanceCurveLut, vec2(u, 0.5)).r;
     }
+
 
     void main() {
       vec4 baseColor = texture2D(tDiffuse, vUv);
@@ -292,12 +307,25 @@ export function createHeightFogShader(config = {}) {
       float heightFactor = 1.0 - exp(-depthBelowSurface * heightFalloff);
       heightFactor = clamp(pow(heightFactor, heightExponent), 0.0, 1.0);
 
+      // 深度(高さ)による濃さは、水中らしさに効く一方で近距離の被写体まで暗く見せやすい。
+      // 近距離では距離フォグのみを優先し、深度成分は少し先から効かせる。
+      float heightDistanceFade = smoothstep(distanceStart, distanceStart + 10.0, viewDistance);
+      heightFactor *= heightDistanceFade;
+
       float fogFactor = clamp(distanceFog * heightFactor, 0.0, 1.0);
       fogFactor = mix(0.0, maxOpacity, fogFactor);
 
-      vec3 fogged = mix(baseColor.rgb, fogColor, fogFactor);
+      // 強いハイライト（反射/ブルーム源）をフォグで潰し過ぎないための補正。
+      // 物理的に厳密ではないが、水中の「キラキラ」が消える違和感を抑える目的。
+      float luma = dot(baseColor.rgb, vec3(0.2126, 0.7152, 0.0722));
+      float highlightMask = smoothstep(0.6, 1.2, luma);
+      fogFactor *= mix(1.0, 0.35, highlightMask);
+
+      // 露出はシーン側（RenderPass）には自動で効くが、フォグ色は固定だと追従しない。
+      // fogColor 側にも同じ露出を掛けて、明るさ調整時の一体感を保つ。
+      vec3 fogTarget = fogColor * uExposure;
+      vec3 fogged = mix(baseColor.rgb, fogTarget, fogFactor);
       gl_FragColor = vec4(fogged, baseColor.a);
-      #include <tonemapping_fragment>
       #include <colorspace_fragment>
     }
   `,
@@ -309,8 +337,8 @@ export const HeightFogShader = createHeightFogShader();
 function buildFogDefaults() {
   return {
     color: new THREE.Color('#153a6c'),                // 霧の基本色
-    distanceStart: 4,                                 // カメラからこの距離でフォグ開始
-    distanceEnd: 60,                                  // この距離でフォグが最大
+    distanceStart: 2,                                 // カメラからこの距離でフォグ開始
+    distanceEnd: 5,                                  // この距離でフォグが最大
     distanceExponent: 0.4,                            // 距離カーブの緩急
     distanceControlPoint1: new THREE.Vector2(0.4, 0.75), // ベジェ制御点（開始側）
     distanceControlPoint2: new THREE.Vector2(0.75, 0.95), // ベジェ制御点（終端側）
