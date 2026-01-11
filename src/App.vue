@@ -1026,7 +1026,7 @@ function initThreeJS() {
   scene.add(ambientLight);
 
   // 太陽光（やや暖色のDirectionalLight）
-  dirLight = new THREE.DirectionalLight(toHex(OCEAN_COLORS.SUN_LIGHT), 15); // 暖色＆強め
+  dirLight = new THREE.DirectionalLight(toHex(OCEAN_COLORS.SUN_LIGHT), 12); // 暖色＆強め
   dirLight.position.set(300, 500, 200); // 高い位置から照らす
   dirLight.castShadow = true;
 
@@ -1231,16 +1231,16 @@ const toHex = (colorStr) => parseInt(colorStr.replace("#", "0x"), 16);
 // 距離と深度で濃さが変わる海中フォグ設定
 const heightFogConfig = {
   color: new THREE.Color(OCEAN_COLORS.DEEP_BLUE), // 遠景で溶け込む深海色
-  distanceStart: 0.0, // カメラからこの距離まではフォグゼロ
+  distanceStart: 2.0, // カメラからこの距離まではフォグゼロ
   distanceEnd: 20.0, // この距離でフォグが最大になる
   // 早めに濃くしつつ、中距離は輪郭が残り、遠距離でさらに濃くするカーブ。
-  distanceExponent: 0.3, // 距離カーブの滑らかさ（小さいほど早めに濃くなる）
+  distanceExponent: 0.4, // 距離カーブの滑らかさ（小さいほど早めに濃くなる）
   distanceControlPoint1: new THREE.Vector2(0.15, 0.20), // 距離ベジェ曲線の制御点（開始側）
   distanceControlPoint2: new THREE.Vector2(0.88, 0.90), // 距離ベジェ曲線の制御点（終端側）
   surfaceLevel: 100.0, // 水面の高さ。ここから下がるほど暗くなる
   heightFalloff: 0.015, // 深度による減衰率
   heightExponent: 1, // 深度カーブの強さ
-  maxOpacity: 1.0, // 最大フォグ率
+  maxOpacity: 0.8, // 最大フォグ率
 };
 
 function createOceanSphere() {

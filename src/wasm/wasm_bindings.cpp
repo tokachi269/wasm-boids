@@ -41,6 +41,15 @@ void setSimulationTuningParams(const SimulationTuningParams &params) {
     gSimulationTuning = params;
     gSimulationTuning.maxEscapeWeight = std::clamp(gSimulationTuning.maxEscapeWeight, 0.0f, 1.0f);
     gSimulationTuning.schoolPullCoefficient = std::max(gSimulationTuning.schoolPullCoefficient, 0.0f);
+
+    // ソフト境界は「無効化しやすさ」と「破綻防止」を優先してクランプ。
+    gSimulationTuning.softBoundaryRadius = std::max(gSimulationTuning.softBoundaryRadius, 0.0f);
+    gSimulationTuning.softBoundaryStart = std::max(gSimulationTuning.softBoundaryStart, 0.0f);
+    if (gSimulationTuning.softBoundaryRadius > 0.0f) {
+      gSimulationTuning.softBoundaryStart =
+        std::min(gSimulationTuning.softBoundaryStart, gSimulationTuning.softBoundaryRadius);
+    }
+    gSimulationTuning.softBoundarySteer = std::max(gSimulationTuning.softBoundarySteer, 0.0f);
 }
 
 void configureGroundPlaneFromJS(bool enabled, float height, float blendDistance,
@@ -85,7 +94,10 @@ value_object<SimulationTuningParams>("SimulationTuningParams")
     .field("maxEscapeWeight", &SimulationTuningParams::maxEscapeWeight)
     .field("baseEscapeStrength", &SimulationTuningParams::baseEscapeStrength)
     .field("fastAttractStrength", &SimulationTuningParams::fastAttractStrength)
-    .field("schoolPullCoefficient", &SimulationTuningParams::schoolPullCoefficient);
+    .field("schoolPullCoefficient", &SimulationTuningParams::schoolPullCoefficient)
+    .field("softBoundaryRadius", &SimulationTuningParams::softBoundaryRadius)
+    .field("softBoundaryStart", &SimulationTuningParams::softBoundaryStart)
+    .field("softBoundarySteer", &SimulationTuningParams::softBoundarySteer);
 
     class_<Boid>("Boid")
         .constructor<>()

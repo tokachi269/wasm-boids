@@ -74,7 +74,7 @@ export class FogPipeline {
     this.composer.addPass(ssaoPass);
 
     // ハイライトを強調するブルーム
-    const bloomStrength = 6.0;   // ブルームの強さ
+    const bloomStrength = 4.5;   // ブルームの強さ
     const bloomRadius = 0.1;     // 発光の広がり
     const bloomThreshold = 0.83; // ブルームを適用する輝度
     const bloomPass = new UnrealBloomPass(new THREE.Vector2(scaledWidth, scaledHeight), bloomStrength, bloomRadius, bloomThreshold);
@@ -295,6 +295,16 @@ export function createHeightFogShader(config = {}) {
       // Fog の距離は厳密なユークリッド距離でなくても見た目が崩れにくい。
       // sqrt(length) はフラグメントコストになりやすいので、視線方向距離で近似する。
       float viewDistance = abs(viewPos.z);
+
+      // distanceStart 内は必ずフォグ無しにする。
+      // NOTE: 深度復元の誤差やシーンスケール次第で、ごく薄いフォグが混入して
+      // 「距離startの内側でも色が違う」ように見えるのを防ぐ。
+      if (viewDistance <= distanceStart) {
+        gl_FragColor = baseColor;
+        #include <colorspace_fragment>
+        return;
+      }
+
       float distanceFogNorm = clamp(
         (viewDistance - distanceStart) / max(distanceEnd - distanceStart, 1e-5),
         0.0,

@@ -484,6 +484,39 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
     }
 
     // -----------------------------------------------
+    // 散らばり抑制（見えないソフト境界）
+    // - 一定距離を超えたら中心へ「少しずつ」寄せる。
+    // - 反射/クランプではなく速度の舵取りで戻すため、境界で溜まりにくい。
+    // - 追加コストは boid あたりベクトル演算のみ（近傍探索なし）。
+    // -----------------------------------------------
+    const float boundaryRadius = gSimulationTuning.softBoundaryRadius;
+    const float boundaryStart = gSimulationTuning.softBoundaryStart;
+    const float boundarySteer = gSimulationTuning.softBoundarySteer;
+    if (boundaryRadius > 0.0f && boundarySteer > 0.0f && boundaryRadius > boundaryStart) {
+      const BoidUnit *root = BoidSimulation::instance().root;
+      // root がない異常系では原点へ寄せる。
+      const glm::vec3 center = root ? root->center : glm::vec3(0.0f);
+      const glm::vec3 toCenter = center - position;
+      const float d2 = glm::length2(toCenter);
+      const float start2 = boundaryStart * boundaryStart;
+      if (d2 > start2) {
+        // sqrt は必要なときだけ。
+        const float invD = 1.0f / glm::sqrt(d2);
+        const float dist = d2 * invD;
+        const glm::vec3 dir = toCenter * invD;
+
+        // 距離に応じて 0→1 へ滑らかに増える係数。
+        const float t = glm::clamp((dist - boundaryStart) / (boundaryRadius - boundaryStart), 0.0f, 1.0f);
+        const float ramp = t * t * (3.0f - 2.0f * t); // smoothstep
+
+        // 外側ほど中心向き速度へ寄せる（境界で溜まりにくい）。
+        const float desiredSpeed = glm::max(maxSpeed, 0.0f);
+        const glm::vec3 desiredVel = dir * desiredSpeed;
+        acceleration += (desiredVel - velocity) * (boundarySteer * ramp);
+      }
+    }
+
+    // -----------------------------------------------
     // 全体ガガガ対策:
     // 捕食者逃避 + 密集反発などが重なると、加速度が極端になって方向計算が暴れることがある。
     // 「1ステップで速度変化が maxSpeed*2 を超えない」範囲に加速度をクリップする。
