@@ -73,10 +73,10 @@ export class FogPipeline {
     ssaoPass.maxDistance = 0.3;    // 影響を与える最大距離
     this.composer.addPass(ssaoPass);
 
-    // ハイライトを強調するブルーム
-    const bloomStrength = 4.5;   // ブルームの強さ
-    const bloomRadius = 0.1;     // 発光の広がり
-    const bloomThreshold = 0.83; // ブルームを適用する輝度
+    // ハイライトを穏やかに演出するブルーム（ぎらつきを抑えてスペキュラ光を柔らかく拡散）
+    const bloomStrength = 0.5;   // ブルームの強さ（強すぎると白飛び）
+    const bloomRadius = 0.2;     // 発光の広がり（小さめで点光源感を維持）
+    const bloomThreshold = 0.85; // ブルームを適用する輝度（高めに設定して極端なハイライトのみ）
     const bloomPass = new UnrealBloomPass(new THREE.Vector2(scaledWidth, scaledHeight), bloomStrength, bloomRadius, bloomThreshold);
     this.composer.addPass(bloomPass);
 
@@ -219,7 +219,6 @@ export function createHeightFogShader(config = {}) {
       tDepth: { value: null },
       tDistanceCurveLut: { value: distanceCurveLut },
       // renderer の露出（toneMappingExposure）をフォグにも反映する。
-      // NOTE: フォグが固定色だと露出や明るさ調整に追従しないため、見た目の一貫性が崩れやすい。
       uExposure: { value: 1.0 },
       cameraNear: { value: 0.1 },
       cameraFar: { value: 1000 },
@@ -229,7 +228,6 @@ export function createHeightFogShader(config = {}) {
       distanceStart: { value: finalConfig.distanceStart },                   // 距離フォグ開始位置
       distanceEnd: { value: finalConfig.distanceEnd },                       // 距離フォグ最大濃度距離
       distanceExponent: { value: finalConfig.distanceExponent },             // 距離カーブの鋭さ
-      // NOTE: 制御点はJS側LUT生成にのみ使う。シェーダには渡さない（ピクセルコスト削減）。
       surfaceLevel: { value: finalConfig.surfaceLevel },                     // 水面高さ（y）
       heightFalloff: { value: finalConfig.heightFalloff },                   // 深度減衰率
       heightExponent: { value: finalConfig.heightExponent },                 // 深度カーブの鋭さ

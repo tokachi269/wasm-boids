@@ -437,6 +437,7 @@ let fogPipeline = null; // 深度フォグパイプライン
 let particleField = null; // 背景パーティクルフィールド
 let dirLight = null; // ディレクショナルライトの参照
 let groundMesh = null; // 地面メッシュの参照
+let underwaterEnvMap = null; // 海中スペキュラ用 PMREM 環境マップ
 
 /*
   起動直後（ユーザーがカメラ操作する前）は、群れ全体が画面中央に来るように
@@ -625,6 +626,56 @@ let boidAssetsReady = false;
 let resizeHooked = false;
 // WebGL2 が不安定な端末では、いったん WebGL1 に固定して再生成ループを避ける。
 let forceWebgl1 = false;
+
+// WebGL 復旧で renderer/camera を作り直すと、視点が初期値へ戻りやすい。
+// 直前の視点をスナップショットして復元し、UXを維持する。
+let cameraSnapshotForRecovery = null;
+
+function snapshotCameraStateForRecovery() {
+  if (!camera || !controls) {
+    return;
+  }
+  cameraSnapshotForRecovery = {
+    position: { x: camera.position.x, y: camera.position.y, z: camera.position.z },
+    target: { x: controls.target.x, y: controls.target.y, z: controls.target.z },
+  };
+}
+
+function restoreCameraStateAfterRecovery() {
+  if (!camera || !controls || !cameraSnapshotForRecovery) {
+    return;
+  }
+
+  camera.position.set(
+    cameraSnapshotForRecovery.position.x,
+    cameraSnapshotForRecovery.position.y,
+    cameraSnapshotForRecovery.position.z
+  );
+  controls.target.set(
+    cameraSnapshotForRecovery.target.x,
+    cameraSnapshotForRecovery.target.y,
+    cameraSnapshotForRecovery.target.z
+  );
+  controls.update();
+
+  // 復旧後は自動注視を無効化（ユーザーが見ていた視点を優先）。
+  startupCameraLookAt.active = false;
+  startupCameraLookAt.userInteracted = true;
+}
+
+function shouldAttemptWebglRecovery() {
+  if (webglContextLost) {
+    return true;
+  }
+  if (!renderer || !scene || !camera) {
+    return true;
+  }
+  const ctx = glContext || renderer?.getContext?.();
+  if (ctx && typeof ctx.isContextLost === "function" && ctx.isContextLost()) {
+    return true;
+  }
+  return false;
+}
 
 let animationTimer = null;
 // requestAnimationFrame で vsync に同期して更新する。
@@ -818,6 +869,11 @@ function disposeRendererAndPipeline() {
     fogPipeline = null;
   }
 
+  if (underwaterEnvMap) {
+    underwaterEnvMap.dispose();
+    underwaterEnvMap = null;
+  }
+
   if (renderer) {
     rendererCanvas = renderer.domElement;
     renderer.dispose?.();
@@ -854,6 +910,9 @@ function onWebglContextLost(event) {
   webglContextLost = true;
   console.warn('WebGL context lost. Scheduling recovery...');
 
+  // 復旧後に視点を戻す。
+  snapshotCameraStateForRecovery();
+
   // ループを止めて、再生成後に再開する。
   if (animationTimer && typeof cancelAnimationFrame === 'function') {
     cancelAnimationFrame(animationTimer);
@@ -875,11 +934,17 @@ function onWebglContextLost(event) {
 function onWebglContextRestored() {
   webglContextLost = false;
   console.warn('WebGL context restored. Reinitializing renderer...');
+  snapshotCameraStateForRecovery();
   scheduleWebglRecovery('contextrestored');
 }
 
 function scheduleWebglRecovery(reason) {
   if (webglRecoveryTimer) {
+    return;
+  }
+
+  // focus/visibility などから呼ばれても、正常時は再初期化しない。
+  if (!shouldAttemptWebglRecovery()) {
     return;
   }
 
@@ -890,11 +955,21 @@ function scheduleWebglRecovery(reason) {
   webglRecoveryTimer = setTimeout(() => {
     webglRecoveryTimer = null;
     try {
+      // 待っている間に復旧できていれば何もしない。
+      if (!shouldAttemptWebglRecovery()) {
+        webglRecoveryAttempt = 0;
+        clearWebglRecoveryTimer();
+        return;
+      }
+
       const ok = initThreeJS();
       if (!ok) {
         scheduleWebglRecovery('retry:' + reason);
         return;
       }
+
+      // レンダラ作り直しでリセットされたカメラを復元。
+      restoreCameraStateAfterRecovery();
 
       // stats-gl は renderer を差し替えると参照が古くなるため、可能なら再パッチする。
       if (stats && typeof stats.patchThreeRenderer === 'function') {
@@ -926,6 +1001,9 @@ function initThreeJS() {
   const width = window.innerWidth;
   const height = window.innerHeight;
 
+  // renderer/camera を作り直す前に、直前の視点を保持する。
+  snapshotCameraStateForRecovery();
+
   // 既存のレンダラを捨てて作り直す（context lost 復旧用）。
   detachRendererCanvas();
   disposeRendererAndPipeline();
@@ -936,7 +1014,7 @@ function initThreeJS() {
   controls = null;
 
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(OCEAN_COLORS.DEEP_BLUE);
+  scene.background = new THREE.Color('#062040'); // フォグ色・背景球底色と揃えて遠景を統一
   createOceanSphere();
 
   camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
@@ -971,9 +1049,13 @@ function initThreeJS() {
   });
   // テクスチャは sRGB 前提で運用しているため、出力色空間も明示して「くすみ」を避ける。
   renderer.outputColorSpace = THREE.SRGBColorSpace;
-  // トーンマッピングを有効化し水中ライティングのダイナミクスを保つ。
-  renderer.toneMapping = THREE.CineonToneMapping;
-  renderer.toneMappingExposure = 1.5;
+  // ACESFilmic は映画的なコントラストと彩度を維持しつつダイナミクスを再現する。
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.0;
+  // 海中環境マップを生成し、シーンのスペキュラ反射（metalness）に使用する。
+  // PMREMGenerator で水面〜深海グラデーションをフィルタリング済みキューブマップに変換。
+  underwaterEnvMap = createUnderWaterEnvMap(renderer);
+  scene.environment = underwaterEnvMap;
   applyRendererPixelRatio();
   renderer.setSize(width, height);
   renderer.shadowMap.enabled = debugControls.enableShadows;
@@ -1001,12 +1083,11 @@ function initThreeJS() {
   startupCameraLookAt.active = true;
   startupCameraLookAt.userInteracted = false;
   startupCameraLookAt.startedAtMs = performance.now();
-  if (!startupCameraLookAt.controlsHooked) {
-    startupCameraLookAt.controlsHooked = true;
-    controls.addEventListener("start", () => {
-      startupCameraLookAt.userInteracted = true;
-    });
-  }
+  // controls は context 復旧で作り直されるため、毎回フックし直す。
+  startupCameraLookAt.controlsHooked = true;
+  controls.addEventListener("start", () => {
+    startupCameraLookAt.userInteracted = true;
+  });
 
   // 地面メッシュ追加
   const groundGeo = new THREE.PlaneGeometry(300, 300);
@@ -1014,19 +1095,19 @@ function initThreeJS() {
   groundMat.depthTest = true;
   groundMesh = new THREE.Mesh(groundGeo, groundMat);
   groundMesh.rotation.x = -Math.PI / 2;
-  groundMesh.position.y = -10;
+  groundMesh.position.y = -9;
   groundMesh.receiveShadow = true; // 影を受ける
   scene.add(groundMesh);
 
   // ライト
   const ambientLight = new THREE.AmbientLight(
     toHex(OCEAN_COLORS.AMBIENT_LIGHT),
-    0.8
+    1.2
   );
   scene.add(ambientLight);
 
-  // 太陽光（やや暖色のDirectionalLight）
-  dirLight = new THREE.DirectionalLight(toHex(OCEAN_COLORS.SUN_LIGHT), 12); // 暖色＆強め
+  // 水面を透過した青白いカスティック光（水中の荘厳な輝きを演出）
+  dirLight = new THREE.DirectionalLight(toHex(OCEAN_COLORS.SUN_LIGHT), 9); // 水中カスティック光（穏やか）
   dirLight.position.set(300, 500, 200); // 高い位置から照らす
   dirLight.castShadow = true;
 
@@ -1214,15 +1295,15 @@ let instancedMeshLow = null;
 
 // 海中シーンの色味をまとめて管理する定数群
 const OCEAN_COLORS = {
-  SKY_HIGHLIGHT: "#4fbaff",
-  SKY_BLUE: "#15a1ff",
-  DEEP_BLUE: "#05337a",
-  SEAFLOOR: "#777465",
-  AMBIENT_LIGHT: "#59a5eb",
-  SUN_LIGHT: "#5389b7",
-  SIDE_LIGHT1: "#6ba3d0",
-  SIDE_LIGHT2: "#2d5f7a",
-  BOTTOM_LIGHT: "#0f2635",
+  SKY_HIGHLIGHT: "#6ac8e0",   // 水面側（少しくぐもった青白）
+  SKY_BLUE: "#0574a8",        // 中層の濃い海の青
+  DEEP_BLUE: "#031c4d",       // 深い濃紺
+  SEAFLOOR: "#3d5a4a",        // 海底：海藻や泥を帯びた緑灰色
+  AMBIENT_LIGHT: "#1a5e8c",   // 深みのある環境光
+  SUN_LIGHT: "#b8dff4",       // 水中を透過した青白いカスティック光
+  SIDE_LIGHT1: "#2a7ba8",     // 水中サイドライト
+  SIDE_LIGHT2: "#0c3a52",     // 深部サイドライト
+  BOTTOM_LIGHT: "#040e1a",    // 最深部の光
 };
 
 // '#rrggbb' 形式の色を three.js の整数表現に変換
@@ -1230,18 +1311,71 @@ const toHex = (colorStr) => parseInt(colorStr.replace("#", "0x"), 16);
 
 // 距離と深度で濃さが変わる海中フォグ設定
 const heightFogConfig = {
-  color: new THREE.Color(OCEAN_COLORS.DEEP_BLUE), // 遠景で溶け込む深海色
-  distanceStart: 2.0, // カメラからこの距離まではフォグゼロ
-  distanceEnd: 20.0, // この距離でフォグが最大になる
-  // 早めに濃くしつつ、中距離は輪郭が残り、遠距離でさらに濃くするカーブ。
-  distanceExponent: 0.4, // 距離カーブの滑らかさ（小さいほど早めに濃くなる）
-  distanceControlPoint1: new THREE.Vector2(0.15, 0.20), // 距離ベジェ曲線の制御点（開始側）
-  distanceControlPoint2: new THREE.Vector2(0.88, 0.90), // 距離ベジェ曲線の制御点（終端側）
-  surfaceLevel: 100.0, // 水面の高さ。ここから下がるほど暗くなる
-  heightFalloff: 0.015, // 深度による減衰率
-  heightExponent: 1, // 深度カーブの強さ
-  maxOpacity: 0.8, // 最大フォグ率
+  color: new THREE.Color('#062040'), // 深海青（背景球と同系色で螵け込ませる）
+  distanceStart: 1.5, // フォグ開始を少し手前に引き寄せ
+  distanceEnd: 14.0, // 近めの距離で濃くなりくぐもり感を出す
+  distanceExponent: 0.5, // 距離カーブを少し勾配に
+  distanceControlPoint1: new THREE.Vector2(0.1, 0.25), // 開始側：早めにフォグを踏む
+  distanceControlPoint2: new THREE.Vector2(0.85, 0.92), // 終端側
+  surfaceLevel: 100.0, // 水面の高さ
+  heightFalloff: 0.06, // 深度方向の減衰率：強めて海底をフォグに内包する
+  heightExponent: 1.2, // 深度カーブを少し勾配に
+  maxOpacity: 0.95, // 最大フォグ率
 };
+
+/**
+ * 海中環境マップを生成する。
+ * 水面（上）→海の青（中）→深海（下）のグラデーションを equirectangular テクスチャとして作成し
+ * PMREMGenerator でフィルタリングすることで MeshStandardMaterial の envMap に使用できる形式にする。
+ * metalness/roughness が正しく機能するためには scene.environment の設定が必須。
+ */
+function createUnderWaterEnvMap(rendererRef) {
+  const width = 64;
+  const height = 32;
+  const data = new Uint8Array(width * height * 4);
+
+  // 上: 明るいカスティック青白  →  中: 海の青  →  下: 深海の濃紺
+  const topR = 0x6c, topG = 0xcc, topB = 0xff;
+  const midR = 0x05, midG = 0x50, midB = 0x9a;
+  const botR = 0x02, botG = 0x0c, botB = 0x22;
+
+  for (let y = 0; y < height; y++) {
+    // equirectangular では y=0 が上方向（天頂/水面）
+    const t = y / (height - 1);
+    let r, g, b;
+    if (t < 0.5) {
+      const s = t * 2.0;
+      r = Math.round(topR + (midR - topR) * s);
+      g = Math.round(topG + (midG - topG) * s);
+      b = Math.round(topB + (midB - topB) * s);
+    } else {
+      const s = (t - 0.5) * 2.0;
+      r = Math.round(midR + (botR - midR) * s);
+      g = Math.round(midG + (botG - midG) * s);
+      b = Math.round(midB + (botB - midB) * s);
+    }
+    for (let x = 0; x < width; x++) {
+      const base = (y * width + x) * 4;
+      data[base + 0] = r;
+      data[base + 1] = g;
+      data[base + 2] = b;
+      data[base + 3] = 255;
+    }
+  }
+
+  const envTexture = new THREE.DataTexture(data, width, height, THREE.RGBAFormat);
+  envTexture.colorSpace = THREE.SRGBColorSpace;
+  envTexture.mapping = THREE.EquirectangularReflectionMapping;
+  envTexture.needsUpdate = true;
+
+  const pmremGenerator = new THREE.PMREMGenerator(rendererRef);
+  pmremGenerator.compileEquirectangularShader();
+  const envRT = pmremGenerator.fromEquirectangular(envTexture);
+  pmremGenerator.dispose();
+  envTexture.dispose();
+
+  return envRT.texture;
+}
 
 function createOceanSphere() {
   if (!scene) return null;
@@ -1254,9 +1388,9 @@ function createOceanSphere() {
 
   const gradient = context.createLinearGradient(0, 0, 0, canvas.height);
   gradient.addColorStop(0, OCEAN_COLORS.SKY_HIGHLIGHT);
-  gradient.addColorStop(0.2, OCEAN_COLORS.SKY_BLUE);
-  gradient.addColorStop(0.6, OCEAN_COLORS.DEEP_BLUE);
-  gradient.addColorStop(1, OCEAN_COLORS.DEEP_BLUE);
+  gradient.addColorStop(0.15, OCEAN_COLORS.SKY_BLUE);
+  gradient.addColorStop(0.5, OCEAN_COLORS.DEEP_BLUE);
+  gradient.addColorStop(1, "#051535"); // 最深部は深海青（黒にならない程度）
 
   context.fillStyle = gradient;
   context.fillRect(0, 0, canvas.width, canvas.height);
@@ -1290,12 +1424,14 @@ function createFadeOutGroundMaterial() {
 
   const material = new THREE.MeshStandardMaterial({
     color: toHex(OCEAN_COLORS.SEAFLOOR),
+    emissive: new THREE.Color('#1a2e22'), // フォグ内でも潰れないよう微弱な自発光
+    emissiveIntensity: 0.4,
     transparent: true,
     alphaMap,
     depthWrite: true,
   });
 
-  material.roughness = 0.85;
+  material.roughness = 0.92;
   material.metalness = 0.0;
   return material;
 }
@@ -1588,24 +1724,26 @@ function loadBoidModel(callback) {
   predatorTexture.colorSpace = THREE.SRGBColorSpace;
 
   let boidMaterial = new THREE.MeshStandardMaterial({
-    color: 0xffffff, // 白色
-    roughness: 0.3,
-    metalness: 0.3,
-    transparent: false, // 半透明を有効化
-    alphaTest: 0.5, // アルファテストを設定
-    map: texture, // テクスチャを設定
-    vertexColors: false, // 通常時は無効
+    color: 0xa8c4d8, // 海中の青銀色（イワシ・アジ系小型魚の色）
+    roughness: 0.25,      // 適度な光沢（ぎらつかない範囲）
+    metalness: 0.35,      // 魚体の濡れた質感
+    envMapIntensity: 1.0, // 環境マップ反射（控えめ）
+    transparent: false,
+    alphaTest: 0.5,
+    map: texture,
+    vertexColors: false,
     vertexColor: 0xffffff,
   });
 
   let boidLodMaterial = new THREE.MeshStandardMaterial({
-    color: 0xffffff, // 白色
-    roughness: 0.5,
-    metalness: 0.2,
-    transparent: false, // 半透明を有効化
-    alphaTest: 0.5, // アルファテストを設定
-    map: textureLod, // テクスチャを設定
-    vertexColors: false, // 通常時は無効
+    color: 0xa8c4d8, // 海中の青銀色
+    roughness: 0.40,      // LOD は少し落ち着いた質感
+    metalness: 0.25,      // 遠方は控えめな光沢
+    envMapIntensity: 0.7, // 環境マップ反射（LOD は控えめ）
+    transparent: false,
+    alphaTest: 0.5,
+    map: textureLod,
+    vertexColors: false,
     vertexColor: 0xffffff,
   });
 
@@ -1613,8 +1751,9 @@ function loadBoidModel(callback) {
   originalMaterialLod = boidLodMaterial;
   predatorMaterial = new THREE.MeshStandardMaterial({
     color: 0xffffff,
-    roughness: 0.5,
-    metalness: 0,
+    roughness: 0.4,       // 捕食者も落ち着いた光沢
+    metalness: 0.3,       // 大型魚の質感
+    envMapIntensity: 0.8, // 環境マップ反射
     transparent: false,
     alphaTest: 0.5,
     map: predatorTexture,
@@ -2389,11 +2528,15 @@ onMounted(() => {
   // タブ復帰時に context が失われていたら復旧を試みる。
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
-      scheduleWebglRecovery('visibility');
+      if (shouldAttemptWebglRecovery()) {
+        scheduleWebglRecovery('visibility');
+      }
     }
   });
   window.addEventListener('focus', () => {
-    scheduleWebglRecovery('focus');
+    if (shouldAttemptWebglRecovery()) {
+      scheduleWebglRecovery('focus');
+    }
   });
 });
 

@@ -88,8 +88,8 @@ export class ParticleField {
         uSizePx: { value: this.isMobileDevice ? 5.0 : 12.0 }, // スクリーン上の粒子サイズ（px）
         uFadeNear: { value: 1.5 }, // 手前でフェードアウトを開始する距離
         uFadeFar: { value: 14.0 }, // フェードアウトが完了する距離
-        uColorNear: { value: new THREE.Color(0x72a1c4) }, // カメラ近傍の粒子色
-        uColorFar: { value: new THREE.Color(0x0a5270) }, // 遠方の粒子色
+        uColorNear: { value: new THREE.Color(0x5bc8e8) }, // カメラ近傍の粒子色（明るい水中の輝き）
+        uColorFar: { value: new THREE.Color(0x0b3d65) }, // 遠方の粒子色（深い海の青）
       },
       vertexShader: PARTICLE_VERTEX_SHADER,
       fragmentShader: PARTICLE_FRAGMENT_SHADER,

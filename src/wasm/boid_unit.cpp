@@ -476,7 +476,10 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
     // 単純な連続カーブで作る（高stressほど効き、低stressは効きにくい）。
     const float stress01 = glm::clamp(currentStress, 0.0f, 1.0f);
     const float stressCurve = stress01 * stress01;
-    stressFactor = 1.0f + 0.40f * stress01 + 1.80f * stressCurve;
+    // 過度なスピードブーストは「瞬間的に速すぎる」違和感につながるため、
+    // 緩やかなカーブ + 上限で抑える。
+    stressFactor = 1.0f + 0.35f * stress01 + 0.65f * stressCurve;
+    stressFactor = glm::min(stressFactor, 1.85f);
 
     float maxSpeed = globalSpeciesParams[sid].maxSpeed * stressFactor;
     if (predatorOnBreak) {
@@ -492,7 +495,13 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
     const float boundaryRadius = gSimulationTuning.softBoundaryRadius;
     const float boundaryStart = gSimulationTuning.softBoundaryStart;
     const float boundarySteer = gSimulationTuning.softBoundarySteer;
-    if (boundaryRadius > 0.0f && boundarySteer > 0.0f && boundaryRadius > boundaryStart) {
+    // 脅威中は「中心へ戻す」より回避を優先する（中心へ向かう見え方を防ぐ）。
+    const float boundaryThreat =
+      glm::clamp(unit->buf->predatorThreats[gIdx], 0.0f, 1.0f);
+    const float boundaryThreatAttenuation =
+      1.0f - glm::smoothstep(0.05f, 0.30f, boundaryThreat);
+    if (!isPredator && boundaryThreatAttenuation > 1e-4f &&
+      boundaryRadius > 0.0f && boundarySteer > 0.0f && boundaryRadius > boundaryStart) {
       const BoidUnit *root = BoidSimulation::instance().root;
       // root がない異常系では原点へ寄せる。
       const glm::vec3 center = root ? root->center : glm::vec3(0.0f);
@@ -512,7 +521,8 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
         // 外側ほど中心向き速度へ寄せる（境界で溜まりにくい）。
         const float desiredSpeed = glm::max(maxSpeed, 0.0f);
         const glm::vec3 desiredVel = dir * desiredSpeed;
-        acceleration += (desiredVel - velocity) * (boundarySteer * ramp);
+        acceleration += (desiredVel - velocity) *
+                        (boundarySteer * ramp * boundaryThreatAttenuation);
       }
     }
 
@@ -723,7 +733,6 @@ void BoidUnit::computeBoundingSphere() {
     center /= static_cast<float>(childrenSize);
 
     // 子ノード中心までの平均距離 + 子ノード半径 - パフォーマンス最適化
-    // NOTE: mean を維持するため sqrt は必要。
     float sum = 0.0f, sum2 = 0.0f;
     for (size_t i = 0; i < childrenSize; ++i) {
       const BoidUnit *child = childrenData[i];
@@ -953,13 +962,14 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
         const float underThreatThreshold = glm::mix(0.08f, 0.22f, groupSafety);
         const bool isUnderPredatorThreat = predatorThreat > underThreatThreshold;
 
-        // 逃走後の再結集フェーズ（脅威が落ちた & 中程度ストレス時）
-        if (!isUnderPredatorThreat && currentStress > 0.2f && currentStress < 0.9f) {
-          cohesionMultiplier = 5.0f; // 再結集を強める
-          speedMultiplier = 1.5f;    // 戻りをキビキビさせる
+        const bool threatCleared = predatorThreat < (underThreatThreshold * 0.5f);
+        // 逃走後の再結集フェーズ（脅威が十分下がり、ストレスも落ち着いたら）
+        if (threatCleared && currentStress < 0.35f) {
+          cohesionMultiplier = 4.0f;
+          speedMultiplier = 1.2f;
         }
         // 高ストレス時 or 脅威継続中は逃走優先（凝集力抑制）
-        else if (currentStress >= 0.9f || isUnderPredatorThreat) {
+        else if (currentStress >= 0.7f || isUnderPredatorThreat) {
           cohesionMultiplier = 0.2f; // 凝集を強く抑えて散開しやすくする
         }
 
@@ -2071,6 +2081,10 @@ void BoidUnit::computeBoidInteraction(float dt) {
             }
             float centerWeight =
                 scatterFactor * glm::mix(0.08f, 0.35f, normalizedDist);
+            // 脅威中は「中心へ戻す」よりも回避/散開を優先する。
+            // これが残ると、逃避しつつ局所中心へ吸われる見え方になりやすい。
+            const float threatScatter = glm::smoothstep(0.10f, 0.50f, selfThreat);
+            centerWeight *= (1.0f - 0.85f * threatScatter);
             sumCohDir += toLeafCenter * centerWeight;
             wCohSum += centerWeight;
           }
@@ -2145,8 +2159,10 @@ void BoidUnit::computeBoidInteraction(float dt) {
         constexpr float kAttractionMinScale = 0.35f;
         float autonomousAttractionScale =
           glm::mix(1.0f, kAttractionMinScale, crowded);
+        // 脅威中は密集抑制を完全には解除しない（中心吸い込みを避ける）。
+        constexpr float kThreatAttractionRelief = 0.35f;
         autonomousAttractionScale =
-          glm::mix(autonomousAttractionScale, 1.0f, threatLevel);
+          glm::mix(autonomousAttractionScale, 1.0f, threatLevel * kThreatAttractionRelief);
 
       // 凝集の最終ベクトル（重みの総和で正規化、原点依存なし）
       glm::vec3 totalCohesion = glm::vec3(0.0f);
@@ -2216,7 +2232,10 @@ void BoidUnit::computeBoidInteraction(float dt) {
                                               gSimulationTuning
                                                   .schoolPullCoefficient,
                                           0.0f, 0.9f);
-            longTermCohesion += globalDir * clusterPull;
+            // 脅威中は「群れ中心へ戻す」より「回避/散開」を優先する。
+            const float threatScatter = glm::smoothstep(0.10f, 0.55f, threatLevel);
+            const float clusterThreatScale = 1.0f - threatScatter;
+            longTermCohesion += globalDir * (clusterPull * clusterThreatScale);
           }
         }
       }
