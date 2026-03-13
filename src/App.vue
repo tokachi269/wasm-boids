@@ -269,9 +269,36 @@ const useLowSpecPreset =
 // GPU/ポストプロセスがボトルネックになりやすい。
 // 60fpsを優先し、環境に応じて pixelRatio の上限を設ける。
 const MAX_RENDER_PIXEL_RATIO = useLowSpecPreset ? 1.0 : 1.5;
+const MOBILE_RENDER_PIXEL_RATIO = 0.85;
 // 画面ガワのデフォルト（画像の値）
 // NOTE: 個体数は重い環境でも動かしやすい値を優先する。
 const defaultBoidCount = useLowSpecPreset ? 5000 : 10000;
+
+function isConservativeRendererMode() {
+  return deviceProfile.isMobile || webglContextLost || webglRecoveryAttempt > 0;
+}
+
+function shouldUseAntialias() {
+  return !isConservativeRendererMode();
+}
+
+function shouldUseUnderwaterEnvMap() {
+  return !deviceProfile.isMobile && webglRecoveryAttempt === 0;
+}
+
+function getEffectivePixelRatioCap() {
+  if (deviceProfile.isMobile) {
+    return MOBILE_RENDER_PIXEL_RATIO;
+  }
+  if (webglContextLost || webglRecoveryAttempt > 0) {
+    return Math.min(MAX_RENDER_PIXEL_RATIO, 1.0);
+  }
+  return MAX_RENDER_PIXEL_RATIO;
+}
+
+function shouldEnableStatsOverlay() {
+  return !deviceProfile.isMobile;
+}
 
 const DEFAULT_SETTINGS = [
   {
@@ -291,13 +318,13 @@ const DEFAULT_SETTINGS = [
     torqueStrength: 1.0, // 回転トルク強度
     lambda: 0.102, // 速度調整係数（減衰係数）
     tau: 0.5, // 記憶時間
-    predatorAlertRadius: 2.4, // 捕食者を早めに察知して空隙を作る距離
+    predatorAlertRadius: 1.0, // 捕食者を早めに察知して空隙を作る距離
     densityReturnStrength: 0.0, // 密度復帰強度
     isPredator: false,
   },
   {
     species: "Predator",
-    count: 3,
+    count: 2,
     cohesion: 0.0, // 捕食者は群集力学を使わない
     cohesionRange: 5.0,
     separation: 0.0,
@@ -306,8 +333,8 @@ const DEFAULT_SETTINGS = [
     alignmentRange: 1.0,
     predatorAlertRadius: 0.0,
     densityReturnStrength: 0.0,
-    maxSpeed: 2.0,
-    minSpeed: 1.5,
+    maxSpeed: 1.5,
+    minSpeed: 1.2,
     maxTurnAngle: 0.4,
     maxNeighbors: 0,
     lambda: 0.05,
@@ -319,9 +346,9 @@ const DEFAULT_SETTINGS = [
 ];
 
 const DEFAULT_TUNING_SETTINGS = {
-  threatDecay: 0.7, // 脅威減衰速度（1/sec）。少し長めに残して空隙を維持
-  maxEscapeWeight: 0.95, // 逃避方向の最大割合（0〜1）
-  baseEscapeStrength: 8.5, // 逃避舵取り強度（目標速度へ寄せる強さ）
+  threatDecay: 1.0, // 脅威減衰速度（1/sec）
+  maxEscapeWeight: 0.9, // 逃避方向の最大割合（0〜1）
+  baseEscapeStrength: 12.0, // 逃避舵取り強度（目標速度へ寄せる強さ）
   fastAttractStrength: 2.0, // 近傍不足時の補助凝集強度（0で無効）
   schoolPullCoefficient: 0.00005, // 大クラスタ引力係数
 };
@@ -561,7 +588,7 @@ const schoolClusterColor = new THREE.Color();
 // GPU 負荷計測用に主要機能を切り替えるデバッグトグル群
 const debugControls = reactive({
   enableFogPipeline: !deviceProfile.isMobile,
-  enableShadows: true,
+  enableShadows: !deviceProfile.isMobile,
   enableTailAnimation: true,
 });
 
@@ -687,7 +714,7 @@ function applyRendererPixelRatio() {
     return;
   }
   const dpr = window.devicePixelRatio || 1;
-  renderer.setPixelRatio(Math.min(dpr, MAX_RENDER_PIXEL_RATIO));
+  renderer.setPixelRatio(Math.min(dpr, getEffectivePixelRatioCap()));
 }
 
 function positionStatsOverlay(element) {
@@ -885,11 +912,11 @@ function disposeRendererAndPipeline() {
 function createWebglContext(canvas, preferWebgl2) {
   const attrs = {
     alpha: false,
-    antialias: true,
+    antialias: shouldUseAntialias(),
     depth: true,
     stencil: false,
     preserveDrawingBuffer: false,
-    powerPreference: 'high-performance',
+    powerPreference: deviceProfile.isMobile ? 'default' : 'high-performance',
     failIfMajorPerformanceCaveat: false,
   };
 
@@ -951,6 +978,11 @@ function scheduleWebglRecovery(reason) {
   // 連続で失敗するとブラウザがブロックするため、指数バックオフで再試行する。
   const delayMs = Math.min(8000, 500 * Math.pow(2, webglRecoveryAttempt));
   webglRecoveryAttempt = Math.min(webglRecoveryAttempt + 1, 6);
+
+  if (deviceProfile.isMobile) {
+    debugControls.enableShadows = false;
+    debugControls.enableFogPipeline = false;
+  }
 
   webglRecoveryTimer = setTimeout(() => {
     webglRecoveryTimer = null;
@@ -1044,7 +1076,7 @@ function initThreeJS() {
   renderer = new THREE.WebGLRenderer({
     canvas,
     context,
-    antialias: true,
+    antialias: shouldUseAntialias(),
     depth: true,
   });
   // テクスチャは sRGB 前提で運用しているため、出力色空間も明示して「くすみ」を避ける。
@@ -1054,8 +1086,13 @@ function initThreeJS() {
   renderer.toneMappingExposure = 1.0;
   // 海中環境マップを生成し、シーンのスペキュラ反射（metalness）に使用する。
   // PMREMGenerator で水面〜深海グラデーションをフィルタリング済みキューブマップに変換。
-  underwaterEnvMap = createUnderWaterEnvMap(renderer);
-  scene.environment = underwaterEnvMap;
+  if (shouldUseUnderwaterEnvMap()) {
+    underwaterEnvMap = createUnderWaterEnvMap(renderer);
+    scene.environment = underwaterEnvMap;
+  } else {
+    underwaterEnvMap = null;
+    scene.environment = null;
+  }
   applyRendererPixelRatio();
   renderer.setSize(width, height);
   renderer.shadowMap.enabled = debugControls.enableShadows;
@@ -2460,19 +2497,21 @@ onMounted(() => {
 
     boidAssetsReady = true;
 
-    stats = new StatsGl({
-      trackGPU: true,
-      trackHz: true,
-      trackCPT: true,
-      logsPerSecond: 4,
-      graphsPerSecond: 30,
-      samplesLog: 40,
-      samplesGraph: 10,
-      precision: 2,
-      horizontal: true,
-      minimal: false,
-      mode: 0,
-    });
+    stats = shouldEnableStatsOverlay()
+      ? new StatsGl({
+        trackGPU: true,
+        trackHz: true,
+        trackCPT: true,
+        logsPerSecond: 4,
+        graphsPerSecond: 30,
+        samplesLog: 40,
+        samplesGraph: 10,
+        precision: 2,
+        horizontal: true,
+        minimal: false,
+        mode: 0,
+      })
+      : null;
 
     const statsInitTarget = renderer?.domElement ?? document.body;
 

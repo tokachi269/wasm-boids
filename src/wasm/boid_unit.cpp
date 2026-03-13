@@ -69,6 +69,34 @@ inline float fastHash01(uint32_t x) {
   return float(x & 0x00ffffffu) * (1.0f / 16777215.0f);
 }
 
+inline int selectDeterministicIndex(uint32_t seed, int count) {
+  if (count <= 1) {
+    return 0;
+  }
+  const float scaled = fastHash01(seed) * static_cast<float>(count);
+  return std::min(count - 1, static_cast<int>(scaled));
+}
+
+inline int computeExternalNeighborStride(std::size_t boidCount) {
+  if (boidCount >= 50000) {
+    return 24;
+  }
+  if (boidCount >= 25000) {
+    return 16;
+  }
+  return 8;
+}
+
+inline int computeThreatPropagationStride(std::size_t boidCount) {
+  if (boidCount >= 50000) {
+    return 8;
+  }
+  if (boidCount >= 25000) {
+    return 4;
+  }
+  return 1;
+}
+
 inline bool tryNormalizeXZ(const glm::vec3 &v, glm::vec3 &out) {
   const float xzLen2 = v.x * v.x + v.z * v.z;
   if (!(xzLen2 > kSafeNormalizeEps2)) {
@@ -1208,12 +1236,6 @@ void BoidUnit::computeBoidInteraction(float dt) {
   glm::vec3 vel;
   int sid = -1;
   // 軽量なランダム数生成（WASMでmt19937が使えないため）
-  static uint32_t rng_state = 1;
-  auto simple_rand = [&]() -> uint32_t {
-    rng_state = rng_state * 1103515245 + 12345;
-    return (rng_state >> 16) & 0x7fff;
-  };
-  auto rand_range = [&](int max_val) -> int { return simple_rand() % max_val; };
 
   // 近傍記憶の期限(τ)を個体ごとに少しずらすための軽量ハッシュ。
   // 同じτで一斉に記憶が切れると、近傍集合が同時に入れ替わり
@@ -1467,7 +1489,10 @@ void BoidUnit::computeBoidInteraction(float dt) {
             const glm::vec3 approach = buf->predatorApproachDirs[gIdx];
             const float approachDistSq = glm::dot(approach, approach);
             if (approachDistSq <= kEngageRadius * kEngageRadius) {
-              const int pick = rand_range(
+              const int pick = selectDeterministicIndex(
+                  uint32_t(gIdx) * 747796405u ^
+                      uint32_t(globalFrame) * 2891336453u ^
+                      uint32_t(sid + 1) * 1181783497u,
                   static_cast<int>(predatorTargetCandidates.size()));
               tgtIdx = predatorTargetCandidates[pick];
               tgtTime = globalSpeciesParams[sid].tau;
@@ -1690,7 +1715,8 @@ void BoidUnit::computeBoidInteraction(float dt) {
     // ユニット外近傍の補完は、切れ目の対策として有効だがコストが高い。
     // 常時走らせず「かなり近傍が足りない」時だけ、かつフレーム間引きを強める。
     const bool wantsExternal = (neighborCount * 2 < maxNeighbors);
-    constexpr int kExternalNeighborStride = 8;
+    const int kExternalNeighborStride =
+        computeExternalNeighborStride(buf->positions.size());
     const bool externalThrottleHit =
         (((globalFrame + gIdx) % kExternalNeighborStride) == 0);
     const bool lostBoid = (neighborCount == 0);
@@ -1791,6 +1817,13 @@ void BoidUnit::computeBoidInteraction(float dt) {
       // - 値域は 0〜1 のまま（正規化スカラー）
       // - 伝搬は距離で減衰し、dt でブレンドしてフレームレートに依存しにくくする
       float selfThreat = glm::clamp(buf->predatorThreats[gIdx], 0.0f, 1.0f);
+      const float selfInfluence2 = glm::length2(buf->predatorInfluences[gIdx]);
+      const bool needsFullThreatUpdate =
+          (selfThreat > 0.02f) || (selfStress > 0.05f) || (selfInfluence2 > 1e-4f);
+      const bool sampleThreatPropagation =
+          needsFullThreatUpdate ||
+          (((globalFrame + gIdx) %
+            computeThreatPropagationStride(buf->positions.size())) == 0);
       float threatGainSum = 0.0f;
       float threatWeightSum = 0.0f;
       const float threatPropagationRadius = propagationRadius * 1.25f;
@@ -1898,7 +1931,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
         float dist = glm::sqrt(distSq);
 
         // predatorThreat の伝搬（stress より反応を少し速く、半径もやや広げる）
-        if (dist < threatPropagationRadius) {
+        if (sampleThreatPropagation && dist < threatPropagationRadius) {
           const float neighborThreat =
               glm::clamp(buf->predatorThreats[gNeighbor], 0.0f, 1.0f);
           // 直接の捕食者影響が無い低脅威まで無制限に伝搬すると「関係ない場所が逃げる」状態になりやすい。
@@ -2002,7 +2035,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
         float dist = glm::sqrt(distSq);
 
         // predatorThreat の伝搬（外部近傍も同様に加味する）
-        if (dist < threatPropagationRadius) {
+        if (sampleThreatPropagation && dist < threatPropagationRadius) {
           const float neighborThreat =
               glm::clamp(buf->predatorThreats[gNeighbor], 0.0f, 1.0f);
           const float neighborInfluence2 = glm::length2(buf->predatorInfluences[gNeighbor]);

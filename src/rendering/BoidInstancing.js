@@ -97,7 +97,10 @@ export class BoidInstancing {
     this.configureInstancedMesh(this.instancedMeshHigh, highMaterialClone);
 
     this.instancedMeshLow = new THREE.InstancedMesh(lowGeometry, lowMaterialClone, count);
-    this.configureInstancedMesh(this.instancedMeshLow, lowMaterialClone);
+    this.configureInstancedMesh(this.instancedMeshLow, lowMaterialClone, {
+      castShadow: false,
+      receiveShadow: false,
+    });
 
     scene.add(this.instancedMeshHigh);
     scene.add(this.instancedMeshLow);
@@ -162,8 +165,11 @@ update({
   const currentIndex = this.bufferCursor;
   const nextIndex = (currentIndex + 1) % this.tripleBufferSize;
 
-  this.ensureTailRuntimeBuffers(count);
-  this.ensureTailSeedCapacity(count);
+  const tailEnabled = (this.tailAnimation?.uniforms?.uTailEnable?.value ?? 0) > 0.5;
+  if (tailEnabled) {
+    this.ensureTailRuntimeBuffers(count);
+    this.ensureTailSeedCapacity(count);
+  }
   const lodFlags = this.ensureLodFlagBuffer(count);
 
   const highPosAttr = this.bufferSetHigh.pos[currentIndex];
@@ -228,8 +234,9 @@ update({
     }
   }
 
-  const prevVel = this.previousVelocities;
-  const tailSeeds = this.tailPhaseSeeds;
+  const prevVel = tailEnabled ? this.previousVelocities : null;
+  const tailSeeds = tailEnabled ? this.tailPhaseSeeds : null;
+  const largeFlockMode = count >= 30000;
 
   // LOD を詰めて書き込むための write index
   let highWrite = 0;
@@ -278,29 +285,34 @@ update({
     const distSq = dx * dx + dy * dy + dz * dz;
     const isNear = distSq < this.lodNearDistanceSq;
     const isMid = !isNear && distSq < this.lodMidDistanceSq;
-    const animateTail = isNear || isMid;
+    const animateTail = tailEnabled && (isNear || (!largeFlockMode && isMid));
 
     // 尾びれアニメ用の簡易パラメータ
     const vx = velocities ? velocities[basePos] : 0;
     const vy = velocities ? velocities[basePos + 1] : 0;
     const vz = velocities ? velocities[basePos + 2] : 0;
 
-    const speed = Math.hypot(vx, vy, vz);
-    const prevVx = prevVel ? prevVel[basePos] : 0;
-    const prevVy = prevVel ? prevVel[basePos + 1] : 0;
-    const prevVz = prevVel ? prevVel[basePos + 2] : 0;
-    const prevLen = Math.hypot(prevVx, prevVy, prevVz);
+    let tailSpeedValue = 0;
+    let tailTurnValue = 0;
 
-    let turnAmount = 0;
-    if (prevLen > 1e-5 && speed > 1e-5) {
+    if (animateTail) {
+      const speed = Math.hypot(vx, vy, vz);
+      if (speed > 1e-5) {
       // 前フレームからの向きの差異を Y 軸回転量として近似
-      const crossY = prevVz * vx - prevVx * vz;
-      const dot = prevVx * vx + prevVy * vy + prevVz * vz;
-      turnAmount = Math.atan2(crossY, dot);
+        tailSpeedValue = speed;
+        if (prevVel) {
+          const prevVx = prevVel[basePos];
+          const prevVy = prevVel[basePos + 1];
+          const prevVz = prevVel[basePos + 2];
+          const prevLenSq = prevVx * prevVx + prevVy * prevVy + prevVz * prevVz;
+          if (prevLenSq > 1e-10) {
+            const crossY = prevVz * vx - prevVx * vz;
+            const dot = prevVx * vx + prevVy * vy + prevVz * vz;
+            tailTurnValue = Math.atan2(crossY, dot);
+          }
+        }
+      }
     }
-
-    const tailSpeedValue = animateTail ? speed : 0;
-    const tailTurnValue = animateTail ? turnAmount : 0;
     const driveValue = animateTail ? 1 : 0;
 
     if (isNear) {
