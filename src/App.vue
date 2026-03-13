@@ -291,7 +291,7 @@ const DEFAULT_SETTINGS = [
     torqueStrength: 1.0, // 回転トルク強度
     lambda: 0.102, // 速度調整係数（減衰係数）
     tau: 0.5, // 記憶時間
-    predatorAlertRadius: 1.0, // 捕食者を察知する距離
+    predatorAlertRadius: 2.4, // 捕食者を早めに察知して空隙を作る距離
     densityReturnStrength: 0.0, // 密度復帰強度
     isPredator: false,
   },
@@ -319,11 +319,11 @@ const DEFAULT_SETTINGS = [
 ];
 
 const DEFAULT_TUNING_SETTINGS = {
-  threatDecay: 1.0, // 脅威減衰速度（1/sec）
-  maxEscapeWeight: 3.5, // 逃避方向の最大割合（0〜1）
-  baseEscapeStrength: 5.0, // 逃避舵取り強度（目標速度へ寄せる強さ）
+  threatDecay: 0.7, // 脅威減衰速度（1/sec）。少し長めに残して空隙を維持
+  maxEscapeWeight: 0.95, // 逃避方向の最大割合（0〜1）
+  baseEscapeStrength: 8.5, // 逃避舵取り強度（目標速度へ寄せる強さ）
   fastAttractStrength: 2.0, // 近傍不足時の補助凝集強度（0で無効）
-  schoolPullCoefficient: 0.00003, // 大クラスタ引力係数
+  schoolPullCoefficient: 0.00005, // 大クラスタ引力係数
 };
   
 // 調整スライダーの説明（ユーザ目線）。ホバー時に title として表示する。
@@ -1102,7 +1102,7 @@ function initThreeJS() {
   // ライト
   const ambientLight = new THREE.AmbientLight(
     toHex(OCEAN_COLORS.AMBIENT_LIGHT),
-    1.2
+    1.1
   );
   scene.add(ambientLight);
 
@@ -1299,7 +1299,7 @@ const OCEAN_COLORS = {
   SKY_BLUE: "#0574a8",        // 中層の濃い海の青
   DEEP_BLUE: "#031c4d",       // 深い濃紺
   SEAFLOOR: "#3d5a4a",        // 海底：海藻や泥を帯びた緑灰色
-  AMBIENT_LIGHT: "#1a5e8c",   // 深みのある環境光
+  AMBIENT_LIGHT: "#3a4e5e",   // 低彩度の青灰色（影に青みが出すぎない）
   SUN_LIGHT: "#b8dff4",       // 水中を透過した青白いカスティック光
   SIDE_LIGHT1: "#2a7ba8",     // 水中サイドライト
   SIDE_LIGHT2: "#0c3a52",     // 深部サイドライト
@@ -1334,10 +1334,10 @@ function createUnderWaterEnvMap(rendererRef) {
   const height = 32;
   const data = new Uint8Array(width * height * 4);
 
-  // 上: 明るいカスティック青白  →  中: 海の青  →  下: 深海の濃紺
+  // 上: 明るいカスティック青白  →  中: 淡い海青（低彩度）  →  下: 暗い中性グレー
   const topR = 0x6c, topG = 0xcc, topB = 0xff;
-  const midR = 0x05, midG = 0x50, midB = 0x9a;
-  const botR = 0x02, botG = 0x0c, botB = 0x22;
+  const midR = 0x28, midG = 0x4a, midB = 0x60; // 彩度を落とした青灰
+  const botR = 0x10, botG = 0x18, botB = 0x20; // ほぼ中性の暗灰色
 
   for (let y = 0; y < height; y++) {
     // equirectangular では y=0 が上方向（天頂/水面）
