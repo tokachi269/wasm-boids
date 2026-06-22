@@ -94,28 +94,58 @@ set(EMCC_LINK_FLAGS_RELEASE
 )
 
 
-# 共通ソース
-set(COMMON_SOURCES
+set(BOIDS_THIRDPARTY_INCLUDE_HINTS
+    "$ENV{VCPKG_ROOT}/installed/x64-windows/include"
+    "$ENV{VCPKG_INSTALLATION_ROOT}/installed/x64-windows/include"
+    "${CMAKE_SOURCE_DIR}/third_party/include"
+    "D:/GitHub/vcpkg/installed/x64-windows/include"
+)
+
+find_path(GLM_INCLUDE_DIR glm/glm.hpp HINTS ${BOIDS_THIRDPARTY_INCLUDE_HINTS} NO_CMAKE_FIND_ROOT_PATH REQUIRED)
+find_path(BOOST_ALIGN_INCLUDE_DIR boost/align/aligned_allocator.hpp HINTS ${BOIDS_THIRDPARTY_INCLUDE_HINTS} NO_CMAKE_FIND_ROOT_PATH REQUIRED)
+
+# 共通ソース（C++ライブラリ本体）
+set(BOIDS_CORE_SOURCES
     src/wasm/boid_factory.cpp
-    src/wasm/entry.cpp
     src/wasm/boid_unit.cpp
     src/wasm/boids_simulation.cpp
+    src/wasm/boids_world.cpp
     src/wasm/boid_tree_spatial_index.cpp
-    src/wasm/main.cpp
     src/wasm/obstacle_field.cpp
     src/wasm/simulation_tuning.cpp
 )
 
-# インクルードディレクトリを指定
-include_directories(
-    D:/GitHub/vcpkg/installed/x64-windows/include
+add_library(boids_core STATIC
+    ${BOIDS_CORE_SOURCES}
+)
+
+target_compile_features(boids_core PUBLIC cxx_std_20)
+
+target_include_directories(boids_core
+    PUBLIC
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/src/wasm
+)
+
+target_include_directories(boids_core SYSTEM
+    PUBLIC
+        ${GLM_INCLUDE_DIR}
+        ${BOOST_ALIGN_INCLUDE_DIR}
 )
 
 if (CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    target_compile_options(boids_core PRIVATE
+        $<$<CONFIG:Debug>:${EMCC_COMPILE_FLAGS}>
+        $<$<CONFIG:Release>:${EMCC_COMPILE_FLAGS_RELEASE}>
+    )
+
     add_executable(wasm_boids
-        ${COMMON_SOURCES}
+        src/wasm/entry.cpp
+        src/wasm/main.cpp
         src/wasm/wasm_bindings.cpp
     )
+
+    target_link_libraries(wasm_boids PRIVATE boids_core)
 
     set_target_properties(wasm_boids PROPERTIES
         OUTPUT_NAME "wasm_boids"
@@ -135,10 +165,18 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
         $<$<CONFIG:Release>:${EMCC_LINK_FLAGS_RELEASE}>
     )
 else()
+    target_compile_options(boids_core PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>:/W4 /permissive->
+        $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -Wpedantic>
+    )
+
     add_executable(wasm_boids_native
-        ${COMMON_SOURCES}
+        src/wasm/entry.cpp
+        src/wasm/main.cpp
         src/wasm/native_simulation.cpp
     )
+
+    target_link_libraries(wasm_boids_native PRIVATE boids_core)
 
     target_compile_definitions(wasm_boids_native PRIVATE
         $<$<CONFIG:Debug>:DEBUG>
@@ -154,5 +192,5 @@ else()
     )
 
     find_package(Threads REQUIRED)
-    target_link_libraries(wasm_boids_native PRIVATE Threads::Threads)
+    target_link_libraries(boids_core PUBLIC Threads::Threads)
 endif()

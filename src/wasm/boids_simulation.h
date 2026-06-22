@@ -2,6 +2,7 @@
 #include <stack>
 #include <vector>
 #include <cstdint>
+#include <random>
 #include "boid_unit.h"
 #include "boid.h"
 #include "species_params.h"
@@ -15,22 +16,13 @@
 class BoidSimulation : public SpatialIndex
 {
 public:
-    static BoidSimulation& instance() {
-        static BoidSimulation instance; // シングルトンインスタンス
-        return instance;
-    }
+    static BoidSimulation& instance();
+    static BoidSimulation& defaultInstance();
     struct LeafCacheEntry {
         BoidUnit *node;
         BoidUnit *parent;
     };
 
-    BoidUnit *root;
-    int frameCount = 0;
-    std::vector<LeafCacheEntry> leafCache;
-    int splitIndex = 0;
-    int mergeIndex = 0;
-    int maxBoidsPerUnit = 32;
-    SoABuffers buf;              // 中央バッファに一本化
     struct SpeciesEnvelope {
         glm::vec3 center = glm::vec3(0.0f);
         float radius = 0.0f;
@@ -63,48 +55,26 @@ public:
         glm::vec3 avgVelocity = glm::vec3(0.0f);
         float radius = 1.0f;
         float weight = 0.0f;
+        float trackingConfidence = 0.0f;
         int lastUpdateFrame = -1024;
         bool active = false;
     };
-    std::vector<float> unitSimpleDensities;
-    std::vector<SpeciesEnvelope> speciesEnvelopes;
-    std::vector<std::vector<SpeciesCluster>> speciesClusters;
-    std::vector<std::vector<SpeciesSchoolCluster>> speciesSchoolClusters;
-    // JS 側に渡すため center.xyz + radius + count を 5 要素で詰めたフラット配列
-    std::vector<float> speciesEnvelopeBuffer;
-
-    // JS 側で「複数クラスター」をデバッグ可視化するためのフラット配列。
-    // 1クラスターあたり 6 float: speciesId, center.x, center.y, center.z, radius, weight
-    // - speciesId は JS 側で色分けに使う
-    // - weight は「どれくらい生きているクラスターか」の目安（明度などに使える）
-    std::vector<float> speciesClusterBuffer;
-    bool speciesClusterBufferDirty = true;
-
-    // JS 側で「大クラスター（群れ）」をデバッグ可視化するためのフラット配列。
-    // 1クラスターあたり 6 float: speciesId, center.x, center.y, center.z, radius, weight
-    // 形式を小クラスターと合わせることで、JS 側の描画ロジックを再利用しやすくする。
-    std::vector<float> speciesSchoolClusterBuffer;
-    bool speciesSchoolClusterBufferDirty = true;
-
-    // BoidUnit プール
-    std::stack<BoidUnit*> unitPool;
-
-    // 現在使用中の SpatialIndex 実装。
-    // - 既定は BoidUnit ツリーを使う BoidTreeSpatialIndex。
-    // - 将来的に UniformGrid/BVH などへ差し替えるための注入ポイント。
-    BoidTreeSpatialIndex treeSpatialIndex_;
-    const SpatialIndex *activeSpatialIndex_ = &treeSpatialIndex_;
-
-    // クラスター更新を間引く際の dt 蓄積（時間スケールのEMAを保つ）
-    float clusterUpdateDtAccumulator_ = 0.0f;
     
     BoidSimulation();
     ~BoidSimulation();
 
     // ---- 参照専用の軽量アクセサ（外部からの直アクセスを減らす） ----
+    BoidUnit *getRoot() const { return root; }
     int getFrameCount() const { return frameCount; }
     int getMaxBoidsPerUnit() const { return maxBoidsPerUnit; }
+    void setMaxBoidsPerUnit(int value) { maxBoidsPerUnit = value; }
     const SoABuffers& getBuffers() const { return buf; }
+    SoABuffers& getBuffersMutable() { return buf; }
+    const std::vector<SpeciesParams>& getSpeciesParamsList() const { return speciesParams_; }
+    void setRandomSeed(uint32_t seed);
+    uint32_t getRandomSeed() const { return randomSeed_; }
+    void setFixedTimeStep(float dt);
+    float getFixedTimeStep() const { return fixedTimeStep_; }
 
     // 空間インデックス（現状は BoidUnit ツリー）を保持値で再構築する。
     void rebuildSpatialIndex() { build(); }
@@ -123,6 +93,7 @@ public:
     // 空間インデックスを再構築する（maxBoidsPerUnit を使用）。
     void build();
     void update(float dt = 1.0f);
+    void updateFixedStep(float simulationDt, float realDt);
     // バッファ更新
     uintptr_t getPositionsPtr();
     uintptr_t getVelocitiesPtr();
@@ -188,6 +159,51 @@ public:
 
 private:
     // ---- 内部実装（外部から呼ばれないので private に寄せる） ----
+    BoidUnit *root = nullptr;
+    int frameCount = 0;
+    std::vector<LeafCacheEntry> leafCache;
+    int splitIndex = 0;
+    int mergeIndex = 0;
+    int maxBoidsPerUnit = 32;
+    SoABuffers buf; // 中央バッファに一本化
+    std::vector<SpeciesParams> speciesParams_;
+    uint32_t randomSeed_ = 5489u;
+    float fixedTimeStep_ = 1.0f / 60.0f;
+    std::mt19937 randomEngine_;
+    std::vector<float> unitSimpleDensities;
+    std::vector<SpeciesEnvelope> speciesEnvelopes;
+    std::vector<std::vector<SpeciesCluster>> speciesClusters;
+    std::vector<std::vector<SpeciesSchoolCluster>> speciesSchoolClusters;
+    // JS 側に渡すため center.xyz + radius + count を 5 要素で詰めたフラット配列
+    std::vector<float> speciesEnvelopeBuffer;
+
+    // JS 側で「複数クラスター」をデバッグ可視化するためのフラット配列。
+    // 1クラスターあたり 6 float: speciesId, center.x, center.y, center.z, radius, weight
+    // - speciesId は JS 側で色分けに使う
+    // - weight は「どれくらい生きているクラスターか」の目安（明度などに使える）
+    std::vector<float> speciesClusterBuffer;
+    bool speciesClusterBufferDirty = true;
+
+    // JS 側で「大クラスター（群れ）」をデバッグ可視化するためのフラット配列。
+    // 1クラスターあたり 6 float: speciesId, center.x, center.y, center.z, radius, weight
+    // 形式を小クラスターと合わせることで、JS 側の描画ロジックを再利用しやすくする。
+    std::vector<float> speciesSchoolClusterBuffer;
+    bool speciesSchoolClusterBufferDirty = true;
+
+    // BoidUnit プール
+    std::stack<BoidUnit*> unitPool;
+
+    // 現在使用中の SpatialIndex 実装。
+    // - 既定は BoidUnit ツリーを使う BoidTreeSpatialIndex。
+    // - 将来的に UniformGrid/BVH などへ差し替えるための注入ポイント。
+    BoidTreeSpatialIndex treeSpatialIndex_;
+    const SpatialIndex *activeSpatialIndex_ = &treeSpatialIndex_;
+
+    // クラスター更新を間引く際の dt 蓄積（時間スケールのEMAを保つ）
+    float clusterUpdateDtAccumulator_ = 0.0f;
+    // render フレームと独立した固定ステップ更新用の dt 蓄積。
+    float simulationDtAccumulator_ = 0.0f;
+
     // プール管理
     BoidUnit* getUnitFromPool();
     void returnUnitToPool(BoidUnit* unit);
@@ -237,5 +253,3 @@ private:
     // 非捕食者種の predatorAlertRadius の最大値（捕食者影響範囲の上限）
     float maxPredatorAlertRadius_ = 1.0f;
 };
-
-extern std::vector<SpeciesParams> globalSpeciesParams;

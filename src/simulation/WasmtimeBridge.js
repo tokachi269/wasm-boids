@@ -604,6 +604,10 @@ function buildSpeciesParams(wasm, settings) {
       predatorAlertRadius: toNumber(raw.predatorAlertRadius, 1.0),
       isPredator: Boolean(raw.isPredator),
       densityReturnStrength: toNumber(raw.densityReturnStrength ?? raw.centerAttractStrength, 0.0),
+      schoolPullEnabled:
+        typeof raw.schoolPullEnabled === 'boolean'
+          ? raw.schoolPullEnabled
+          : !Boolean(raw.isPredator),
     });
   });
 

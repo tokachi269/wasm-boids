@@ -8,6 +8,7 @@
 #include "spatial_query.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cmath>
 #include <cstddef>
 #include <future>
@@ -29,9 +30,16 @@
 
 namespace {
 
+inline BoidSimulation &simulationFor(const BoidUnit *unit) {
+  if (!unit || !unit->simulation) {
+    std::abort();
+  }
+  return *unit->simulation;
+}
+
 constexpr float kLeafDensityMinRadius = 0.25f;
 // simpleDensity の計算モード（0: 重心法、1: 全ペア、2: サンプルペア）
-constexpr int kLeafSimpleDensityMode = 1;
+constexpr int kLeafSimpleDensityMode = 2;
 constexpr float kLeafSimpleDensityEpsilon = 1e-4f;
 constexpr std::size_t kCandidateCacheLimit = 16384; // thread-local reuse上限
 constexpr std::size_t kPredatorCacheLimit = 2048;
@@ -69,34 +77,6 @@ inline float fastHash01(uint32_t x) {
   return float(x & 0x00ffffffu) * (1.0f / 16777215.0f);
 }
 
-inline int selectDeterministicIndex(uint32_t seed, int count) {
-  if (count <= 1) {
-    return 0;
-  }
-  const float scaled = fastHash01(seed) * static_cast<float>(count);
-  return std::min(count - 1, static_cast<int>(scaled));
-}
-
-inline int computeExternalNeighborStride(std::size_t boidCount) {
-  if (boidCount >= 50000) {
-    return 24;
-  }
-  if (boidCount >= 25000) {
-    return 16;
-  }
-  return 8;
-}
-
-inline int computeThreatPropagationStride(std::size_t boidCount) {
-  if (boidCount >= 50000) {
-    return 8;
-  }
-  if (boidCount >= 25000) {
-    return 4;
-  }
-  return 1;
-}
-
 inline bool tryNormalizeXZ(const glm::vec3 &v, glm::vec3 &out) {
   const float xzLen2 = v.x * v.x + v.z * v.z;
   if (!(xzLen2 > kSafeNormalizeEps2)) {
@@ -104,6 +84,17 @@ inline bool tryNormalizeXZ(const glm::vec3 &v, glm::vec3 &out) {
   }
   out = glm::vec3(v.x, 0.0f, v.z) * (1.0f / glm::sqrt(xzLen2));
   return true;
+}
+
+inline std::size_t densitySampleIndex(std::size_t sample, std::size_t count) {
+  if (count <= 1) {
+    return 0;
+  }
+
+  constexpr std::uint32_t kMul = 2654435761u;
+  const std::uint32_t mixed =
+      (static_cast<std::uint32_t>(sample) + 1u) * kMul;
+  return static_cast<std::size_t>(mixed % static_cast<std::uint32_t>(count));
 }
 
 float computeLeafSimpleDensity(const int *indices, std::size_t count,
@@ -155,18 +146,21 @@ float computeLeafSimpleDensity(const int *indices, std::size_t count,
     return accum * invPairs;
   }
 
-  static constexpr std::pair<int, int> kSamplePairs[] = {
-      {0, 1}, {0, 2}, {0, 3}, {1, 2}, {1, 3}, {2, 3},
-      {4, 5}, {4, 6}, {5, 6}, {6, 7}, {2, 5}, {3, 7}};
+  static constexpr std::pair<std::size_t, std::size_t> kSamplePairs[] = {
+      {0, 1},  {0, 3},  {0, 7},  {1, 2},  {1, 5},  {2, 3},
+      {2, 6},  {3, 4},  {4, 5},  {4, 7},  {5, 6},  {6, 7},
+      {0, 11}, {3, 9},  {5, 10}, {8, 11}};
   float accum = 0.0f;
   float weight = 0.0f;
   for (const auto &pair : kSamplePairs) {
-    if (pair.first >= static_cast<int>(count) ||
-        pair.second >= static_cast<int>(count)) {
+    const std::size_t left = densitySampleIndex(pair.first, count);
+    const std::size_t right = densitySampleIndex(pair.second, count);
+    if (left == right) {
       continue;
     }
-    const glm::vec3 &a = buffers.positions[indices[pair.first]];
-    const glm::vec3 &b = buffers.positions[indices[pair.second]];
+
+    const glm::vec3 &a = buffers.positions[indices[left]];
+    const glm::vec3 &b = buffers.positions[indices[right]];
     glm::vec3 diff = a - b;
     float distSq = glm::dot(diff, diff);
     accum += 1.0f / (distSq + smoothingSq);
@@ -311,8 +305,10 @@ static inline glm::vec3 buildFallbackTurnAxis(const glm::vec3 &oldDir) {
 }
 
 static void updateLeafKinematics(BoidUnit *unit, float dt) {
+  BoidSimulation &simulation = simulationFor(unit);
+  const auto &globalSpeciesParams = simulation.getSpeciesParamsList();
   const float framePhaseBase =
-      static_cast<float>(BoidSimulation::instance().frameCount);
+      static_cast<float>(simulation.getFrameCount());
   for (size_t i = 0; i < unit->indices.size(); ++i) {
     int gIdx = unit->indices[i];
     int sid = unit->buf->speciesIds[gIdx];
@@ -460,12 +456,11 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
         // 逃避を「一定加速度」ではなく「目標速度へ舵取り」で表現する。
         // threatLevel が高いほど、舵取りも目標速度も少し強める。
         const float fleeStrength =
-          gSimulationTuning.baseEscapeStrength * (0.65f + 1.10f * threatLevel) *
+          gSimulationTuning.baseEscapeStrength * (0.95f + 1.75f * threatLevel) *
           (1.0f + 0.2f * currentStress);
-        // 逃避時の速度ブーストは強すぎると「逃げが速すぎる」見た目になりやすい。
-        // threat が高いほど速くはするが、ブースト量は控えめにする。
+        // threat が高いときだけ速度も少し強め、捕食者近傍の空隙形成を助ける。
         const float desiredSpeed =
-            globalSpeciesParams[sid].maxSpeed * (1.0f + 0.1f * threatLevel);
+            globalSpeciesParams[sid].maxSpeed * (1.0f + 0.3f * threatLevel);
         const glm::vec3 desiredVel = fleeDir * desiredSpeed;
           escapeForce = (desiredVel - velocity) * fleeStrength;
         }
@@ -530,7 +525,7 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
       1.0f - glm::smoothstep(0.05f, 0.30f, boundaryThreat);
     if (!isPredator && boundaryThreatAttenuation > 1e-4f &&
       boundaryRadius > 0.0f && boundarySteer > 0.0f && boundaryRadius > boundaryStart) {
-      const BoidUnit *root = BoidSimulation::instance().root;
+      const BoidUnit *root = simulation.getRoot();
       // root がない異常系では原点へ寄せる。
       const glm::vec3 center = root ? root->center : glm::vec3(0.0f);
       const glm::vec3 toCenter = center - position;
@@ -706,11 +701,13 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
  * - 階層構造内でユニットの境界を計算する際に使用。
  */
 void BoidUnit::computeBoundingSphere() {
+  BoidSimulation &simulation = simulationFor(this);
+  const auto &globalSpeciesParams = simulation.getSpeciesParamsList();
   if (isBoidUnit()) {
     if (indices.empty())
     {
       simpleDensity = 0.0f;
-      BoidSimulation::instance().setUnitSimpleDensity(id, 0.0f);
+      simulation.setUnitSimpleDensity(id, 0.0f);
       return;
     }
 
@@ -747,7 +744,7 @@ void BoidUnit::computeBoundingSphere() {
     } else {
       simpleDensity = 0.0f;
     }
-    BoidSimulation::instance().setUnitSimpleDensity(id, simpleDensity);
+    simulation.setUnitSimpleDensity(id, simpleDensity);
   } else {
     if (children.empty())
       return; // 子ノードの中心を計算 - パフォーマンス最適化
@@ -776,7 +773,7 @@ void BoidUnit::computeBoundingSphere() {
 
     radius = mean + 1.0f * stddev;
     simpleDensity = 0.0f;
-    BoidSimulation::instance().setUnitSimpleDensity(id, 0.0f);
+    simulation.setUnitSimpleDensity(id, 0.0f);
   }
 }
 
@@ -793,6 +790,8 @@ void BoidUnit::computeBoundingSphere() {
  * - ユニット間のBoid相互作用による分離・凝集・整列
  */
 void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
+  BoidSimulation &simulation = simulationFor(this);
+  const auto &globalSpeciesParams = simulation.getSpeciesParamsList();
   if (!other) {
     return;
   }
@@ -808,7 +807,7 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
       return false;
 
     // 全非捕食者種の警戒距離の最大値（BoidSimulation 側でキャッシュ済み）
-    const float predatorEffectRange = BoidSimulation::instance().getMaxPredatorAlertRadius();
+    const float predatorEffectRange = simulation.getMaxPredatorAlertRadius();
 
     auto *soa = predatorUnit->buf;
 
@@ -833,8 +832,8 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
         preyCandidates.reserve(oversampleLimit);
       }
 
-      spatial_query::forEachBoidInSphereLimited(
-          BoidSimulation::instance(), predatorPos, predatorEffectRange, oversampleLimit,
+        spatial_query::forEachBoidInSphereLimited(
+          simulation, predatorPos, predatorEffectRange, oversampleLimit,
           [&](int idxB, const BoidUnit *leafNode) {
             if (!leafNode || leafNode == predatorUnit) {
               return;
@@ -900,13 +899,21 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
             glm::clamp(1.0f - normalizedDistance, 0.0f, 1.0f);
         escapeStrength =
             escapeStrength * escapeStrength * (3.0f - 2.0f * escapeStrength);
+        const float coreRepulsion =
+          1.0f - glm::smoothstep(0.22f, 0.58f, normalizedDistance);
+        escapeStrength = glm::clamp(
+          escapeStrength + coreRepulsion * 0.85f,
+          0.0f,
+          1.0f);
 
-        soa->predatorInfluences[idxB] += escapeDir * escapeStrength * 3.0f;
+        soa->predatorInfluences[idxB] +=
+          escapeDir * escapeStrength * (4.5f + coreRepulsion * 4.0f);
         soa->predatorThreats[idxB] =
             std::max(soa->predatorThreats[idxB], escapeStrength);
 
         const float stressLevel =
-            glm::clamp(0.4f + escapeStrength * 0.6f, 0.0f, 1.0f);
+          glm::clamp(0.55f + escapeStrength * 0.45f + coreRepulsion * 0.2f,
+                 0.0f, 1.0f);
         soa->stresses[idxB] = std::max(soa->stresses[idxB], stressLevel);
       }
     }
@@ -1040,6 +1047,8 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
  * - 階層構造内で各ユニットの Boid の動きを更新する際に使用。
  */
 void BoidUnit::updateRecursive(float dt) {
+  const auto &globalSpeciesParams =
+      simulationFor(this).getSpeciesParamsList();
   frameCount++;
 
   // 無限再帰防止: 簡単なカウンター方式
@@ -1223,10 +1232,13 @@ inline glm::quat BoidUnit::dirToQuatRollZero(const glm::vec3 &forward) {
  * - 捕食者の追跡ターゲット選択と更新
  */
 void BoidUnit::computeBoidInteraction(float dt) {
+  BoidSimulation &simulation = simulationFor(this);
+  const auto &globalSpeciesParams = simulation.getSpeciesParamsList();
   // 空間インデックス向けの境界情報を毎フレーム更新
   computeBoundingSphere();
 
-  const int globalFrame = BoidSimulation::instance().frameCount;
+  const int globalFrame = simulation.getFrameCount();
+  const uint32_t worldSeed = simulation.getRandomSeed();
 
   glm::vec3 separation;
   glm::vec3 alignment;
@@ -1235,7 +1247,18 @@ void BoidUnit::computeBoidInteraction(float dt) {
   glm::vec3 pos;
   glm::vec3 vel;
   int sid = -1;
-  // 軽量なランダム数生成（WASMでmt19937が使えないため）
+  auto rand_range = [&](int max_val, uint32_t salt) -> int {
+    if (max_val <= 0) {
+      return 0;
+    }
+    uint32_t x = worldSeed ^ salt;
+    x ^= x >> 16;
+    x *= 0x7feb352dU;
+    x ^= x >> 15;
+    x *= 0x846ca68bU;
+    x ^= x >> 16;
+    return static_cast<int>(x % static_cast<uint32_t>(max_val));
+  };
 
   // 近傍記憶の期限(τ)を個体ごとに少しずらすための軽量ハッシュ。
   // 同じτで一斉に記憶が切れると、近傍集合が同時に入れ替わり
@@ -1341,7 +1364,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
     };
 
     if (sid >= 0) {
-      const auto *schools = BoidSimulation::instance().getSpeciesSchoolClusters(sid);
+      const auto *schools = simulation.getSpeciesSchoolClusters(sid);
       if (schools) {
         std::array<SchoolCoreCandidate, kMaxSchoolCoreCandidates> coreCandidates{};
         int coreCandidateCount = 0;
@@ -1460,8 +1483,8 @@ void BoidUnit::computeBoidInteraction(float dt) {
           constexpr std::size_t kPredatorCandidateLimit = 256;
             glm::vec3 preyCenterSum(0.0f);
             int preyCenterCount = 0;
-          spatial_query::forEachBoidInSphereLimited(
-              BoidSimulation::instance(), pos, targetSearchRadius,
+            spatial_query::forEachBoidInSphereLimited(
+              simulation, pos, targetSearchRadius,
               kPredatorCandidateLimit,
               [&](int candidateIdx, const BoidUnit *leafNode) {
                 if (leafNode == this || candidateIdx == gIdx) {
@@ -1489,11 +1512,10 @@ void BoidUnit::computeBoidInteraction(float dt) {
             const glm::vec3 approach = buf->predatorApproachDirs[gIdx];
             const float approachDistSq = glm::dot(approach, approach);
             if (approachDistSq <= kEngageRadius * kEngageRadius) {
-              const int pick = selectDeterministicIndex(
-                  uint32_t(gIdx) * 747796405u ^
-                      uint32_t(globalFrame) * 2891336453u ^
-                      uint32_t(sid + 1) * 1181783497u,
-                  static_cast<int>(predatorTargetCandidates.size()));
+                const int pick = rand_range(
+                  static_cast<int>(predatorTargetCandidates.size()),
+                  uint32_t(gIdx) * 747796405u +
+                    uint32_t(globalFrame) * 2891336453u);
               tgtIdx = predatorTargetCandidates[pick];
               tgtTime = globalSpeciesParams[sid].tau;
             } else {
@@ -1715,8 +1737,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
     // ユニット外近傍の補完は、切れ目の対策として有効だがコストが高い。
     // 常時走らせず「かなり近傍が足りない」時だけ、かつフレーム間引きを強める。
     const bool wantsExternal = (neighborCount * 2 < maxNeighbors);
-    const int kExternalNeighborStride =
-        computeExternalNeighborStride(buf->positions.size());
+    constexpr int kExternalNeighborStride = 8;
     const bool externalThrottleHit =
         (((globalFrame + gIdx) % kExternalNeighborStride) == 0);
     const bool lostBoid = (neighborCount == 0);
@@ -1731,7 +1752,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
         externalNeighbors.reserve(static_cast<std::size_t>(hardLimit));
 
         spatial_query::forEachBoidInSphereLimited(
-            BoidSimulation::instance(), pos, queryRadius,
+          simulation, pos, queryRadius,
             static_cast<std::size_t>(hardLimit),
             [&](int candidateIdx, const BoidUnit *leafNode) {
               // leaf 内候補は既存の activeNeighbors で扱うので除外。
@@ -1817,13 +1838,6 @@ void BoidUnit::computeBoidInteraction(float dt) {
       // - 値域は 0〜1 のまま（正規化スカラー）
       // - 伝搬は距離で減衰し、dt でブレンドしてフレームレートに依存しにくくする
       float selfThreat = glm::clamp(buf->predatorThreats[gIdx], 0.0f, 1.0f);
-      const float selfInfluence2 = glm::length2(buf->predatorInfluences[gIdx]);
-      const bool needsFullThreatUpdate =
-          (selfThreat > 0.02f) || (selfStress > 0.05f) || (selfInfluence2 > 1e-4f);
-      const bool sampleThreatPropagation =
-          needsFullThreatUpdate ||
-          (((globalFrame + gIdx) %
-            computeThreatPropagationStride(buf->positions.size())) == 0);
       float threatGainSum = 0.0f;
       float threatWeightSum = 0.0f;
       const float threatPropagationRadius = propagationRadius * 1.25f;
@@ -1931,7 +1945,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
         float dist = glm::sqrt(distSq);
 
         // predatorThreat の伝搬（stress より反応を少し速く、半径もやや広げる）
-        if (sampleThreatPropagation && dist < threatPropagationRadius) {
+        if (dist < threatPropagationRadius) {
           const float neighborThreat =
               glm::clamp(buf->predatorThreats[gNeighbor], 0.0f, 1.0f);
           // 直接の捕食者影響が無い低脅威まで無制限に伝搬すると「関係ない場所が逃げる」状態になりやすい。
@@ -2035,7 +2049,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
         float dist = glm::sqrt(distSq);
 
         // predatorThreat の伝搬（外部近傍も同様に加味する）
-        if (sampleThreatPropagation && dist < threatPropagationRadius) {
+        if (dist < threatPropagationRadius) {
           const float neighborThreat =
               glm::clamp(buf->predatorThreats[gNeighbor], 0.0f, 1.0f);
           const float neighborInfluence2 = glm::length2(buf->predatorInfluences[gNeighbor]);
@@ -2189,11 +2203,11 @@ void BoidUnit::computeBoidInteraction(float dt) {
             // 近い個体が一定割合を超えたら「密集」とみなす。
             const float crowdCloseSignal = glm::smoothstep(0.10f, 0.35f, crowdCloseRatio);
             const float crowded = glm::max(crowdPhiSignal, glm::max(crowdPackingSignal, crowdCloseSignal));
-        constexpr float kAttractionMinScale = 0.35f;
+        constexpr float kAttractionMinScale = 0.42f;
         float autonomousAttractionScale =
           glm::mix(1.0f, kAttractionMinScale, crowded);
         // 脅威中は密集抑制を完全には解除しない（中心吸い込みを避ける）。
-        constexpr float kThreatAttractionRelief = 0.35f;
+        constexpr float kThreatAttractionRelief = 0.40f;
         autonomousAttractionScale =
           glm::mix(autonomousAttractionScale, 1.0f, threatLevel * kThreatAttractionRelief);
 
@@ -2284,7 +2298,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
       // alignment は近傍速度の整列（短期）だけで決める。
         // threat が高い局面は「中心へ戻す」より「散開」を優先する。
         const float fleeCohesionScale =
-          1.0f - 0.85f * glm::clamp(threatLevel, 0.0f, 1.0f);
+          1.0f - 0.97f * glm::clamp(threatLevel, 0.0f, 1.0f);
         const glm::vec3 combinedCohesion =
           (totalCohesion + longTermCohesion) * fleeCohesionScale;
       const glm::vec3 combinedAlignment = totalAlignment;
@@ -2459,6 +2473,7 @@ std::vector<BoidUnit *> BoidUnit::split(int numSplits) {
     if (g.empty())
       continue;
     BoidUnit *u = new BoidUnit();
+    u->simulation = this->simulation;
     u->buf = buf;   // 中央バッファ共有
     u->indices = g; // インデックスだけ保持
     u->computeBoundingSphere();
@@ -2553,6 +2568,7 @@ std::vector<BoidUnit *> BoidUnit::splitByClustering(int numClusters) {
     if (g.empty())
       continue;
     auto *u = new BoidUnit();
+    u->simulation = this->simulation;
     u->buf = buf;             // 中央バッファを共有
     u->indices = g;           // インデックスだけ保持
     u->speciesId = speciesId; // 親ノードの speciesId を継承

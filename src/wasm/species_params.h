@@ -29,4 +29,5 @@ struct SpeciesParams {
   float predatorAlertRadius = 1.0f; // 捕食者を察知して逃避を始める距離（種ごとに設定可能）
   bool isPredator = false; // この種が捕食者かどうか
   float densityReturnStrength = 0.0f; // 群れの疎密勾配に沿って群れへ戻る強度
+  bool schoolPullEnabled = true; // 大クラスタ引力係数をこの種に反映するか
 };

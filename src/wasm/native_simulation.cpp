@@ -160,10 +160,14 @@ void NativeSimulation::startSimulation() {
     scaled.push_back(scaledParams(params, options_.spatialScale));
   }
 
-  BoidSimulation::instance().initializeBoids(scaled, options_.positionRange,
-                                       options_.velocityRange);
-  BoidSimulation::instance().maxBoidsPerUnit = options_.maxBoidsPerUnit;
-  BoidSimulation::instance().build();
+  world_.configure(boids::BoidsWorldConfig{
+      .positionRange = options_.positionRange,
+      .velocityRange = options_.velocityRange,
+      .maxBoidsPerUnit = options_.maxBoidsPerUnit,
+      .seed = options_.seed,
+      .fixedTimeStep = options_.fixedTimeStep,
+  });
+  world_.reset(scaled);
 
   const int totalBoids = calculateTotalBoidCount(settings_);
   logger::log("Simulation initialized with " + std::to_string(totalBoids) +
@@ -182,7 +186,11 @@ void NativeSimulation::animate() {
     last = now;
 
     if (!paused_) {
-      BoidSimulation::instance().update(deltaSeconds); // BoidSimulation の物理更新
+      if (options_.fixedTimeStep > 0.0f) {
+        world_.stepFixed(deltaSeconds);
+      } else {
+        world_.step(deltaSeconds);
+      }
     }
 
     // 指定間隔ごとに統計ログ出力
@@ -208,23 +216,24 @@ void NativeSimulation::scheduleNextFrame() {
 // フレームごとの統計（平均位置・速度）を出力
 void NativeSimulation::printFrameSummary(std::size_t frame,
                                          float deltaSeconds) const {
-  const auto &buf = BoidSimulation::instance().buf;
-  if (buf.positions.empty()) {
+  const auto positions = world_.positions();
+  const auto velocities = world_.velocities();
+  if (positions.empty()) {
     logger::log("Frame " + std::to_string(frame) + ": no boids available.");
     return;
   }
 
   // 平均位置
   const glm::vec3 averagePosition =
-      std::accumulate(buf.positions.begin(), buf.positions.end(),
+      std::accumulate(positions.begin(), positions.end(),
                       glm::vec3(0.0f)) /
-      static_cast<float>(buf.positions.size());
+      static_cast<float>(positions.size());
 
   // 平均速度
   const glm::vec3 averageVelocity =
-      std::accumulate(buf.velocities.begin(), buf.velocities.end(),
+      std::accumulate(velocities.begin(), velocities.end(),
                       glm::vec3(0.0f)) /
-      static_cast<float>(buf.velocities.size());
+      static_cast<float>(velocities.size());
 
   std::ostringstream oss;
   oss << std::fixed << std::setprecision(3) << "Frame " << frame

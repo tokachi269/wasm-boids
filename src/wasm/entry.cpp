@@ -86,11 +86,7 @@ uintptr_t boidUnitMappingPtr() {
 }
 
 uintptr_t speciesIdsPtr() {
-  const auto &ids = BoidSimulation::instance().buf.speciesIds;
-  if (ids.empty()) {
-    return 0;
-  }
-  return reinterpret_cast<uintptr_t>(ids.data());
+  return BoidSimulation::instance().getSpeciesIdsPtr();
 }
 
 uintptr_t unitSimpleDensityPtr() {
@@ -130,6 +126,6 @@ int EMSCRIPTEN_KEEPALIVE speciesSchoolClustersCount() {
 }
 
 void syncReadToWriteBuffers() {
-  BoidSimulation::instance().buf.syncWriteFromRead();
+  BoidSimulation::instance().syncWriteFromReadBuffers();
 }
 }

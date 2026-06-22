@@ -1,5 +1,6 @@
 #pragma once
 
+#include "boids/boids_world.h"
 #include "species_params.h"
 #include <vector>
 
@@ -14,6 +15,8 @@ private:
     float positionRange = 3.0f;
     float velocityRange = 0.25f;
     int maxBoidsPerUnit = 16;
+    uint32_t seed = 5489u;
+    float fixedTimeStep = 1.0f / 60.0f;
     int reportInterval = 60; // フレーム数
     int sleepMillis = 16;
     std::size_t maxFrames = 600; // 約10秒 (60FPS想定)
@@ -22,6 +25,7 @@ private:
   std::vector<SpeciesParams> settings_;
   Options options_;
   bool paused_ = false;
+  boids::BoidsWorld world_;
 
   std::vector<SpeciesParams> getDefaultSettings() const;
   std::vector<SpeciesParams>

@@ -20,8 +20,6 @@
 #include <limits>
 
 
-// グローバル共通
-std::vector<SpeciesParams> globalSpeciesParams;
 // 静的メンバー変数の初期化
 int BoidUnit::nextId = 0;
 
@@ -35,10 +33,20 @@ constexpr float kClusterHistorySeconds = 10.0f;   // 秒。EMAの時定数（大
 constexpr int kClusterRetainFrames = 600;         // フレーム。ヒットしないクラスターの保持期間（大きいほど消えにくい）
 constexpr float kClusterCaptureRadiusScale = 0.4f;// cohesionRange から捕捉半径を作る係数（大きいほど吸い込みやすい）
 constexpr float kClusterVelocityAlignBias = 0.35f;// 0..1目安。速度方向が近いものを優先する度合い（大きいほど方向一致重視）
+constexpr int kClusterMinLeafBoids = 6;           // これ未満の leaf はノイズ候補として原則無視する
+constexpr float kClusterDebugMinWeight = 18.0f;   // 可視化や school 入力に使う最小重み
+constexpr int kClusterDebugMaxStaleFrames = 45;   // これより古い cluster は可視対象から外す
+constexpr float kClusterSharedDriftDampingScale = 4.0f; // schoolPull 無効種の小クラスタ群に対する並進ドリフト抑制倍率。
 
 // dist <= linkScale * (r_i + r_j) で同一群れ候補とする（大きいほど群れが繋がりやすい）。
 constexpr float kSchoolLinkScale = 1.35f;
 constexpr int kMaxSchoolsPerSpecies = 12;         // 種あたりの大クラスター上限（大きいほど群れ分割を保持）
+constexpr float kSchoolSharedDriftDampingScale = 4.0f; // baseAlpha への倍率。大きいほど大クラスタ全体の並進ドリフトを抑える。
+constexpr float kSchoolConfidenceRiseScale = 0.40f;
+constexpr float kSchoolConfidenceDecayScale = 0.50f;
+constexpr float kSchoolCenterMaxStepRadiusScale = 0.035f;
+constexpr float kSchoolCenterMaxStepSpeedScale = 3.0f;
+constexpr int kSchoolReplaceMinStaleFrames = 20;
 
 constexpr int kEnvelopeUpdateStride = 8;          // フレーム。エンベロープ更新間引き（大きいほど軽いが表示遅延）
 constexpr int kTreeRebuildStride = 10;            // フレーム。ツリー全再構築間隔（大きいほど軽いが適応が遅い）
@@ -46,12 +54,59 @@ constexpr int kDebugRequestKeepAliveFrames = 120; // フレーム。デバッグ
 
 } // namespace
 
+namespace {
+template <typename ClusterType>
+bool computeActiveWeightedCenter(const std::vector<ClusterType> &clusters,
+                                 glm::vec3 &outCenter) {
+  glm::vec3 sum(0.0f);
+  float weightSum = 0.0f;
+  for (const auto &cluster : clusters) {
+    if (!cluster.active) {
+      continue;
+    }
+    const float w = glm::clamp(cluster.weight, 0.25f, 50000.0f);
+    sum += cluster.center * w;
+    weightSum += w;
+  }
+  if (weightSum <= 1e-6f) {
+    outCenter = glm::vec3(0.0f);
+    return false;
+  }
+  outCenter = sum * (1.0f / weightSum);
+  return true;
+}
+
+template <typename ClusterType>
+bool isFreshCluster(const ClusterType &cluster, int currentFrame,
+                    int maxStaleFrames, float minWeight) {
+  return cluster.active && cluster.weight >= minWeight &&
+         (currentFrame - cluster.lastUpdateFrame) <= maxStaleFrames;
+}
+} // namespace
+
 void BoidSimulation::markDebugRequest(uint8_t bits) {
   debugRequestBits_ |= bits;
   debugLastRequestFrame_ = frameCount;
 }
 
+BoidSimulation &BoidSimulation::defaultInstance() {
+  static BoidSimulation instance;
+  return instance;
+}
+
+BoidSimulation &BoidSimulation::instance() { return defaultInstance(); }
+
+void BoidSimulation::setRandomSeed(uint32_t seed) {
+  randomSeed_ = seed;
+  randomEngine_.seed(randomSeed_);
+}
+
+void BoidSimulation::setFixedTimeStep(float dt) {
+  fixedTimeStep_ = dt > 0.0f ? dt : (1.0f / 60.0f);
+}
+
 SpeciesParams BoidSimulation::getGlobalSpeciesParams(const std::string species) {
+  const auto &globalSpeciesParams = speciesParams_;
   auto it = std::find_if(
       globalSpeciesParams.begin(), globalSpeciesParams.end(),
       [&species](const SpeciesParams &p) { return p.species == species; });
@@ -59,6 +114,7 @@ SpeciesParams BoidSimulation::getGlobalSpeciesParams(const std::string species) 
 }
 
 void BoidSimulation::setGlobalSpeciesParams(const SpeciesParams &params) {
+  auto &globalSpeciesParams = speciesParams_;
   auto it = std::find_if(globalSpeciesParams.begin(), globalSpeciesParams.end(),
                          [&params](const SpeciesParams &p) {
                            return p.species == params.species;
@@ -92,6 +148,7 @@ void BoidSimulation::setGlobalSpeciesParams(const SpeciesParams &params) {
 }
 
 void BoidSimulation::updateSpeciesEnvelopes() {
+  const auto &globalSpeciesParams = speciesParams_;
   const std::size_t speciesCount = globalSpeciesParams.size();
   if (speciesCount == 0) {
     speciesEnvelopes.clear();
@@ -184,6 +241,7 @@ void BoidSimulation::updateSpeciesEnvelopes() {
 }
 
 void BoidSimulation::updateSpeciesClusters(float dt) {
+  const auto &globalSpeciesParams = speciesParams_;
   const std::size_t speciesCount = globalSpeciesParams.size();
   if (speciesCount == 0) {
     speciesClusters.clear();
@@ -240,15 +298,25 @@ void BoidSimulation::updateSpeciesClusters(float dt) {
     const float leafRadius = glm::max(node->radius, 0.0f);
     const int leafBoidCount = static_cast<int>(glm::min<std::size_t>(leaf.count, 1000000000u));
 
+    if (leafBoidCount < kClusterMinLeafBoids) {
+      return;
+    }
+
     float captureRadius = glm::max(
         params.cohesionRange * kClusterCaptureRadiusScale,
         params.separationRange * 1.35f);
     // leaf 集計では中心が粗くなるため少し小さめにして誤吸い込みを抑える
     captureRadius = glm::clamp(captureRadius, 2.0f, 240.0f);
-    const float captureRadiusSq = captureRadius * captureRadius;
+    const float expectedLeafRadius = glm::max(params.separationRange * 0.75f, 0.5f);
+    const float normalizedLeafRadius = glm::max(leafRadius / expectedLeafRadius, 1.0f);
+    const float compactness = static_cast<float>(leafBoidCount) /
+                              (normalizedLeafRadius * normalizedLeafRadius * normalizedLeafRadius);
+    if (compactness < 0.75f) {
+      return;
+    }
 
     int bestIndex = -1;
-    float bestScore = captureRadiusSq;
+    float bestScore = captureRadius * captureRadius;
     const float velLen2 = glm::length2(vel);
     const glm::vec3 velDir = velLen2 > 1e-6f
                                  ? vel * (1.0f / glm::sqrt(velLen2))
@@ -261,7 +329,10 @@ void BoidSimulation::updateSpeciesClusters(float dt) {
       }
       const glm::vec3 diff = pos - cluster.center;
       const float distSq = glm::dot(diff, diff);
-      if (distSq > captureRadiusSq) {
+      const float matchRadius = glm::clamp(
+          glm::max(params.separationRange * 1.2f, cluster.radius + leafRadius),
+          2.0f, captureRadius);
+      if (distSq > matchRadius * matchRadius) {
         continue;
       }
       float score = distSq;
@@ -295,10 +366,14 @@ void BoidSimulation::updateSpeciesClusters(float dt) {
         bestIndex = static_cast<int>(clusters.size()) - 1;
       } else if (!clusters.empty()) {
         int weakest = 0;
-        float weakestWeight = clusters[0].weight;
-        for (int c = 1; c < static_cast<int>(clusters.size()); ++c) {
-          if (clusters[c].weight < weakestWeight) {
-            weakestWeight = clusters[c].weight;
+        float weakestScore = std::numeric_limits<float>::max();
+        for (int c = 0; c < static_cast<int>(clusters.size()); ++c) {
+          const int staleFrames = frameCount - clusters[c].lastUpdateFrame;
+          const float candidateScore = staleFrames > kClusterDebugMaxStaleFrames
+                                           ? -static_cast<float>(staleFrames)
+                                           : clusters[c].weight;
+          if (candidateScore < weakestScore) {
+            weakestScore = candidateScore;
             weakest = c;
           }
         }
@@ -335,6 +410,11 @@ void BoidSimulation::updateSpeciesClusters(float dt) {
   for (std::size_t sid = 0; sid < speciesCount; ++sid) {
     const SpeciesParams &params = globalSpeciesParams[sid];
     auto &clusters = speciesClusters[sid];
+    glm::vec3 previousWeightedCenter(0.0f);
+    const bool shouldDampClusterDrift = !params.schoolPullEnabled;
+    const bool hadPreviousWeightedCenter =
+        shouldDampClusterDrift &&
+        computeActiveWeightedCenter(clusters, previousWeightedCenter);
     for (auto &cluster : clusters) {
       if (cluster.frameContributionCount > 0) {
         const float invCount =
@@ -356,13 +436,13 @@ void BoidSimulation::updateSpeciesClusters(float dt) {
             0.75f, 240.0f);
         const float hitBlend = glm::clamp(
             decayPerFrame * static_cast<float>(cluster.frameContributionCount),
-            0.05f, 0.85f);
+          0.04f, 0.35f);
         cluster.center = glm::mix(cluster.center, samplePos, hitBlend);
         cluster.avgVelocity = glm::mix(cluster.avgVelocity, sampleVel, hitBlend);
-        cluster.radius = glm::mix(cluster.radius, radiusTarget, 0.25f);
-        cluster.weight =
-            glm::clamp(cluster.weight + static_cast<float>(cluster.frameContributionCount),
-                       0.0f, 50000.0f);
+        cluster.radius = glm::mix(cluster.radius, radiusTarget, 0.12f);
+        cluster.weight = glm::mix(
+          cluster.weight,
+          static_cast<float>(cluster.frameContributionCount), 0.18f);
         cluster.lastUpdateFrame = frameCount;
         cluster.active = true;
       } else {
@@ -378,6 +458,36 @@ void BoidSimulation::updateSpeciesClusters(float dt) {
       cluster.frameSumLeafRadius = 0.0f;
       cluster.frameSumVelocity = glm::vec3(0.0f);
     }
+
+    glm::vec3 updatedWeightedCenter(0.0f);
+    if (hadPreviousWeightedCenter &&
+        computeActiveWeightedCenter(clusters, updatedWeightedCenter)) {
+      const glm::vec3 sharedDrift = updatedWeightedCenter - previousWeightedCenter;
+      const float sharedDriftLen2 = glm::dot(sharedDrift, sharedDrift);
+      if (sharedDriftLen2 > 1e-6f) {
+        const float driftDamping =
+            glm::clamp(decayPerFrame * kClusterSharedDriftDampingScale, 0.02f, 0.08f);
+        const glm::vec3 correction = sharedDrift * driftDamping;
+        for (auto &cluster : clusters) {
+          if (!cluster.active) {
+            continue;
+          }
+          cluster.center -= correction;
+        }
+      }
+    }
+
+    std::stable_sort(
+        clusters.begin(), clusters.end(),
+        [&](const SpeciesCluster &a, const SpeciesCluster &b) {
+          if (a.active != b.active) {
+            return a.active && !b.active;
+          }
+          if (a.lastUpdateFrame != b.lastUpdateFrame) {
+            return a.lastUpdateFrame > b.lastUpdateFrame;
+          }
+          return a.weight > b.weight;
+        });
   }
 
   // 中身が更新されたので、次に JS が読むタイミングで再パックする
@@ -432,7 +542,8 @@ void BoidSimulation::rebuildSpeciesClusterDebugBuffer() {
   for (std::size_t sid = 0; sid < speciesClusters.size(); ++sid) {
     const auto &clusters = speciesClusters[sid];
     for (const auto &cluster : clusters) {
-      if (!cluster.active) {
+      if (!isFreshCluster(cluster, frameCount, kClusterDebugMaxStaleFrames,
+                          kClusterDebugMinWeight)) {
         continue;
       }
 
@@ -466,7 +577,8 @@ void BoidSimulation::rebuildSpeciesSchoolClusterDebugBuffer() {
   for (std::size_t sid = 0; sid < speciesSchoolClusters.size(); ++sid) {
     const auto &schools = speciesSchoolClusters[sid];
     for (const auto &school : schools) {
-      if (!school.active) {
+      if (!isFreshCluster(school, frameCount, kClusterDebugMaxStaleFrames,
+                          kClusterDebugMinWeight)) {
         continue;
       }
 
@@ -517,7 +629,7 @@ BoidSimulation::BoidSimulation()
     : root(nullptr), frameCount(0), splitIndex(0), mergeIndex(0),
   // 以前は JS 側から buildSpatialIndex(16) として明示指定していた。
   // build を引数なしに統一したため、デフォルトを 16 に揃えて挙動/性能を保つ。
-  maxBoidsPerUnit(16) {}
+  maxBoidsPerUnit(16), randomEngine_(randomSeed_) {}
 
 BoidSimulation::~BoidSimulation() {
   if (root) {
@@ -543,6 +655,7 @@ BoidUnit *BoidSimulation::getUnitFromPool() {
     unit->simpleDensity = 0.0f;
     unit->frameCount = 0;
     unit->speciesId = -1;
+    unit->simulation = this;
     unit->buf = &buf;
 
     return unit;
@@ -550,6 +663,7 @@ BoidUnit *BoidSimulation::getUnitFromPool() {
 
   // プールが空の場合は新規作成
   BoidUnit *unit = new BoidUnit();
+  unit->simulation = this;
   unit->buf = &buf;
   unit->simpleDensity = 0.0f;
   return unit;
@@ -666,6 +780,7 @@ void BoidSimulation::build() {
     returnNodeToPool(root);
   }
   root = getUnitFromPool();
+  root->simulation = this;
   root->buf = &buf; // 中央バッファを共有
   treeSpatialIndex_.setRoot(root);
 
@@ -819,6 +934,8 @@ void BoidSimulation::buildRecursive(BoidUnit *node, const std::vector<int> &indi
   auto *rightChild = getUnitFromPool();
   leftChild->buf = node->buf;
   rightChild->buf = node->buf;
+  leftChild->simulation = this;
+  rightChild->simulation = this;
 
   node->children.push_back(leftChild);
   node->children.push_back(rightChild);
@@ -959,6 +1076,29 @@ void BoidSimulation::update(float dt) {
 
 }
 
+void BoidSimulation::updateFixedStep(float simulationDt, float realDt) {
+  const float stepDt = simulationDt > 0.0f ? simulationDt : fixedTimeStep_;
+  if (!(stepDt > 0.0f)) {
+    return;
+  }
+
+  const float clampedRealDt =
+      (std::isfinite(realDt) && realDt > 0.0f) ? glm::min(realDt, 0.25f) : 0.0f;
+  simulationDtAccumulator_ += clampedRealDt;
+
+  constexpr int kMaxSubsteps = 8;
+  int substeps = 0;
+  while (simulationDtAccumulator_ >= stepDt && substeps < kMaxSubsteps) {
+    update(stepDt);
+    simulationDtAccumulator_ -= stepDt;
+    ++substeps;
+  }
+
+  if (substeps == kMaxSubsteps && simulationDtAccumulator_ > stepDt) {
+    simulationDtAccumulator_ = glm::min(simulationDtAccumulator_, stepDt);
+  }
+}
+
 // 分割判定を局所的に適用
 void BoidSimulation::trySplitRecursive(BoidUnit *node) {
   if (!node)
@@ -972,6 +1112,7 @@ void BoidSimulation::trySplitRecursive(BoidUnit *node) {
 void BoidSimulation::initializeBoids(
     const std::vector<SpeciesParams> &speciesParamsList, float posRange,
     float velRange) {
+  auto &globalSpeciesParams = speciesParams_;
   // globalSpeciesParams を更新
   try {
     globalSpeciesParams = speciesParamsList; // コピー操作
@@ -1005,8 +1146,7 @@ void BoidSimulation::initializeBoids(
 
   // 各種族の個体を生成
   int offset = 0;
-  std::random_device rd;
-  std::mt19937 gen(rd());
+  randomEngine_.seed(randomSeed_);
   std::uniform_real_distribution<float> posDist(-posRange, posRange);
   std::uniform_real_distribution<float> velDist(-velRange, velRange);
 
@@ -1024,8 +1164,9 @@ void BoidSimulation::initializeBoids(
 
     for (int i = 0; i < species.count; ++i) {
       buf.positions[offset] =
-          glm::vec3(posDist(gen), posDist(gen), posDist(gen));
-      const glm::vec3 v = glm::vec3(velDist(gen), velDist(gen), velDist(gen));
+        glm::vec3(posDist(randomEngine_), posDist(randomEngine_), posDist(randomEngine_));
+      const glm::vec3 v =
+        glm::vec3(velDist(randomEngine_), velDist(randomEngine_), velDist(randomEngine_));
       buf.velocities[offset] = v;
       speciesVelocitySum += v;
       buf.ids[offset] = offset;
@@ -1050,6 +1191,7 @@ void BoidSimulation::initializeBoids(
     returnNodeToPool(root);
   }
   root = getUnitFromPool();
+  root->simulation = this;
   root->buf = &buf;
   treeSpatialIndex_.setRoot(root);
 
@@ -1063,6 +1205,7 @@ void BoidSimulation::initializeBoids(
 
 // BoidSimulation::setFlockSize
 void BoidSimulation::setFlockSize(int newSize, float posRange, float velRange) {
+  const auto &globalSpeciesParams = speciesParams_;
   int current = static_cast<int>(buf.positions.size());
 
   // 個体を減らす
@@ -1091,17 +1234,15 @@ void BoidSimulation::setFlockSize(int newSize, float posRange, float velRange) {
     int addN = newSize - current;
     buf.reserveAll(newSize);
 
-    std::random_device rd;
-    std::mt19937 gen(rd());
     std::uniform_real_distribution<float> posDist(-posRange, posRange);
     std::uniform_real_distribution<float> velDist(-velRange, velRange);
 
     for (int k = 0; k < addN; ++k) {
       int i = current + k;
       const glm::vec3 pos =
-          glm::vec3(posDist(gen), posDist(gen), posDist(gen));
+        glm::vec3(posDist(randomEngine_), posDist(randomEngine_), posDist(randomEngine_));
       const glm::vec3 vel =
-          glm::vec3(velDist(gen), velDist(gen), velDist(gen));
+        glm::vec3(velDist(randomEngine_), velDist(randomEngine_), velDist(randomEngine_));
       buf.positions.push_back(pos);
       buf.positionsWrite.push_back(pos);
       buf.velocities.push_back(vel);
@@ -1151,6 +1292,7 @@ void BoidSimulation::setFlockSize(int newSize, float posRange, float velRange) {
   // ルートが中央バッファを指していることを保証
   if (!root)
     root = getUnitFromPool();
+  root->simulation = this;
   root->buf = &buf;
 
   // 再構築
@@ -1380,6 +1522,7 @@ struct SchoolComponent {
 } // namespace
 
 void BoidSimulation::updateSpeciesSchoolClusters(float dt) {
+  const auto &globalSpeciesParams = speciesParams_;
   const std::size_t speciesCount = globalSpeciesParams.size();
   if (speciesCount == 0) {
     speciesSchoolClusters.clear();
@@ -1399,13 +1542,17 @@ void BoidSimulation::updateSpeciesSchoolClusters(float dt) {
     auto &schools = speciesSchoolClusters[sid];
     const auto &smallClusters = speciesClusters[sid];
     const SpeciesParams &params = globalSpeciesParams[sid];
+    glm::vec3 previousWeightedCenter(0.0f);
+    const bool hadPreviousWeightedCenter =
+        computeActiveWeightedCenter(schools, previousWeightedCenter);
 
     // active な小クラスターをインデックス化（最大 32 前提）
     int activeIndices[32];
     int activeCount = 0;
     for (int i = 0; i < static_cast<int>(smallClusters.size()) && activeCount < 32; ++i) {
       const auto &c = smallClusters[i];
-      if (!c.active || c.weight < 0.25f) {
+      if (!isFreshCluster(c, frameCount, kClusterDebugMaxStaleFrames,
+                          kClusterDebugMinWeight)) {
         continue;
       }
       activeIndices[activeCount++] = i;
@@ -1509,8 +1656,12 @@ void BoidSimulation::updateSpeciesSchoolClusters(float dt) {
     }
 
     for (int c = 0; c < componentCount; ++c) {
-      // ノイズ成分を弾く：単独小クラスターで重みが弱いものは除外
-      if (compMembers[c] <= 1 && compWeight[c] < 200.0f) {
+      // ノイズ成分を弾く：単独/疎な成分は school へ昇格させない。
+      const bool weakSingleton = compMembers[c] <= 1 && compWeight[c] < 240.0f;
+      const bool looseComponent =
+          compMembers[c] < 3 &&
+          compRadius[c] > glm::max(params.cohesionRange * 1.35f, 40.0f);
+      if (weakSingleton || looseComponent) {
         continue;
       }
 
@@ -1540,10 +1691,37 @@ void BoidSimulation::updateSpeciesSchoolClusters(float dt) {
       if (best >= 0) {
         auto &school = schools[best];
         schoolUsed[best] = true;
-        school.center = glm::mix(school.center, compCenter[c], hitAlpha);
-        school.avgVelocity = glm::mix(school.avgVelocity, compVel[c], hitAlpha);
-        school.radius = glm::mix(school.radius, compRadius[c], 0.25f);
-        school.weight = glm::mix(school.weight, compWeight[c], 0.15f);
+        const float componentReliability = glm::clamp(
+          0.16f * static_cast<float>(glm::clamp(compMembers[c], 1, 6)) +
+            0.0007f * compWeight[c],
+          0.0f, 1.0f);
+        school.trackingConfidence = glm::mix(
+          school.trackingConfidence, componentReliability,
+          glm::clamp(baseAlpha * kSchoolConfidenceRiseScale, 0.03f, 0.10f));
+        const float centerAcceptance =
+          glm::smoothstep(0.20f, 0.85f, school.trackingConfidence);
+
+        const glm::vec3 previousCenter = school.center;
+        glm::vec3 nextCenter = glm::mix(
+          school.center, compCenter[c],
+          glm::max(hitAlpha * centerAcceptance, 0.008f));
+        const glm::vec3 centerDelta = nextCenter - previousCenter;
+        const float centerDeltaLen2 = glm::dot(centerDelta, centerDelta);
+        const float maxCenterStep = glm::max(
+          compRadius[c] * kSchoolCenterMaxStepRadiusScale *
+            glm::mix(0.35f, 1.0f, centerAcceptance),
+          glm::max(params.maxSpeed, 0.05f) * safeDt *
+            kSchoolCenterMaxStepSpeedScale *
+            glm::mix(0.35f, 1.0f, centerAcceptance));
+        if (centerDeltaLen2 > maxCenterStep * maxCenterStep) {
+          nextCenter = previousCenter +
+                 centerDelta * (maxCenterStep / glm::sqrt(centerDeltaLen2));
+        }
+        school.center = nextCenter;
+
+        school.avgVelocity = glm::mix(school.avgVelocity, compVel[c], 0.10f);
+        school.radius = glm::mix(school.radius, compRadius[c], 0.14f);
+        school.weight = glm::mix(school.weight, compWeight[c], 0.12f);
         school.lastUpdateFrame = frameCount;
         school.active = true;
       } else {
@@ -1553,6 +1731,9 @@ void BoidSimulation::updateSpeciesSchoolClusters(float dt) {
         school.avgVelocity = compVel[c];
         school.radius = compRadius[c];
         school.weight = compWeight[c];
+        school.trackingConfidence = glm::clamp(
+          0.08f + 0.12f * static_cast<float>(glm::clamp(compMembers[c], 1, 4)),
+          0.0f, 0.45f);
         school.lastUpdateFrame = frameCount;
         school.active = true;
 
@@ -1560,14 +1741,29 @@ void BoidSimulation::updateSpeciesSchoolClusters(float dt) {
           schools.push_back(school);
         } else if (!schools.empty()) {
           int weakest = 0;
-          float weakestWeight = schools[0].weight;
-          for (int s = 1; s < static_cast<int>(schools.size()); ++s) {
-            if (schools[s].weight < weakestWeight) {
-              weakestWeight = schools[s].weight;
+          float weakestScore = std::numeric_limits<float>::max();
+          for (int s = 0; s < static_cast<int>(schools.size()); ++s) {
+            const int staleFrames = frameCount - schools[s].lastUpdateFrame;
+            const float candidateScore = staleFrames > kClusterDebugMaxStaleFrames
+                                             ? -static_cast<float>(staleFrames)
+                                             : schools[s].weight;
+            if (candidateScore < weakestScore) {
+              weakestScore = candidateScore;
               weakest = s;
             }
           }
-          schools[weakest] = school;
+          const int staleFrames = frameCount - schools[weakest].lastUpdateFrame;
+          const bool replaceAllowed =
+              staleFrames >= kSchoolReplaceMinStaleFrames ||
+              schools[weakest].weight < kClusterDebugMinWeight;
+          if (replaceAllowed) {
+            school.center = schools[weakest].center;
+            school.avgVelocity = glm::vec3(0.0f);
+            school.radius = glm::mix(schools[weakest].radius, compRadius[c], 0.10f);
+            school.weight = glm::mix(schools[weakest].weight, compWeight[c], 0.10f);
+            school.trackingConfidence = 0.08f;
+            schools[weakest] = school;
+          }
         }
       }
     }
@@ -1583,11 +1779,44 @@ void BoidSimulation::updateSpeciesSchoolClusters(float dt) {
       // 直近でヒットしていない場合は徐々に弱める
       if ((frameCount - s.lastUpdateFrame) > 2) {
         s.weight *= (1.0f - baseAlpha * 1.2f);
+        s.trackingConfidence *=
+            glm::clamp(1.0f - baseAlpha * kSchoolConfidenceDecayScale, 0.92f, 0.995f);
       }
       if ((frameCount - s.lastUpdateFrame) > kClusterRetainFrames || s.weight < 0.25f) {
         s.active = false;
+        s.trackingConfidence = 0.0f;
       }
     }
+
+    glm::vec3 updatedWeightedCenter(0.0f);
+    if (hadPreviousWeightedCenter &&
+        computeActiveWeightedCenter(schools, updatedWeightedCenter)) {
+      const glm::vec3 sharedDrift = updatedWeightedCenter - previousWeightedCenter;
+      const float sharedDriftLen2 = glm::dot(sharedDrift, sharedDrift);
+      if (sharedDriftLen2 > 1e-6f) {
+        const float driftDamping =
+            glm::clamp(baseAlpha * kSchoolSharedDriftDampingScale, 0.01f, 0.04f);
+        const glm::vec3 correction = sharedDrift * driftDamping;
+        for (auto &school : schools) {
+          if (!school.active) {
+            continue;
+          }
+          school.center -= correction;
+        }
+      }
+    }
+
+    std::stable_sort(
+        schools.begin(), schools.end(),
+        [&](const SpeciesSchoolCluster &a, const SpeciesSchoolCluster &b) {
+          if (a.active != b.active) {
+            return a.active && !b.active;
+          }
+          if (a.lastUpdateFrame != b.lastUpdateFrame) {
+            return a.lastUpdateFrame > b.lastUpdateFrame;
+          }
+          return a.weight > b.weight;
+        });
   }
 
   // 中身が更新されたので、次に JS が読むタイミングで再パックする

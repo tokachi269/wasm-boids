@@ -13,6 +13,7 @@
 #include "species_params.h"
 
 struct SoABuffers;
+class BoidSimulation;
 
 class BoidUnit
 {
@@ -20,6 +21,7 @@ public:
     static int nextId; // 次の ID を管理する静的変数
     int id;            // 各 BoidUnit のユニークな ID
     int speciesId = -1;
+    BoidSimulation *simulation = nullptr;
     SoABuffers *buf = nullptr;
     std::vector<int> indices;
 

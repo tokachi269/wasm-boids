@@ -87,7 +87,8 @@ value_object<SpeciesParams>("SpeciesParams")
     .field("bodyRadius", &SpeciesParams::bodyRadius)
     .field("predatorAlertRadius", &SpeciesParams::predatorAlertRadius)
     .field("isPredator", &SpeciesParams::isPredator)
-    .field("densityReturnStrength", &SpeciesParams::densityReturnStrength);
+    .field("densityReturnStrength", &SpeciesParams::densityReturnStrength)
+    .field("schoolPullEnabled", &SpeciesParams::schoolPullEnabled);
 
 value_object<SimulationTuningParams>("SimulationTuningParams")
     .field("threatDecay", &SimulationTuningParams::threatDecay)
@@ -112,6 +113,7 @@ value_object<SimulationTuningParams>("SimulationTuningParams")
         .constructor<>()
         .function("build", &BoidSimulation::build)
         .function("update", &BoidSimulation::update)
+        .function("updateFixedStep", &BoidSimulation::updateFixedStep)
         .function("setFlockSize", &BoidSimulation::setFlockSize)
         .function("getPositionsPtr", &BoidSimulation::getPositionsPtr)
         .function("getVelocitiesPtr", &BoidSimulation::getVelocitiesPtr)
@@ -119,7 +121,11 @@ value_object<SimulationTuningParams>("SimulationTuningParams")
         .function("initializeBoids", &BoidSimulation::initializeBoids)
         .function("getGlobalSpeciesParams", &BoidSimulation::getGlobalSpeciesParams)
         .function("setGlobalSpeciesParams", &BoidSimulation::setGlobalSpeciesParams)
-        .property("root", &BoidSimulation::root, allow_raw_pointers());
+        .function("getRoot", &BoidSimulation::getRoot, allow_raw_pointers())
+        .function("setRandomSeed", &BoidSimulation::setRandomSeed)
+        .function("getRandomSeed", &BoidSimulation::getRandomSeed)
+        .function("setFixedTimeStep", &BoidSimulation::setFixedTimeStep)
+        .function("getFixedTimeStep", &BoidSimulation::getFixedTimeStep);
 
     class_<BoidUnit>("BoidUnit")
         .property("center", &BoidUnit::center)
