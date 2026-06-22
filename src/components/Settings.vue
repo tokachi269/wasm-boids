@@ -106,6 +106,12 @@
         </div>
 
         <div class="setting-row">
+          <label :title="settingHelp.schoolPullEnabled">大クラスタ引力を反映<br />(School Pull Enabled):</label>
+          <input type="checkbox" v-model="settings.schoolPullEnabled" :title="settingHelp.schoolPullEnabled" />
+          <span :title="settingHelp.schoolPullEnabled">{{ settings.schoolPullEnabled }}</span>
+        </div>
+
+        <div class="setting-row">
           <label :title="settingHelp.maxSpeed">最大速度<br />(Max Speed):</label>
           <input type="range" v-model.number="settings.maxSpeed" min="0.1" max="2" step="0.01" :title="settingHelp.maxSpeed" />
           <span v-if="!editingMaxSpeed" class="editable-value" @click="startEditMaxSpeed" :title="settingHelp.maxSpeed + '（クリックして編集）'">{{ settings.maxSpeed }}</span>
@@ -199,6 +205,7 @@ const settingHelp = {
   alignmentRange: '整列を効かせる距離。近い仲間だけを見るか、少し遠くまで見るかが変わる。',
   predatorAlertRadius: '捕食者に反応し始める距離。大きいほど早めに逃げる。',
   densityReturnStrength: '群れの密度が崩れたときに、元の密度へ戻ろうとする強さ。',
+  schoolPullEnabled: 'この種族に対して大クラスタ引力係数を使うかどうか。OFF にすると大群側へ寄る補助だけ止まる。',
   maxSpeed: '移動速度の上限。',
   maxTurnAngle: '移動距離あたりの曲がりやすさの上限。大きいほど小回りが利く（速度を変えても曲がり方が崩れにくい）。',
   maxNeighbors: '近傍として見る最大数。小さいと局所的、大きいと全体的な動きになる。',

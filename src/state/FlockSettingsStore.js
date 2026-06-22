@@ -30,6 +30,7 @@ const DEFAULT_SPECIES_FALLBACK = {
   isPredator: false,
   speciesId: 0,
   densityReturnStrength: 10.0,
+  schoolPullEnabled: true,
 };
 
 /**
@@ -385,6 +386,7 @@ function sanitizeSpeciesEntry(entry = {}, fallback = DEFAULT_SPECIES_FALLBACK) {
   const speciesName = typeof merged.species === 'string' ? merged.species.trim() : '';
   result.species = speciesName || base.species || DEFAULT_SPECIES_FALLBACK.species;
   result.isPredator = Boolean(merged.isPredator);
+  result.schoolPullEnabled = Boolean(merged.schoolPullEnabled);
 
   return result;
 }

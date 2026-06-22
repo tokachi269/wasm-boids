@@ -146,6 +146,10 @@
                   />
                   尾びれアニメーションを有効化
                 </label>
+                <label class="debug-checkbox" :title="debugHelp.enableStats">
+                  <input type="checkbox" v-model="debugControls.enableStats" :title="debugHelp.enableStats" />
+                  stats-gl を有効化
+                </label>
                 <label class="debug-checkbox" :title="debugHelp.showSpeciesEnvelopes">
                   <input type="checkbox" v-model="showSpeciesEnvelopes" :title="debugHelp.showSpeciesEnvelopes" />
                   種族エンベロープ表示
@@ -269,13 +273,12 @@ const useLowSpecPreset =
 // GPU/ポストプロセスがボトルネックになりやすい。
 // 60fpsを優先し、環境に応じて pixelRatio の上限を設ける。
 const MAX_RENDER_PIXEL_RATIO = useLowSpecPreset ? 1.0 : 1.5;
-const MOBILE_RENDER_PIXEL_RATIO = 0.85;
 // 画面ガワのデフォルト（画像の値）
 // NOTE: 個体数は重い環境でも動かしやすい値を優先する。
-const defaultBoidCount = useLowSpecPreset ? 5000 : 10000;
+const defaultBoidCount = useLowSpecPreset ? 10000 : 10000;
 
 function isConservativeRendererMode() {
-  return deviceProfile.isMobile || webglContextLost || webglRecoveryAttempt > 0;
+  return webglContextLost || webglRecoveryAttempt > 0;
 }
 
 function shouldUseAntialias() {
@@ -283,21 +286,14 @@ function shouldUseAntialias() {
 }
 
 function shouldUseUnderwaterEnvMap() {
-  return !deviceProfile.isMobile && webglRecoveryAttempt === 0;
+  return webglRecoveryAttempt === 0;
 }
 
 function getEffectivePixelRatioCap() {
-  if (deviceProfile.isMobile) {
-    return MOBILE_RENDER_PIXEL_RATIO;
-  }
   if (webglContextLost || webglRecoveryAttempt > 0) {
     return Math.min(MAX_RENDER_PIXEL_RATIO, 1.0);
   }
   return MAX_RENDER_PIXEL_RATIO;
-}
-
-function shouldEnableStatsOverlay() {
-  return !deviceProfile.isMobile;
 }
 
 const DEFAULT_SETTINGS = [
@@ -307,7 +303,7 @@ const DEFAULT_SETTINGS = [
     // 画面ガワの初期値（画像の値）
     cohesion: 3.66, // 凝集
     cohesionRange: 5, // 凝集範囲
-    separation: 2.15, // 分離
+    separation: 1.0, // 分離
     separationRange: 0.4, // 分離範囲
     alignment: 8.0, // 整列
     alignmentRange: 1, // 整列範囲
@@ -315,11 +311,12 @@ const DEFAULT_SETTINGS = [
     maxTurnAngle: 0.75, // 最大曲がり（曲率）
     maxNeighbors: 4, // 最大近傍数
     horizontalTorque: 0.03, // 水平化トルク
-    torqueStrength: 1.0, // 回転トルク強度
+    torqueStrength: 1.5, // 回転トルク強度
     lambda: 0.102, // 速度調整係数（減衰係数）
     tau: 0.5, // 記憶時間
-    predatorAlertRadius: 1.0, // 捕食者を早めに察知して空隙を作る距離
+    predatorAlertRadius: 2.5, // 捕食者を早めに察知して空隙を作る距離
     densityReturnStrength: 0.0, // 密度復帰強度
+    schoolPullEnabled: true, // 大クラスタ引力係数を反映するか
     isPredator: false,
   },
   {
@@ -341,15 +338,15 @@ const DEFAULT_SETTINGS = [
     tau: 1.0, // 捕食者は常に追いかける
     horizontalTorque: 0.01,
     torqueStrength: 2.5,
+    schoolPullEnabled: false,
     isPredator: true, // 捕食者フラグ
   },
 ];
-
 const DEFAULT_TUNING_SETTINGS = {
-  threatDecay: 1.0, // 脅威減衰速度（1/sec）
-  maxEscapeWeight: 0.9, // 逃避方向の最大割合（0〜1）
-  baseEscapeStrength: 12.0, // 逃避舵取り強度（目標速度へ寄せる強さ）
-  fastAttractStrength: 2.0, // 近傍不足時の補助凝集強度（0で無効）
+  threatDecay: 0.7, // 脅威減衰速度（1/sec）。少し長めに残して空隙を維持
+  maxEscapeWeight: 0.95, // 逃避方向の最大割合（0〜1）
+  baseEscapeStrength: 8.5, // 逃避舵取り強度（目標速度へ寄せる強さ）
+  fastAttractStrength: 1.0, // 近傍不足時の補助凝集強度（0で無効）
   schoolPullCoefficient: 0.00005, // 大クラスタ引力係数
 };
   
@@ -368,6 +365,7 @@ const debugHelp = {
   enableFogPipeline: '見た目（フォグ/SSAO/ブルーム）を有効にします。重い場合は OFF。',
   enableShadows: '影描画を有効にします。見た目は良くなりますが負荷が上がりやすいです。',
   enableTailAnimation: '尾びれのアニメーションを有効にします。負荷が気になるなら OFF。',
+  enableStats: 'stats-gl の計測 HUD を有効にします。通常は OFF で十分です。',
   showSpeciesEnvelopes: '各種族の分布（中心/半径）を可視化します。',
   showSpeciesClusters: 'クラスタ検出結果を可視化します。',
   showSpeciesSchoolClusters: '大クラスタ（大きな群れ）の結果を可視化します。',
@@ -479,6 +477,9 @@ const startupCameraLookAt = {
   controlsHooked: false,
   startedAtMs: 0,
   maxDurationMs: 6000,
+  lastUserInteractionAtMs: 0,
+  resumeAfterIdleMs: 60000,
+  fadeInDurationMs: 10000,
   smoothingSpeed: 4.0, // 大きいほど速く追従（指数平滑）
 };
 
@@ -588,8 +589,9 @@ const schoolClusterColor = new THREE.Color();
 // GPU 負荷計測用に主要機能を切り替えるデバッグトグル群
 const debugControls = reactive({
   enableFogPipeline: !deviceProfile.isMobile,
-  enableShadows: !deviceProfile.isMobile,
+  enableShadows: true,
   enableTailAnimation: true,
+  enableStats: false,
 });
 
 /**
@@ -640,6 +642,7 @@ function applyWorldAxisGridState() {
 
 let maxDepth = 1;
 let stats = null; // stats-gl パフォーマンス表示
+let statsInitPromise = null;
 let glContext = null;
 let frameCounter = 0;
 let flockReinitTimer = null; // 群れ再初期化の遅延タイマー
@@ -688,6 +691,26 @@ function restoreCameraStateAfterRecovery() {
   // 復旧後は自動注視を無効化（ユーザーが見ていた視点を優先）。
   startupCameraLookAt.active = false;
   startupCameraLookAt.userInteracted = true;
+  startupCameraLookAt.lastUserInteractionAtMs = performance.now();
+}
+
+function markCameraInteraction() {
+  startupCameraLookAt.active = false;
+  startupCameraLookAt.userInteracted = true;
+  startupCameraLookAt.lastUserInteractionAtMs = performance.now();
+}
+
+function resumeAutoLookAtIfIdle() {
+  if (startupCameraLookAt.active || !startupCameraLookAt.userInteracted) {
+    return;
+  }
+  const idleMs = performance.now() - startupCameraLookAt.lastUserInteractionAtMs;
+  if (idleMs < startupCameraLookAt.resumeAfterIdleMs) {
+    return;
+  }
+  startupCameraLookAt.active = true;
+  startupCameraLookAt.userInteracted = false;
+  startupCameraLookAt.startedAtMs = performance.now();
 }
 
 function shouldAttemptWebglRecovery() {
@@ -729,6 +752,112 @@ function positionStatsOverlay(element) {
   element.style.height = "48px";
   element.style.pointerEvents = "auto";
   element.style.transform = "none";
+}
+
+function getStatsElement() {
+  return (
+    (typeof stats?.domElement !== "undefined" ? stats.domElement : null) ||
+    (typeof stats?.getDom === "function" ? stats.getDom() : null) ||
+    stats?.dom ||
+    stats?.container ||
+    stats?.wrapper ||
+    null
+  );
+}
+
+function setStatsOverlayVisibility(visible) {
+  const statsElement = getStatsElement();
+  if (!statsElement) {
+    return;
+  }
+  if (visible) {
+    if (!statsElement.parentElement) {
+      document.body.appendChild(statsElement);
+    }
+    positionStatsOverlay(statsElement);
+    statsElement.style.display = "";
+    return;
+  }
+  if (statsElement.parentElement) {
+    statsElement.parentElement.removeChild(statsElement);
+  }
+}
+
+function ensureStatsInitialized() {
+  if (stats) {
+    setStatsOverlayVisibility(true);
+    return Promise.resolve(stats);
+  }
+  if (statsInitPromise) {
+    return statsInitPromise;
+  }
+
+  stats = new StatsGl({
+    trackGPU: true,
+    trackHz: true,
+    trackCPT: true,
+    logsPerSecond: 4,
+    graphsPerSecond: 30,
+    samplesLog: 40,
+    samplesGraph: 10,
+    precision: 2,
+    horizontal: true,
+    minimal: false,
+    mode: 0,
+  });
+
+  const statsInitTarget = renderer?.domElement ?? document.body;
+  const initPromise =
+    stats && typeof stats.init === "function"
+      ? Promise.resolve(stats.init(statsInitTarget))
+      : Promise.resolve();
+
+  statsInitPromise = initPromise
+    .then(() => {
+      if (renderer && typeof stats?.patchThreeRenderer === "function" && !stats?.threeRendererPatched) {
+        stats.patchThreeRenderer(renderer);
+      }
+      setStatsOverlayVisibility(debugControls.enableStats);
+      return stats;
+    })
+    .catch((error) => {
+      console.error("Failed to initialize stats-gl:", error);
+      setStatsOverlayVisibility(debugControls.enableStats);
+      return stats;
+    })
+    .finally(() => {
+      statsInitPromise = null;
+    });
+
+  return statsInitPromise;
+}
+
+function applyStatsDebugState() {
+  if (debugControls.enableStats) {
+    void ensureStatsInitialized();
+    return;
+  }
+  setStatsOverlayVisibility(false);
+  if (!stats) {
+    return;
+  }
+  stats = null;
+  statsInitPromise = null;
+
+  if (!renderer) {
+    return;
+  }
+
+  snapshotCameraStateForRecovery();
+  const ok = initThreeJS();
+  if (!ok) {
+    scheduleWebglRecovery("stats-toggle");
+    return;
+  }
+  restoreCameraStateAfterRecovery();
+  if (boidAssetsReady) {
+    initInstancedBoids(cachedTotalBoidCount || totalBoids.value || 0);
+  }
 }
 
 /**
@@ -1120,10 +1249,14 @@ function initThreeJS() {
   startupCameraLookAt.active = true;
   startupCameraLookAt.userInteracted = false;
   startupCameraLookAt.startedAtMs = performance.now();
+  startupCameraLookAt.lastUserInteractionAtMs = startupCameraLookAt.startedAtMs;
   // controls は context 復旧で作り直されるため、毎回フックし直す。
   startupCameraLookAt.controlsHooked = true;
   controls.addEventListener("start", () => {
-    startupCameraLookAt.userInteracted = true;
+    markCameraInteraction();
+  });
+  controls.addEventListener("end", () => {
+    markCameraInteraction();
   });
 
   // 地面メッシュ追加
@@ -1226,6 +1359,7 @@ function computeSpeciesClusterWeightedCenter(clusterData, outCenter) {
 }
 
 function shouldAutoLookAtClusterCenter() {
+  resumeAutoLookAtIfIdle();
   if (!startupCameraLookAt.active || startupCameraLookAt.userInteracted) {
     return false;
   }
@@ -1243,7 +1377,15 @@ function updateStartupCameraLookAt(clusterData, deltaTime) {
 
   // deltaTime が極端に大きいフレームでは平滑係数が跳ねるので、上限を付ける。
   const safeDeltaTime = Math.min(Math.max(deltaTime, 0), 0.1);
-  const smoothing = 1.0 - Math.exp(-startupCameraLookAt.smoothingSpeed * safeDeltaTime);
+  const elapsedMs = Math.max(0, performance.now() - startupCameraLookAt.startedAtMs);
+  const fadeT = startupCameraLookAt.fadeInDurationMs > 0
+    ? Math.min(elapsedMs / startupCameraLookAt.fadeInDurationMs, 1)
+    : 1;
+  const fadeIn = fadeT < 0.5
+    ? 4 * fadeT * fadeT * fadeT
+    : 1 - Math.pow(-2 * fadeT + 2, 3) / 2;
+  const effectiveSmoothingSpeed = startupCameraLookAt.smoothingSpeed * (0.15 + 0.85 * fadeIn);
+  const smoothing = 1.0 - Math.exp(-effectiveSmoothingSpeed * safeDeltaTime);
 
   const hasTarget = computeSpeciesClusterWeightedCenter(
     clusterData,
@@ -1371,10 +1513,10 @@ function createUnderWaterEnvMap(rendererRef) {
   const height = 32;
   const data = new Uint8Array(width * height * 4);
 
-  // 上: 明るいカスティック青白  →  中: 淡い海青（低彩度）  →  下: 暗い中性グレー
-  const topR = 0x6c, topG = 0xcc, topB = 0xff;
-  const midR = 0x28, midG = 0x4a, midB = 0x60; // 彩度を落とした青灰
-  const botR = 0x10, botG = 0x18, botB = 0x20; // ほぼ中性の暗灰色
+  // 上: 明るいシアン寄りの水面反射  →  中: 海中の青  →  下: 深海寄りの青黒
+  const topR = 0x72, topG = 0xd8, topB = 0xff;
+  const midR = 0x1e, midG = 0x56, midB = 0x78;
+  const botR = 0x06, botG = 0x16, botB = 0x2c;
 
   for (let y = 0; y < height; y++) {
     // equirectangular では y=0 が上方向（天頂/水面）
@@ -2496,60 +2638,7 @@ onMounted(() => {
     console.log("Boid model loaded successfully.");
 
     boidAssetsReady = true;
-
-    stats = shouldEnableStatsOverlay()
-      ? new StatsGl({
-        trackGPU: true,
-        trackHz: true,
-        trackCPT: true,
-        logsPerSecond: 4,
-        graphsPerSecond: 30,
-        samplesLog: 40,
-        samplesGraph: 10,
-        precision: 2,
-        horizontal: true,
-        minimal: false,
-        mode: 0,
-      })
-      : null;
-
-    const statsInitTarget = renderer?.domElement ?? document.body;
-
-    const ensureStatsOverlay = () => {
-      const statsElement =
-        (typeof stats?.domElement !== "undefined" ? stats.domElement : null) ||
-        (typeof stats?.getDom === "function" ? stats.getDom() : null) ||
-        stats?.dom ||
-        stats?.container ||
-        stats?.wrapper ||
-        null;
-
-      if (statsElement) {
-        if (!statsElement.parentElement) {
-          document.body.appendChild(statsElement);
-        }
-        positionStatsOverlay(statsElement);
-      }
-    };
-
-    const initPromise =
-      stats && typeof stats.init === "function"
-        ? Promise.resolve(stats.init(statsInitTarget))
-        : Promise.resolve();
-
-    initPromise
-      .then(() => {
-        // WebGL context が取れていない場合は renderer が null になり得る。
-        // その場合は scheduleWebglRecovery 側で renderer 復旧後に patch する。
-        if (renderer && typeof stats?.patchThreeRenderer === "function") {
-          stats.patchThreeRenderer(renderer);
-        }
-        ensureStatsOverlay();
-      })
-      .catch((error) => {
-        console.error("Failed to initialize stats-gl:", error);
-        ensureStatsOverlay();
-      });
+    applyStatsDebugState();
 
     startSimulation();
     initBackgroundAudioPlayback();
@@ -2591,6 +2680,9 @@ onUnmounted(() => {
   }
 
   clearWebglRecoveryTimer();
+  setStatsOverlayVisibility(false);
+  stats = null;
+  statsInitPromise = null;
   disposeRendererAndPipeline();
 });
 
@@ -2612,6 +2704,13 @@ watch(
   () => debugControls.enableTailAnimation,
   () => {
     applyTailAnimationDebugState();
+  }
+);
+
+watch(
+  () => debugControls.enableStats,
+  () => {
+    applyStatsDebugState();
   }
 );
 
