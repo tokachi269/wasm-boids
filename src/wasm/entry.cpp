@@ -1,5 +1,6 @@
 #include "entry.h"
 #include "boids_simulation.h"
+#include "boids_parallel_config.h"
 #include "scale_utils.h"
 #include <cstdint>
 #include <iostream>
@@ -131,5 +132,73 @@ int EMSCRIPTEN_KEEPALIVE speciesSchoolClustersCount() {
 
 void syncReadToWriteBuffers() {
   BoidSimulation::instance().syncWriteFromReadBuffers();
+}
+
+void resetPhaseTimings() { BoidSimulation::instance().resetPhaseTimings(); }
+
+double phaseTimingMs(int phase) {
+  if (phase < 0 || phase >= BoidSimulation::kPhaseCount) {
+    return 0.0;
+  }
+  return BoidSimulation::instance().getPhaseTimings().ms[phase];
+}
+
+int phaseTimingCalls(int phase) {
+  if (phase < 0 || phase >= BoidSimulation::kPhaseCount) {
+    return 0;
+  }
+  return static_cast<int>(
+      BoidSimulation::instance().getPhaseTimings().calls[phase]);
+}
+
+double parallelTimingValue(int phase, int metric) {
+  if (phase < 0 || phase >= BoidSimulation::kParallelPhaseCount) {
+    return 0.0;
+  }
+  const auto timings = BoidSimulation::instance().getParallelTimings();
+  switch (metric) {
+  case 0:
+    return timings.taskMs[phase];
+  case 1:
+    return timings.maxTaskMs[phase];
+  case 2:
+    return timings.minTaskMs[phase];
+  case 3:
+    return timings.worstMaxOverMean[phase];
+  case 4:
+    return static_cast<double>(timings.tasks[phase]);
+  case 5:
+    return static_cast<double>(timings.frames[phase]);
+  default:
+    return 0.0;
+  }
+}
+
+void configureBenchmarkDiagnostics(unsigned int seed, int taskLimit,
+                                   bool parallelTiming) {
+  BoidSimulation::instance().setRandomSeed(seed);
+  setBoidsMaxTasksOverride(taskLimit > 0 ? static_cast<std::size_t>(taskLimit)
+                                         : 0);
+  BoidSimulation::instance().setParallelTimingEnabled(parallelTiming);
+}
+
+void beginLocalitySample() { BoidSimulation::instance().beginLocalitySample(); }
+void endLocalitySample() { BoidSimulation::instance().endLocalitySample(); }
+
+double localityValue(int kind, int metric) {
+  if (kind < 0 || kind > 1) {
+    return 0.0;
+  }
+  const auto stats = BoidSimulation::instance().getLocalityStats();
+  if (metric >= 0 && metric < 6) {
+    return static_cast<double>(stats.buckets[kind][metric]);
+  }
+  if (metric == 6) {
+    return static_cast<double>(stats.distanceSum[kind]);
+  }
+  if (metric == 7) {
+    return static_cast<double>(stats.samples[kind]);
+  }
+  return 0.0;
 }
 }

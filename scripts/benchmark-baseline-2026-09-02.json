@@ -1,0 +1,38 @@
+{
+  "environment": {
+    "date": "2026-09-02",
+    "browser": "Chrome 151",
+    "hardware_concurrency": 8,
+    "gpu": "NVIDIA GeForce RTX 3060 / ANGLE D3D11",
+    "build": "Release (-O3 -msimd128 -pthread)",
+    "seed": 1,
+    "fixed_dt": 0.016666666666666666,
+    "warmup": 300,
+    "samples": 1000,
+    "task_limit": 1
+  },
+  "results": [
+    {"boids":5000,"frame_ms":{"mean":8.1183,"median":8.0300,"p95":11.0700,"p99":12.5050,"max":24.1650},"wasm_mean_ms":6.4261,"packing_mean_ms":0.3903,"gpu_mean_ms":2.5240,"checksum":"e2cccbd6a0d970e8"},
+    {"boids":10000,"frame_ms":{"mean":14.9359,"median":14.5350,"p95":19.9450,"p99":22.5600,"max":26.2900},"wasm_mean_ms":13.0795,"packing_mean_ms":0.7082,"gpu_mean_ms":3.4026,"checksum":"3faa28f182dfa868"},
+    {"boids":20000,"frame_ms":{"mean":29.5460,"median":28.7200,"p95":39.0600,"p99":44.4750,"max":56.7950},"wasm_mean_ms":27.0209,"packing_mean_ms":1.2516,"gpu_mean_ms":5.6070,"checksum":"20620cc15d01707d"},
+    {"boids":30000,"frame_ms":{"mean":52.8278,"median":48.5950,"p95":80.3100,"p99":93.5100,"max":131.7500},"wasm_mean_ms":49.2031,"packing_mean_ms":2.1080,"gpu_mean_ms":7.8526,"checksum":"e2d4209dfe2eaf6c"},
+    {"boids":50000,"frame_ms":{"mean":84.0028,"median":78.4150,"p95":122.1350,"p99":154.6300,"max":249.1750},"wasm_mean_ms":79.6804,"packing_mean_ms":2.7110,"gpu_mean_ms":10.3498,"checksum":"304150aef216683b"}
+  ],
+  "thread_comparison_20000": {
+    "task_limit": 0,
+    "effective_tasks": 4,
+    "frame_ms": {"mean":16.3315,"median":14.9600,"p95":26.5750,"p99":33.6700,"max":49.4200},
+    "interaction_worst_max_over_mean": 2.1572,
+    "kinematics_worst_max_over_mean": 2.8427,
+    "checksums_two_runs": ["cd0a0c876ab92dba", "1de129282bcf6939"],
+    "deterministic": false
+  },
+  "simd_final_wasm": {
+    "v128.load": 207,
+    "v128.store": 303,
+    "f32x4.add": 8,
+    "f32x4.mul": 22,
+    "f32x4.sub": 13,
+    "f32x4.div": 1
+  }
+}

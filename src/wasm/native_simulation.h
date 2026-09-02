@@ -24,6 +24,7 @@ private:
     bool bench = false;
     std::size_t benchFrames = 4000;
     int benchBoids = -1;
+    std::size_t benchTasks = 1;
   };
 
   std::vector<SpeciesParams> settings_;

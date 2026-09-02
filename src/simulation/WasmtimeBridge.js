@@ -56,6 +56,19 @@ export class WasmtimeBridge {
     this.currentFirstBoidXHandle = createWrappedFunction(this.wasm, 'currentFirstBoidX', 'number', []);
     this.speciesIdsPtrHandle = createWrappedFunction(this.wasm, 'speciesIdsPtr', 'number', []);
     this.syncReadToWriteBuffersHandle = createWrappedFunction(this.wasm, 'syncReadToWriteBuffers', 'void', []);
+    this.resetPhaseTimingsHandle = createWrappedFunction(this.wasm, 'resetPhaseTimings', 'void', []);
+    this.phaseTimingMsHandle = createWrappedFunction(this.wasm, 'phaseTimingMs', 'number', ['number']);
+    this.phaseTimingCallsHandle = createWrappedFunction(this.wasm, 'phaseTimingCalls', 'number', ['number']);
+    this.parallelTimingValueHandle = createWrappedFunction(this.wasm, 'parallelTimingValue', 'number', ['number', 'number']);
+    this.configureBenchmarkDiagnosticsHandle = createWrappedFunction(
+      this.wasm,
+      'configureBenchmarkDiagnostics',
+      'void',
+      ['number', 'number', 'boolean'],
+    );
+    this.beginLocalitySampleHandle = createWrappedFunction(this.wasm, 'beginLocalitySample', 'void', []);
+    this.endLocalitySampleHandle = createWrappedFunction(this.wasm, 'endLocalitySample', 'void', []);
+    this.localityValueHandle = createWrappedFunction(this.wasm, 'localityValue', 'number', ['number', 'number']);
     this.setSimulationTuningParamsHandle = createWrappedFunction(this.wasm, 'setSimulationTuningParams', 'void', ['object']);
     this.unitSimpleDensityPtrHandle = createWrappedFunction(this.wasm, 'unitSimpleDensityPtr', 'number', []);
     this.unitSimpleDensityCountHandle = createWrappedFunction(this.wasm, 'unitSimpleDensityCount', 'number', []);
@@ -134,6 +147,83 @@ export class WasmtimeBridge {
 
     // 最新ポインタを更新して総数を返す
     return this.stepSimulation(0);
+  }
+
+  configureBenchmarkDiagnostics({ seed = 5489, taskLimit = 1, parallelTiming = true } = {}) {
+    ensureHandle(this.configureBenchmarkDiagnosticsHandle, 'configureBenchmarkDiagnostics')(
+      seed >>> 0,
+      Math.max(0, Math.floor(taskLimit)),
+      Boolean(parallelTiming),
+    );
+  }
+
+  resetPhaseTimings() {
+    ensureHandle(this.resetPhaseTimingsHandle, 'resetPhaseTimings')();
+  }
+
+  getPhaseTimings() {
+    const names = [
+      'updateRecursive',
+      'treeTraversal',
+      'computeBoidInteraction',
+      'predator',
+      'kinematics',
+      'build',
+      'clusterUpdate',
+      'splitMerge',
+    ];
+    const result = {};
+    for (let i = 0; i < names.length; i += 1) {
+      result[names[i]] = {
+        ms: this.phaseTimingMsHandle(i),
+        calls: this.phaseTimingCallsHandle(i),
+      };
+    }
+    return result;
+  }
+
+  getParallelTimings() {
+    const names = ['computeBoidInteraction', 'kinematics'];
+    const result = {};
+    for (let i = 0; i < names.length; i += 1) {
+      const tasks = this.parallelTimingValueHandle(i, 4);
+      const totalTaskMs = this.parallelTimingValueHandle(i, 0);
+      result[names[i]] = {
+        tasks,
+        frames: this.parallelTimingValueHandle(i, 5),
+        mean_task_ms: tasks > 0 ? totalTaskMs / tasks : 0,
+        min_task_ms: this.parallelTimingValueHandle(i, 2),
+        max_task_ms: this.parallelTimingValueHandle(i, 1),
+        worst_max_over_mean: this.parallelTimingValueHandle(i, 3),
+      };
+    }
+    return result;
+  }
+
+  beginLocalitySample() {
+    ensureHandle(this.beginLocalitySampleHandle, 'beginLocalitySample')();
+  }
+
+  endLocalitySample() {
+    ensureHandle(this.endLocalitySampleHandle, 'endLocalitySample')();
+  }
+
+  getLocalityStats() {
+    const names = ['same_leaf', 'external'];
+    const labels = ['le_1', 'le_4', 'le_16', 'le_64', 'le_256', 'gt_256'];
+    const result = {};
+    for (let kind = 0; kind < names.length; kind += 1) {
+      const samples = this.localityValueHandle(kind, 7);
+      const distanceSum = this.localityValueHandle(kind, 6);
+      result[names[kind]] = {
+        samples,
+        mean_abs_index_delta: samples > 0 ? distanceSum / samples : 0,
+        buckets: Object.fromEntries(
+          labels.map((label, bucket) => [label, this.localityValueHandle(kind, bucket)]),
+        ),
+      };
+    }
+    return result;
   }
 
   /** 種族設定を wasm へ反映（vector生成/破棄まで含める） */

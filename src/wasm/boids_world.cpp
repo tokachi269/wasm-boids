@@ -85,13 +85,48 @@ std::span<const int> BoidsWorld::speciesIds() const {
 BoidsWorld::PhaseTimings BoidsWorld::phaseTimings() const {
   const auto timings = simulation_->getPhaseTimings();
   PhaseTimings result{};
-  for (int i = 0; i < 4; ++i) {
+  for (int i = 0; i < BoidSimulation::kPhaseCount; ++i) {
     result.ms[i] = timings.ms[i];
     result.calls[i] = timings.calls[i];
   }
   return result;
 }
 
+BoidsWorld::ParallelTimings BoidsWorld::parallelTimings() const {
+  const auto timings = simulation_->getParallelTimings();
+  ParallelTimings result{};
+  for (int i = 0; i < BoidSimulation::kParallelPhaseCount; ++i) {
+    result.taskMs[i] = timings.taskMs[i];
+    result.maxTaskMs[i] = timings.maxTaskMs[i];
+    result.minTaskMs[i] = timings.minTaskMs[i];
+    result.worstMaxOverMean[i] = timings.worstMaxOverMean[i];
+    result.tasks[i] = timings.tasks[i];
+    result.frames[i] = timings.frames[i];
+  }
+  return result;
+}
+
 void BoidsWorld::resetPhaseTimings() { simulation_->resetPhaseTimings(); }
+
+void BoidsWorld::setParallelTimingEnabled(bool enabled) {
+  simulation_->setParallelTimingEnabled(enabled);
+}
+
+void BoidsWorld::beginLocalitySample() { simulation_->beginLocalitySample(); }
+
+void BoidsWorld::endLocalitySample() { simulation_->endLocalitySample(); }
+
+BoidsWorld::LocalityStats BoidsWorld::localityStats() const {
+  const auto stats = simulation_->getLocalityStats();
+  LocalityStats result{};
+  for (int kind = 0; kind < 2; ++kind) {
+    result.distanceSum[kind] = stats.distanceSum[kind];
+    result.samples[kind] = stats.samples[kind];
+    for (int bucket = 0; bucket < 6; ++bucket) {
+      result.buckets[kind][bucket] = stats.buckets[kind][bucket];
+    }
+  }
+  return result;
+}
 
 } // namespace boids

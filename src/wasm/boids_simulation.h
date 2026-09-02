@@ -2,6 +2,7 @@
 #include <stack>
 #include <vector>
 #include <cstdint>
+#include <atomic>
 #include <random>
 #include "boid_unit.h"
 #include "boid.h"
@@ -16,9 +17,38 @@
 class BoidSimulation : public SpatialIndex
 {
 public:
+    enum class Phase : int {
+        UpdateRecursive = 0,
+        TreeTraversal,
+        ComputeBoidInteraction,
+        Predator,
+        Kinematics,
+        Build,
+        ClusterUpdate,
+        SplitMerge,
+        Count
+    };
+    static constexpr int kPhaseCount = static_cast<int>(Phase::Count);
+    static constexpr int kParallelPhaseCount = 2;
+
     struct PhaseTimings {
-        double ms[4]{};
-        long calls[4]{};
+        double ms[kPhaseCount]{};
+        long calls[kPhaseCount]{};
+    };
+
+    struct ParallelTimings {
+        double taskMs[kParallelPhaseCount]{};
+        double maxTaskMs[kParallelPhaseCount]{};
+        double minTaskMs[kParallelPhaseCount]{};
+        double worstMaxOverMean[kParallelPhaseCount]{};
+        long tasks[kParallelPhaseCount]{};
+        long frames[kParallelPhaseCount]{};
+    };
+
+    struct LocalityStats {
+        uint64_t buckets[2][6]{};
+        uint64_t distanceSum[2]{};
+        uint64_t samples[2]{};
     };
 
     static BoidSimulation& instance();
@@ -81,7 +111,21 @@ public:
     void setFixedTimeStep(float dt);
     float getFixedTimeStep() const { return fixedTimeStep_; }
     PhaseTimings getPhaseTimings() const { return phaseTimings_; }
+    ParallelTimings getParallelTimings() const { return parallelTimings_; }
     void resetPhaseTimings();
+    void recordPhaseTiming(Phase phase, double milliseconds, long calls = 1);
+    void recordParallelTimings(int phase, const double *milliseconds,
+                               std::size_t count);
+    void setParallelTimingEnabled(bool enabled) { parallelTimingEnabled_ = enabled; }
+    bool isParallelTimingEnabled() const { return parallelTimingEnabled_; }
+    void beginLocalitySample();
+    void endLocalitySample() { localitySamplingEnabled_.store(false); }
+    bool isLocalitySamplingEnabled() const {
+        return localitySamplingEnabled_.load(std::memory_order_relaxed);
+    }
+    LocalityStats getLocalityStats() const;
+    void recordNeighborIndexDistance(bool external, int selfIndex,
+                                     int neighborIndex);
 
     // 空間インデックス（現状は BoidUnit ツリー）を保持値で再構築する。
     void rebuildSpatialIndex() { build(); }
@@ -178,6 +222,12 @@ private:
     float fixedTimeStep_ = 1.0f / 60.0f;
     std::mt19937 randomEngine_;
     PhaseTimings phaseTimings_{};
+    ParallelTimings parallelTimings_{};
+    bool parallelTimingEnabled_ = false;
+    std::atomic<bool> localitySamplingEnabled_{false};
+    std::atomic<uint64_t> localityBuckets_[2][6]{};
+    std::atomic<uint64_t> localityDistanceSum_[2]{};
+    std::atomic<uint64_t> localitySamples_[2]{};
     std::vector<float> unitSimpleDensities;
     std::vector<SpeciesEnvelope> speciesEnvelopes;
     std::vector<std::vector<SpeciesCluster>> speciesClusters;

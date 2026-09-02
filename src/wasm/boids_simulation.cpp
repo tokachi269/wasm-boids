@@ -906,9 +906,13 @@ void BoidSimulation::buildRecursive(BoidUnit *node, const std::vector<int> &indi
 
 void BoidSimulation::update(float dt) {
   using PhaseClock = std::chrono::steady_clock;
-  const auto recordPhase = [this](int phase, PhaseClock::time_point start) {
-    phaseTimings_.ms[phase] +=
-        std::chrono::duration<double, std::milli>(PhaseClock::now() - start).count();
+  const auto recordPhase = [this](Phase phase, PhaseClock::time_point start,
+                                  long calls) {
+    recordPhaseTiming(
+        phase,
+        std::chrono::duration<double, std::milli>(PhaseClock::now() - start)
+            .count(),
+        calls);
   };
   // NOTE:
   // dt が NaN/Inf/負だと、全個体が同じ汚染を共有して「全体ガガガ/全体停止」になりやすい。
@@ -931,7 +935,6 @@ void BoidSimulation::update(float dt) {
   // 木構造全体を再帰的に更新
   const auto updateRecursiveStart = PhaseClock::now();
   if (root) {
-    ++phaseTimings_.calls[0];
     try {
       setRenderPointersToReadBuffers();
       root->updateRecursive(glm::clamp(dt, 0.0f, 0.1f) * 5);
@@ -948,7 +951,7 @@ void BoidSimulation::update(float dt) {
   } else {
     setRenderPointersToReadBuffers();
   }
-  recordPhase(0, updateRecursiveStart);
+  recordPhase(Phase::UpdateRecursive, updateRecursiveStart, root ? 1 : 0);
 
   // NOTE:
   // speciesClusters / speciesSchoolClusters は「デバッグ描画」だけでなく、
@@ -962,7 +965,6 @@ void BoidSimulation::update(float dt) {
   // 停止復帰などで dt が溜まりすぎると、一括更新が強すぎて不安定になり得る。
   clusterUpdateDtAccumulator_ = glm::min(clusterUpdateDtAccumulator_, 0.5f);
   if ((frameCount % kClusterUpdateStride) == 0) {
-    ++phaseTimings_.calls[2];
     const float clusteredDt = clusterUpdateDtAccumulator_;
     clusterUpdateDtAccumulator_ = 0.0f;
 
@@ -970,7 +972,8 @@ void BoidSimulation::update(float dt) {
     // 小クラスターを素材に、より大きい「群れ」中心を推定（10秒EMAで安定化）。
     updateSpeciesSchoolClusters(clusteredDt);
   }
-  recordPhase(2, clusterUpdateStart);
+  recordPhase(Phase::ClusterUpdate, clusterUpdateStart,
+              (frameCount % kClusterUpdateStride) == 0 ? 1 : 0);
   frameCount++;
 
   // 一定フレームごとに葉ノードを再収集
@@ -988,7 +991,6 @@ void BoidSimulation::update(float dt) {
   // 一定フレームごとに木構造を再構築（大幅に頻度を減らす）
   const auto buildStart = PhaseClock::now();
   if ((frameCount % kTreeRebuildStride) == 0) {
-    ++phaseTimings_.calls[1];
     build();
     // printTree(root, 0); // ツリー構造をログに出力
 
@@ -1001,11 +1003,11 @@ void BoidSimulation::update(float dt) {
     splitIndex = 0;
     mergeIndex = 0;
   }
-  recordPhase(1, buildStart);
+  recordPhase(Phase::Build, buildStart,
+              (frameCount % kTreeRebuildStride) == 0 ? 1 : 0);
 
   // 分割と結合の処理
   const auto splitMergeStart = PhaseClock::now();
-  ++phaseTimings_.calls[3];
   if (!leafCache.empty()) {
     // 1フレームの作業量を抑えてスパイクを避ける。
     constexpr int kSplitMergeWorkBudget = 12;
@@ -1046,11 +1048,108 @@ void BoidSimulation::update(float dt) {
       }
     }
   }
-  recordPhase(3, splitMergeStart);
+  recordPhase(Phase::SplitMerge, splitMergeStart, 1);
 
 }
 
-void BoidSimulation::resetPhaseTimings() { phaseTimings_ = {}; }
+void BoidSimulation::resetPhaseTimings() {
+  phaseTimings_ = {};
+  parallelTimings_ = {};
+}
+
+void BoidSimulation::recordPhaseTiming(Phase phase, double milliseconds,
+                                       long calls) {
+  const int index = static_cast<int>(phase);
+  if (index < 0 || index >= kPhaseCount) {
+    return;
+  }
+  phaseTimings_.ms[index] += milliseconds;
+  phaseTimings_.calls[index] += calls;
+}
+
+void BoidSimulation::recordParallelTimings(int phase,
+                                           const double *milliseconds,
+                                           std::size_t count) {
+  if (phase < 0 || phase >= kParallelPhaseCount || !milliseconds || count == 0) {
+    return;
+  }
+  double sum = 0.0;
+  double maximum = 0.0;
+  double minimum = milliseconds[0];
+  for (std::size_t i = 0; i < count; ++i) {
+    sum += milliseconds[i];
+    maximum = std::max(maximum, milliseconds[i]);
+    minimum = std::min(minimum, milliseconds[i]);
+  }
+  auto &timings = parallelTimings_;
+  timings.taskMs[phase] += sum;
+  timings.maxTaskMs[phase] = std::max(timings.maxTaskMs[phase], maximum);
+  if (timings.tasks[phase] == 0) {
+    timings.minTaskMs[phase] = minimum;
+  } else {
+    timings.minTaskMs[phase] = std::min(timings.minTaskMs[phase], minimum);
+  }
+  timings.tasks[phase] += static_cast<long>(count);
+  ++timings.frames[phase];
+  const double mean = sum / static_cast<double>(count);
+  if (mean > 0.0) {
+    timings.worstMaxOverMean[phase] =
+        std::max(timings.worstMaxOverMean[phase], maximum / mean);
+  }
+}
+
+void BoidSimulation::beginLocalitySample() {
+  localitySamplingEnabled_.store(false, std::memory_order_relaxed);
+  for (int kind = 0; kind < 2; ++kind) {
+    localityDistanceSum_[kind].store(0, std::memory_order_relaxed);
+    localitySamples_[kind].store(0, std::memory_order_relaxed);
+    for (int bucket = 0; bucket < 6; ++bucket) {
+      localityBuckets_[kind][bucket].store(0, std::memory_order_relaxed);
+    }
+  }
+  localitySamplingEnabled_.store(true, std::memory_order_relaxed);
+}
+
+BoidSimulation::LocalityStats BoidSimulation::getLocalityStats() const {
+  LocalityStats result{};
+  for (int kind = 0; kind < 2; ++kind) {
+    result.distanceSum[kind] =
+        localityDistanceSum_[kind].load(std::memory_order_relaxed);
+    result.samples[kind] =
+        localitySamples_[kind].load(std::memory_order_relaxed);
+    for (int bucket = 0; bucket < 6; ++bucket) {
+      result.buckets[kind][bucket] =
+          localityBuckets_[kind][bucket].load(std::memory_order_relaxed);
+    }
+  }
+  return result;
+}
+
+void BoidSimulation::recordNeighborIndexDistance(bool external, int selfIndex,
+                                                 int neighborIndex) {
+  if (!localitySamplingEnabled_.load(std::memory_order_relaxed)) {
+    return;
+  }
+  const uint64_t distance = static_cast<uint64_t>(
+      selfIndex >= neighborIndex ? selfIndex - neighborIndex
+                                 : neighborIndex - selfIndex);
+  int bucket = 5;
+  if (distance <= 1) {
+    bucket = 0;
+  } else if (distance <= 4) {
+    bucket = 1;
+  } else if (distance <= 16) {
+    bucket = 2;
+  } else if (distance <= 64) {
+    bucket = 3;
+  } else if (distance <= 256) {
+    bucket = 4;
+  }
+  const int kind = external ? 1 : 0;
+  localityBuckets_[kind][bucket].fetch_add(1, std::memory_order_relaxed);
+  localityDistanceSum_[kind].fetch_add(distance, std::memory_order_relaxed);
+  localitySamples_[kind].fetch_add(1, std::memory_order_relaxed);
+}
 
 void BoidSimulation::updateFixedStep(float simulationDt, float realDt) {
   const float stepDt = simulationDt > 0.0f ? simulationDt : fixedTimeStep_;

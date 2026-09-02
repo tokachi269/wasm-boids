@@ -8,6 +8,7 @@
 #include "spatial_query.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <cmath>
 #include <cstddef>
@@ -1049,8 +1050,10 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
  * - 階層構造内で各ユニットの Boid の動きを更新する際に使用。
  */
 void BoidUnit::updateRecursive(float dt) {
+  using PhaseClock = std::chrono::steady_clock;
+  BoidSimulation &simulation = simulationFor(this);
   const auto &globalSpeciesParams =
-      simulationFor(this).getSpeciesParamsList();
+      simulation.getSpeciesParamsList();
   frameCount++;
 
   // 無限再帰防止: 簡単なカウンター方式
@@ -1090,7 +1093,8 @@ void BoidUnit::updateRecursive(float dt) {
   }
 #endif
 
-  auto runParallelRanges = [&](std::size_t total, auto &&fn) {
+  auto runParallelRanges = [&](std::size_t total, int parallelPhase,
+                               auto &&fn) {
     using Fn = std::decay_t<decltype(fn)>;
     Fn fnCopy = std::forward<decltype(fn)>(fn);
     if (total == 0) {
@@ -1098,6 +1102,21 @@ void BoidUnit::updateRecursive(float dt) {
     }
     const std::size_t taskCount = std::min<std::size_t>(maxTasks, total);
     const std::size_t chunk = (total + taskCount - 1) / taskCount;
+    std::array<double, 8> taskMilliseconds{};
+    const bool measureTasks = simulation.isParallelTimingEnabled();
+
+    const auto runTask = [&](std::size_t taskIndex, std::size_t begin,
+                             std::size_t end) {
+      if (!measureTasks) {
+        fnCopy(begin, end);
+        return;
+      }
+      const auto start = PhaseClock::now();
+      fnCopy(begin, end);
+      taskMilliseconds[taskIndex] =
+          std::chrono::duration<double, std::milli>(PhaseClock::now() - start)
+              .count();
+    };
 
     asyncTasks.clear();
     // 1チャンク分は現在スレッドで実行し、残りだけ enqueue してオーバーヘッドを抑える。
@@ -1108,15 +1127,19 @@ void BoidUnit::updateRecursive(float dt) {
       }
       const std::size_t end = std::min(total, begin + chunk);
       asyncTasks.emplace_back(
-          pool.enqueue([=, &fnCopy] { fnCopy(begin, end); }));
+          pool.enqueue([&, t, begin, end] { runTask(t, begin, end); }));
     }
 
-    fnCopy(0, std::min(total, chunk));
+    runTask(0, 0, std::min(total, chunk));
 
     for (auto &f : asyncTasks) {
       f.get();
     }
     asyncTasks.clear();
+    if (measureTasks) {
+      simulation.recordParallelTimings(parallelPhase, taskMilliseconds.data(),
+                                       taskCount);
+    }
   };
 
   // ----------------------------------------------
@@ -1135,6 +1158,7 @@ void BoidUnit::updateRecursive(float dt) {
     predatorLeafUnits.reserve(8);
   }
 
+  const auto treeTraversalStart = PhaseClock::now();
   std::stack<BoidUnit *, std::vector<BoidUnit *>> stack;
   stack.push(this);
 
@@ -1173,9 +1197,15 @@ void BoidUnit::updateRecursive(float dt) {
     // 二重に加算され「中心へ引っ張られる」「処理が二重に見える」原因になり得るため、
     // 非捕食者ペア処理は行わない。
   }
+  simulation.recordPhaseTiming(
+      BoidSimulation::Phase::TreeTraversal,
+      std::chrono::duration<double, std::milli>(PhaseClock::now() -
+                                                treeTraversalStart)
+          .count());
 
   // leaf の相互作用（高コスト）をチャンク並列で実行
-  runParallelRanges(leafUnits.size(), [&](std::size_t begin, std::size_t end) {
+  const auto interactionStart = PhaseClock::now();
+  runParallelRanges(leafUnits.size(), 0, [&](std::size_t begin, std::size_t end) {
     for (std::size_t i = begin; i < end; ++i) {
       BoidUnit *unit = leafUnits[i];
       if (unit) {
@@ -1183,9 +1213,15 @@ void BoidUnit::updateRecursive(float dt) {
       }
     }
   });
+  simulation.recordPhaseTiming(
+      BoidSimulation::Phase::ComputeBoidInteraction,
+      std::chrono::duration<double, std::milli>(PhaseClock::now() -
+                                                interactionStart)
+          .count());
 
   // 捕食者の影響は「ペアごと」だと冗長なので、捕食者ユニットごとに一回だけ実行。
   // 捕食者数は少数が前提のため、ここは敢えて逐次実行してデータ競合も避ける。
+  const auto predatorStart = PhaseClock::now();
   for (BoidUnit *pred : predatorLeafUnits) {
     if (pred) {
       // predator sweep は相手ユニットと無関係に SpatialIndex で獲物を列挙する。
@@ -1194,11 +1230,18 @@ void BoidUnit::updateRecursive(float dt) {
       pred->applyInterUnitInfluence(this, dt);
     }
   }
+  simulation.recordPhaseTiming(
+      BoidSimulation::Phase::Predator,
+      std::chrono::duration<double, std::milli>(PhaseClock::now() -
+                                                predatorStart)
+          .count(),
+      predatorLeafUnits.empty() ? 0 : 1);
 
   // ----------------------------------------------
   // 第二段階: 位置と速度を更新
   // ----------------------------------------------
-  runParallelRanges(leafUnits.size(), [&](std::size_t begin, std::size_t end) {
+  const auto kinematicsStart = PhaseClock::now();
+  runParallelRanges(leafUnits.size(), 1, [&](std::size_t begin, std::size_t end) {
     for (std::size_t i = begin; i < end; ++i) {
       BoidUnit *unit = leafUnits[i];
       if (unit) {
@@ -1206,6 +1249,11 @@ void BoidUnit::updateRecursive(float dt) {
       }
     }
   });
+  simulation.recordPhaseTiming(
+      BoidSimulation::Phase::Kinematics,
+      std::chrono::duration<double, std::milli>(PhaseClock::now() -
+                                                kinematicsStart)
+          .count());
 
   // 関数終了時にカウンターをリセット
   callCount--;
@@ -1240,6 +1288,7 @@ inline glm::quat BoidUnit::dirToQuatRollZero(const glm::vec3 &forward) {
  */
 void BoidUnit::computeBoidInteraction(float dt) {
   BoidSimulation &simulation = simulationFor(this);
+  const bool sampleLocality = simulation.isLocalitySamplingEnabled();
   const auto &globalSpeciesParams = simulation.getSpeciesParamsList();
   // 空間インデックス向けの境界情報を毎フレーム更新
   computeBoundingSphere();
@@ -1850,6 +1899,9 @@ void BoidUnit::computeBoidInteraction(float dt) {
             tauJitter > 1e-6f ? glm::clamp(1.0f - (memoryAge / tauJitter), 0.0f, 1.0f) : 0.0f;
 
         int gNeighbor = indices[i];
+        if (sampleLocality) {
+          simulation.recordNeighborIndexDistance(false, gIdx, gNeighbor);
+        }
         ++aggregatedNeighborCount;
         glm::vec3 diff = buf->positions[gNeighbor] - pos;
         float distSq = glm::dot(diff, diff);
@@ -1969,6 +2021,9 @@ void BoidUnit::computeBoidInteraction(float dt) {
       for (int gNeighbor : externalNeighbors) {
         if (gNeighbor < 0) {
           continue;
+        }
+        if (sampleLocality) {
+          simulation.recordNeighborIndexDistance(true, gIdx, gNeighbor);
         }
         ++aggregatedNeighborCount;
         glm::vec3 diff = buf->positions[gNeighbor] - pos;

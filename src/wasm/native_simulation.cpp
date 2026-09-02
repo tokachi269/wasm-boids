@@ -50,7 +50,8 @@ bool NativeSimulation::configureFromCommandLine(int argc, char **argv) {
 
   for (int i = 1; i < argc; ++i) {
     const std::string_view arg(argv[i]);
-    if (arg != "--bench" && arg != "--seed" && arg != "--boids") {
+    if (arg != "--bench" && arg != "--seed" && arg != "--boids" &&
+        arg != "--tasks") {
       std::cerr << "Unknown argument: " << arg << '\n';
       return false;
     }
@@ -70,7 +71,7 @@ bool NativeSimulation::configureFromCommandLine(int argc, char **argv) {
         std::cerr << "Invalid seed: " << argv[i] << '\n';
         return false;
       }
-    } else {
+    } else if (arg == "--boids") {
       unsigned int count = 0;
       if (!parseUnsigned(argv[i], count) || count == 0 ||
           count > static_cast<unsigned int>(std::numeric_limits<int>::max())) {
@@ -78,6 +79,12 @@ bool NativeSimulation::configureFromCommandLine(int argc, char **argv) {
         return false;
       }
       options_.benchBoids = static_cast<int>(count);
+    } else {
+      if (!parseUnsigned(argv[i], options_.benchTasks) ||
+          options_.benchTasks > 64) {
+        std::cerr << "Invalid task limit: " << argv[i] << '\n';
+        return false;
+      }
     }
   }
   return true;
@@ -254,16 +261,24 @@ void NativeSimulation::runBenchmark() {
   options_.reportInterval = 0;
   options_.fixedTimeStep = kFixedDt;
   world_.setFixedTimeStep(kFixedDt);
-  setBoidsMaxTasksOverride(1);
+  setBoidsMaxTasksOverride(options_.benchTasks);
+  world_.setParallelTimingEnabled(true);
   world_.resetPhaseTimings();
 
   for (std::size_t frame = 0; frame < options_.benchFrames; ++frame) {
+    const bool sampleLocality = frame + 1 == kWarmupFrames;
+    if (sampleLocality) {
+      world_.beginLocalitySample();
+    }
     if (frame == kWarmupFrames) {
       world_.resetPhaseTimings();
     }
     const auto start = clock::now();
     world_.step(kFixedDt);
     const auto end = clock::now();
+    if (sampleLocality) {
+      world_.endLocalitySample();
+    }
     if (frame >= kWarmupFrames) {
       frameTimes.push_back(
           std::chrono::duration<double, std::milli>(end - start).count());
@@ -300,8 +315,6 @@ void NativeSimulation::runBenchmark() {
   }
 
   const auto phases = world_.phaseTimings();
-  static constexpr const char *kPhaseNames[] = {
-      "updateRecursive", "build", "clusterUpdate", "splitMerge"};
   std::ostringstream output;
   output << std::setprecision(10)
          << "{\"frames\":" << options_.benchFrames
@@ -310,12 +323,54 @@ void NativeSimulation::runBenchmark() {
          << ",\"boids\":" << world_.boidCount()
          << ",\"frame_ms\":{\"p50\":" << percentile(0.50)
          << ",\"p95\":" << percentile(0.95)
+         << ",\"p99\":" << percentile(0.99)
          << ",\"max\":" << maximum << ",\"mean\":" << mean << "}"
          << ",\"phases\":{";
-  for (int i = 0; i < 4; ++i) {
+  static constexpr const char *kPhaseNames[] = {
+      "updateRecursive", "treeTraversal", "computeBoidInteraction",
+      "predator", "kinematics", "build", "clusterUpdate", "splitMerge"};
+  for (int i = 0; i < 8; ++i) {
     if (i != 0) output << ',';
     output << '\"' << kPhaseNames[i] << "\":{\"ms\":" << phases.ms[i]
            << ",\"calls\":" << phases.calls[i] << '}';
+  }
+  const auto parallel = world_.parallelTimings();
+  output << "},\"parallel\":{\"task_limit\":" << options_.benchTasks;
+  static constexpr const char *kParallelNames[] = {"computeBoidInteraction",
+                                                    "kinematics"};
+  for (int i = 0; i < 2; ++i) {
+    const double meanTask = parallel.tasks[i] > 0
+                                ? parallel.taskMs[i] /
+                                      static_cast<double>(parallel.tasks[i])
+                                : 0.0;
+    output << ",\"" << kParallelNames[i] << "\":{\"tasks\":"
+           << parallel.tasks[i] << ",\"frames\":" << parallel.frames[i]
+           << ",\"mean_task_ms\":" << meanTask
+           << ",\"min_task_ms\":" << parallel.minTaskMs[i]
+           << ",\"max_task_ms\":" << parallel.maxTaskMs[i]
+           << ",\"worst_max_over_mean\":"
+           << parallel.worstMaxOverMean[i] << '}';
+  }
+  const auto locality = world_.localityStats();
+  output << "},\"locality\":{";
+  static constexpr const char *kLocalityNames[] = {"same_leaf", "external"};
+  static constexpr const char *kBucketNames[] = {"le_1", "le_4", "le_16",
+                                                  "le_64", "le_256", "gt_256"};
+  for (int kind = 0; kind < 2; ++kind) {
+    if (kind != 0) output << ',';
+    const double meanDistance = locality.samples[kind] > 0
+                                    ? static_cast<double>(locality.distanceSum[kind]) /
+                                          static_cast<double>(locality.samples[kind])
+                                    : 0.0;
+    output << '\"' << kLocalityNames[kind] << "\":{\"samples\":"
+           << locality.samples[kind] << ",\"mean_abs_index_delta\":"
+           << meanDistance << ",\"buckets\":{";
+    for (int bucket = 0; bucket < 6; ++bucket) {
+      if (bucket != 0) output << ',';
+      output << '\"' << kBucketNames[bucket] << "\":"
+             << locality.buckets[kind][bucket];
+    }
+    output << "}}";
   }
   output << "},\"checksum\":\"" << std::hex << std::setw(16)
          << std::setfill('0') << checksum << "\"}";

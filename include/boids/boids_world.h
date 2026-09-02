@@ -25,8 +25,21 @@ struct BoidsWorldConfig {
 class BoidsWorld {
 public:
   struct PhaseTimings {
-    double ms[4];
-    long calls[4];
+    double ms[8];
+    long calls[8];
+  };
+  struct ParallelTimings {
+    double taskMs[2];
+    double maxTaskMs[2];
+    double minTaskMs[2];
+    double worstMaxOverMean[2];
+    long tasks[2];
+    long frames[2];
+  };
+  struct LocalityStats {
+    uint64_t buckets[2][6];
+    uint64_t distanceSum[2];
+    uint64_t samples[2];
   };
   explicit BoidsWorld(const BoidsWorldConfig &config = {});
   ~BoidsWorld();
@@ -57,7 +70,12 @@ public:
   std::span<const glm::quat> orientations() const;
   std::span<const int> speciesIds() const;
   PhaseTimings phaseTimings() const;
+  ParallelTimings parallelTimings() const;
   void resetPhaseTimings();
+  void setParallelTimingEnabled(bool enabled);
+  void beginLocalitySample();
+  void endLocalitySample();
+  LocalityStats localityStats() const;
 
 private:
   BoidsWorldConfig config_;

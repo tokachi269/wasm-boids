@@ -208,9 +208,19 @@ import { FogPipeline } from "./rendering/FogPipeline.js";
 import { ParticleField } from "./rendering/ParticleField.js";
 import { WasmtimeBridge } from "./simulation/WasmtimeBridge.js";
 import { createFlockSettingsStore } from "./state/FlockSettingsStore.js";
+import {
+  BrowserBenchmark,
+  readBrowserBenchmarkConfig,
+} from "./benchmark/BrowserBenchmark.js";
 
 // WASM 側の初期配置レンジ（posRange）。描画側の位置量子化レンジ決定にも使う。
 const DEFAULT_SIMULATION_POS_RANGE = 4;
+const browserBenchmarkConfig = readBrowserBenchmarkConfig(
+  typeof window !== "undefined" ? window.location.search : "",
+);
+const browserBenchmark = browserBenchmarkConfig
+  ? new BrowserBenchmark(browserBenchmarkConfig)
+  : null;
 
 const wasmModule = inject("wasmModule");
 if (!wasmModule) {
@@ -387,6 +397,19 @@ const {
   removeSpecies: removeSpeciesFromStore,
   saveToStorage,
 } = flockStore;
+
+if (browserBenchmarkConfig) {
+  const benchmarkSettings = DEFAULT_SETTINGS.map((entry) => ({ ...entry }));
+  const fixedSecondaryCount = benchmarkSettings
+    .slice(1)
+    .reduce((sum, entry) => sum + entry.count, 0);
+  benchmarkSettings[0].count = Math.max(
+    1,
+    browserBenchmarkConfig.boids - fixedSecondaryCount,
+  );
+  replaceSettings(benchmarkSettings);
+  syncSystemSettings(DEFAULT_TUNING_SETTINGS);
+}
 
 const tuningInitialized = ref(false);
 
@@ -2356,6 +2379,10 @@ let lastTime = performance.now(); // 前回のフレームのタイムスタン�
 let unitIdScratch = null;
 let unitIdScratchSize = 0;
 const unitColor = new THREE.Color();
+const benchmarkMessageChannel = browserBenchmarkConfig ? new MessageChannel() : null;
+if (benchmarkMessageChannel) {
+  benchmarkMessageChannel.port1.onmessage = () => animate(performance.now());
+}
 
 function scheduleNextFrame() {
   if (webglContextLost || !renderer || !scene || !camera) {
@@ -2365,7 +2392,9 @@ function scheduleNextFrame() {
     }
     return;
   }
-  if (typeof requestAnimationFrame === "function") {
+  if (browserBenchmarkConfig) {
+    benchmarkMessageChannel.port2.postMessage(0);
+  } else if (typeof requestAnimationFrame === "function") {
     animationTimer = requestAnimationFrame(animate);
   }
 }
@@ -2376,6 +2405,7 @@ function animate(frameTimeMs) {
     return;
   }
   stats?.begin();
+  const benchmarkFrameIndex = browserBenchmark?.beginFrame();
   const currentTime =
     typeof frameTimeMs === "number" ? frameTimeMs : performance.now();
   const deltaTime = (currentTime - lastTime) / 1000;
@@ -2386,7 +2416,25 @@ function animate(frameTimeMs) {
   }
   updateInstancingMaterialUniforms(shaderTime);
 
-  const count = stepSimulationAndUpdateState(paused.value ? 0 : deltaTime);
+  if (browserBenchmark?.shouldResetPhaseTimings()) {
+    wasmBridge?.resetPhaseTimings();
+  }
+  const sampleLocality =
+    browserBenchmarkConfig &&
+    browserBenchmarkConfig.warmup > 0 &&
+    benchmarkFrameIndex === browserBenchmarkConfig.warmup - 1;
+  if (sampleLocality) {
+    wasmBridge?.beginLocalitySample();
+  }
+  const simulationDelta = browserBenchmarkConfig ? 1 / 60 : deltaTime;
+  const count = browserBenchmark
+    ? browserBenchmark.measure('wasm_simulation', () =>
+        stepSimulationAndUpdateState(simulationDelta),
+      )
+    : stepSimulationAndUpdateState(paused.value ? 0 : deltaTime);
+  if (sampleLocality) {
+    wasmBridge?.endLocalitySample();
+  }
 
   const meshes = boidInstancing.getMeshes();
   instancedMeshHigh = meshes.high;
@@ -2410,22 +2458,27 @@ function animate(frameTimeMs) {
     return;
   }
 
-  const { positions, orientations, velocities } = getWasmViews(count);
+  const { positions, orientations, velocities } = browserBenchmark
+    ? browserBenchmark.measure('wasm_to_js_views', () => getWasmViews(count))
+    : getWasmViews(count);
   if ((frameCounter++ & 63) === 0) {
     wasmBridge?.getDiagnostics?.({ firstBoidX: true });
   }
 
   const predatorCount = getPredatorCount();
-  const updateInfo = boidInstancing.update({
-    count,
-    positions,
-    orientations,
-    velocities,
-    cameraPosition: camera.position,
-    originPosition: controls?.target,
-    predatorCount,
-    posRange: DEFAULT_SIMULATION_POS_RANGE,
-  });
+  const updateInstancing = () => boidInstancing.update({
+      count,
+      positions,
+      orientations,
+      velocities,
+      cameraPosition: camera.position,
+      originPosition: controls?.target,
+      predatorCount,
+      posRange: DEFAULT_SIMULATION_POS_RANGE,
+    });
+  const updateInfo = browserBenchmark
+    ? browserBenchmark.measure('js_instance_packing', updateInstancing)
+    : updateInstancing();
 
   const visibleCount =
     updateInfo.visibleCount ?? Math.max(0, count - predatorCount);
@@ -2577,15 +2630,29 @@ function animate(frameTimeMs) {
 
   controls.update();
   updateParticleUniforms();
-  if (pipelineReady) {
-    fogPipeline.updateCameraUniforms(camera);
-    fogPipeline.render(deltaTime);
+  const submitRender = () => {
+    if (pipelineReady) {
+      fogPipeline.updateCameraUniforms(camera);
+      fogPipeline.render(deltaTime);
+    } else {
+      renderer.render(scene, camera);
+    }
+  };
+  if (browserBenchmark) {
+    browserBenchmark.beginGpu(renderer.getContext());
+    browserBenchmark.measure('render_submission_cpu', submitRender);
+    browserBenchmark.endGpu();
   } else {
-    renderer.render(scene, camera);
+    submitRender();
   }
 
   stats?.end();
   stats?.update();
+
+  if (browserBenchmark?.endFrame()) {
+    void browserBenchmark.finish({ bridge: wasmBridge, positions, renderer });
+    return;
+  }
 
   scheduleNextFrame();
 }
@@ -2630,7 +2697,9 @@ onMounted(() => {
     updateSystemSettings(toRaw(systemSettings));
     tuningInitialized.value = true;
     applySystemSettingsToWasm();
-    saveToStorage();
+    if (!browserBenchmarkConfig) {
+      saveToStorage();
+    }
   }
 
   initThreeJS();
@@ -2638,10 +2707,20 @@ onMounted(() => {
     console.log("Boid model loaded successfully.");
 
     boidAssetsReady = true;
-    applyStatsDebugState();
+    if (browserBenchmarkConfig) {
+      wasmBridge?.configureBenchmarkDiagnostics({
+        seed: browserBenchmarkConfig.seed,
+        taskLimit: browserBenchmarkConfig.taskLimit,
+        parallelTiming: true,
+      });
+    } else {
+      applyStatsDebugState();
+    }
 
     startSimulation();
-    initBackgroundAudioPlayback();
+    if (!browserBenchmarkConfig) {
+      initBackgroundAudioPlayback();
+    }
   });
 
   window.addEventListener("keydown", handleKeydown);
@@ -2669,6 +2748,8 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  benchmarkMessageChannel?.port1.close();
+  benchmarkMessageChannel?.port2.close();
   window.removeEventListener("keydown", handleKeydown);
   document.removeEventListener("visibilitychange", applyBackgroundAudioAutoMute);
   window.removeEventListener("blur", applyBackgroundAudioAutoMute);
@@ -2727,7 +2808,9 @@ watch(
       return;
     }
     applySystemSettingsToWasm();
-    saveToStorage();
+    if (!browserBenchmarkConfig) {
+      saveToStorage();
+    }
   },
   { deep: true }
 );
@@ -2738,7 +2821,9 @@ watch(
   () => {
     wasmBridge?.applySpeciesParams(toRaw(settings), { spatialScale: 1 });
 
-    saveToStorage();
+    if (!browserBenchmarkConfig) {
+      saveToStorage();
+    }
 
     // 種族構成（個体数・捕食者フラグ）が変わった場合は群れ再初期化
     const signature = getSpeciesSignature(settings);
