@@ -1,5 +1,6 @@
 #pragma once
 #include "thread_pool.h"
+#include "boids_parallel_config.h"
 
 inline ThreadPool& getThreadPool() {
     static ThreadPool pool(

@@ -24,6 +24,10 @@ struct BoidsWorldConfig {
 
 class BoidsWorld {
 public:
+  struct PhaseTimings {
+    double ms[4];
+    long calls[4];
+  };
   explicit BoidsWorld(const BoidsWorldConfig &config = {});
   ~BoidsWorld();
 
@@ -52,6 +56,8 @@ public:
   std::span<const glm::vec3> velocities() const;
   std::span<const glm::quat> orientations() const;
   std::span<const int> speciesIds() const;
+  PhaseTimings phaseTimings() const;
+  void resetPhaseTimings();
 
 private:
   BoidsWorldConfig config_;

@@ -16,6 +16,11 @@
 class BoidSimulation : public SpatialIndex
 {
 public:
+    struct PhaseTimings {
+        double ms[4]{};
+        long calls[4]{};
+    };
+
     static BoidSimulation& instance();
     static BoidSimulation& defaultInstance();
     struct LeafCacheEntry {
@@ -75,6 +80,8 @@ public:
     uint32_t getRandomSeed() const { return randomSeed_; }
     void setFixedTimeStep(float dt);
     float getFixedTimeStep() const { return fixedTimeStep_; }
+    PhaseTimings getPhaseTimings() const { return phaseTimings_; }
+    void resetPhaseTimings();
 
     // 空間インデックス（現状は BoidUnit ツリー）を保持値で再構築する。
     void rebuildSpatialIndex() { build(); }
@@ -170,6 +177,7 @@ private:
     uint32_t randomSeed_ = 5489u;
     float fixedTimeStep_ = 1.0f / 60.0f;
     std::mt19937 randomEngine_;
+    PhaseTimings phaseTimings_{};
     std::vector<float> unitSimpleDensities;
     std::vector<SpeciesEnvelope> speciesEnvelopes;
     std::vector<std::vector<SpeciesCluster>> speciesClusters;

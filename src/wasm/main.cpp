@@ -4,10 +4,9 @@
 #include <emscripten.h>
 #endif
 
-int main() {
+int main(int argc, char **argv) {
 #ifdef __EMSCRIPTEN__
   emscripten_exit_with_live_runtime();
 #endif
-  Entry::run();
-  return 0;
+  return Entry::run(argc, argv);
 }

@@ -14,13 +14,17 @@
 #include "native_simulation.h"
 #endif
 
-void Entry::run() {
+int Entry::run(int argc, char **argv) {
 #ifdef __EMSCRIPTEN__
   std::cout << "WebAssembly entry point initialized!" << std::endl;
+  return 0;
 #else
-  std::cout << "Starting native boids simulation..." << std::endl;
   NativeSimulation simulation;
+  if (!simulation.configureFromCommandLine(argc, argv)) {
+    return 2;
+  }
   simulation.run();
+  return 0;
 #endif
 }
 

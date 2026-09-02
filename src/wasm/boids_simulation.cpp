@@ -1,7 +1,8 @@
-﻿#include <string>
+#include <string>
 #define GLM_ENABLE_EXPERIMENTAL
 #include "boids_simulation.h"
 #include "boids_buffers.h"
+#include <chrono>
 #include "platform_utils.h"
 #include "simulation_tuning.h"
 #include "species_params.h"
@@ -36,12 +37,10 @@ constexpr float kClusterVelocityAlignBias = 0.35f;// 0..1目安。速度方向�
 constexpr int kClusterMinLeafBoids = 6;           // これ未満の leaf はノイズ候補として原則無視する
 constexpr float kClusterDebugMinWeight = 18.0f;   // 可視化や school 入力に使う最小重み
 constexpr int kClusterDebugMaxStaleFrames = 45;   // これより古い cluster は可視対象から外す
-constexpr float kClusterSharedDriftDampingScale = 4.0f; // schoolPull 無効種の小クラスタ群に対する並進ドリフト抑制倍率。
 
 // dist <= linkScale * (r_i + r_j) で同一群れ候補とする（大きいほど群れが繋がりやすい）。
 constexpr float kSchoolLinkScale = 1.35f;
 constexpr int kMaxSchoolsPerSpecies = 12;         // 種あたりの大クラスター上限（大きいほど群れ分割を保持）
-constexpr float kSchoolSharedDriftDampingScale = 4.0f; // baseAlpha への倍率。大きいほど大クラスタ全体の並進ドリフトを抑える。
 constexpr float kSchoolConfidenceRiseScale = 0.40f;
 constexpr float kSchoolConfidenceDecayScale = 0.50f;
 constexpr float kSchoolCenterMaxStepRadiusScale = 0.035f;
@@ -55,27 +54,6 @@ constexpr int kDebugRequestKeepAliveFrames = 120; // フレーム。デバッグ
 } // namespace
 
 namespace {
-template <typename ClusterType>
-bool computeActiveWeightedCenter(const std::vector<ClusterType> &clusters,
-                                 glm::vec3 &outCenter) {
-  glm::vec3 sum(0.0f);
-  float weightSum = 0.0f;
-  for (const auto &cluster : clusters) {
-    if (!cluster.active) {
-      continue;
-    }
-    const float w = glm::clamp(cluster.weight, 0.25f, 50000.0f);
-    sum += cluster.center * w;
-    weightSum += w;
-  }
-  if (weightSum <= 1e-6f) {
-    outCenter = glm::vec3(0.0f);
-    return false;
-  }
-  outCenter = sum * (1.0f / weightSum);
-  return true;
-}
-
 template <typename ClusterType>
 bool isFreshCluster(const ClusterType &cluster, int currentFrame,
                     int maxStaleFrames, float minWeight) {
@@ -410,11 +388,6 @@ void BoidSimulation::updateSpeciesClusters(float dt) {
   for (std::size_t sid = 0; sid < speciesCount; ++sid) {
     const SpeciesParams &params = globalSpeciesParams[sid];
     auto &clusters = speciesClusters[sid];
-    glm::vec3 previousWeightedCenter(0.0f);
-    const bool shouldDampClusterDrift = !params.schoolPullEnabled;
-    const bool hadPreviousWeightedCenter =
-        shouldDampClusterDrift &&
-        computeActiveWeightedCenter(clusters, previousWeightedCenter);
     for (auto &cluster : clusters) {
       if (cluster.frameContributionCount > 0) {
         const float invCount =
@@ -459,23 +432,7 @@ void BoidSimulation::updateSpeciesClusters(float dt) {
       cluster.frameSumVelocity = glm::vec3(0.0f);
     }
 
-    glm::vec3 updatedWeightedCenter(0.0f);
-    if (hadPreviousWeightedCenter &&
-        computeActiveWeightedCenter(clusters, updatedWeightedCenter)) {
-      const glm::vec3 sharedDrift = updatedWeightedCenter - previousWeightedCenter;
-      const float sharedDriftLen2 = glm::dot(sharedDrift, sharedDrift);
-      if (sharedDriftLen2 > 1e-6f) {
-        const float driftDamping =
-            glm::clamp(decayPerFrame * kClusterSharedDriftDampingScale, 0.02f, 0.08f);
-        const glm::vec3 correction = sharedDrift * driftDamping;
-        for (auto &cluster : clusters) {
-          if (!cluster.active) {
-            continue;
-          }
-          cluster.center -= correction;
-        }
-      }
-    }
+    // 実際の並進を打ち消さないよう、共有ドリフトによる中心補正は行わない。
 
     std::stable_sort(
         clusters.begin(), clusters.end(),
@@ -948,6 +905,11 @@ void BoidSimulation::buildRecursive(BoidUnit *node, const std::vector<int> &indi
 }
 
 void BoidSimulation::update(float dt) {
+  using PhaseClock = std::chrono::steady_clock;
+  const auto recordPhase = [this](int phase, PhaseClock::time_point start) {
+    phaseTimings_.ms[phase] +=
+        std::chrono::duration<double, std::milli>(PhaseClock::now() - start).count();
+  };
   // NOTE:
   // dt が NaN/Inf/負だと、全個体が同じ汚染を共有して「全体ガガガ/全体停止」になりやすい。
   // ここは1フレーム1回の防波堤としてコスト無視できる。
@@ -967,7 +929,9 @@ void BoidSimulation::update(float dt) {
   }
 
   // 木構造全体を再帰的に更新
+  const auto updateRecursiveStart = PhaseClock::now();
   if (root) {
+    ++phaseTimings_.calls[0];
     try {
       setRenderPointersToReadBuffers();
       root->updateRecursive(glm::clamp(dt, 0.0f, 0.1f) * 5);
@@ -984,6 +948,7 @@ void BoidSimulation::update(float dt) {
   } else {
     setRenderPointersToReadBuffers();
   }
+  recordPhase(0, updateRecursiveStart);
 
   // NOTE:
   // speciesClusters / speciesSchoolClusters は「デバッグ描画」だけでなく、
@@ -992,10 +957,12 @@ void BoidSimulation::update(float dt) {
   // EMA の時間スケールを保つため、dt は蓄積してまとめて渡す。
   // フレーム間引きでクラスター更新のコストを抑える（大きいほど軽いが追従が遅い）。
   constexpr int kClusterUpdateStride = 3;
+  const auto clusterUpdateStart = PhaseClock::now();
   clusterUpdateDtAccumulator_ += dt;
   // 停止復帰などで dt が溜まりすぎると、一括更新が強すぎて不安定になり得る。
   clusterUpdateDtAccumulator_ = glm::min(clusterUpdateDtAccumulator_, 0.5f);
   if ((frameCount % kClusterUpdateStride) == 0) {
+    ++phaseTimings_.calls[2];
     const float clusteredDt = clusterUpdateDtAccumulator_;
     clusterUpdateDtAccumulator_ = 0.0f;
 
@@ -1003,6 +970,7 @@ void BoidSimulation::update(float dt) {
     // 小クラスターを素材に、より大きい「群れ」中心を推定（10秒EMAで安定化）。
     updateSpeciesSchoolClusters(clusteredDt);
   }
+  recordPhase(2, clusterUpdateStart);
   frameCount++;
 
   // 一定フレームごとに葉ノードを再収集
@@ -1018,7 +986,9 @@ void BoidSimulation::update(float dt) {
   }
 
   // 一定フレームごとに木構造を再構築（大幅に頻度を減らす）
+  const auto buildStart = PhaseClock::now();
   if ((frameCount % kTreeRebuildStride) == 0) {
+    ++phaseTimings_.calls[1];
     build();
     // printTree(root, 0); // ツリー構造をログに出力
 
@@ -1031,8 +1001,11 @@ void BoidSimulation::update(float dt) {
     splitIndex = 0;
     mergeIndex = 0;
   }
+  recordPhase(1, buildStart);
 
   // 分割と結合の処理
+  const auto splitMergeStart = PhaseClock::now();
+  ++phaseTimings_.calls[3];
   if (!leafCache.empty()) {
     // 1フレームの作業量を抑えてスパイクを避ける。
     constexpr int kSplitMergeWorkBudget = 12;
@@ -1073,8 +1046,11 @@ void BoidSimulation::update(float dt) {
       }
     }
   }
+  recordPhase(3, splitMergeStart);
 
 }
+
+void BoidSimulation::resetPhaseTimings() { phaseTimings_ = {}; }
 
 void BoidSimulation::updateFixedStep(float simulationDt, float realDt) {
   const float stepDt = simulationDt > 0.0f ? simulationDt : fixedTimeStep_;
@@ -1542,9 +1518,14 @@ void BoidSimulation::updateSpeciesSchoolClusters(float dt) {
     auto &schools = speciesSchoolClusters[sid];
     const auto &smallClusters = speciesClusters[sid];
     const SpeciesParams &params = globalSpeciesParams[sid];
-    glm::vec3 previousWeightedCenter(0.0f);
-    const bool hadPreviousWeightedCenter =
-        computeActiveWeightedCenter(schools, previousWeightedCenter);
+
+    // 前回速度で中心を等速移流し、移動する群れへの追従遅れを補う。
+    // 後段の EMA とステップ制限は、この予測中心を測定値で補正する。
+    for (auto &school : schools) {
+      if (school.active) {
+        school.center += school.avgVelocity * safeDt;
+      }
+    }
 
     // active な小クラスターをインデックス化（最大 32 前提）
     int activeIndices[32];
@@ -1788,23 +1769,7 @@ void BoidSimulation::updateSpeciesSchoolClusters(float dt) {
       }
     }
 
-    glm::vec3 updatedWeightedCenter(0.0f);
-    if (hadPreviousWeightedCenter &&
-        computeActiveWeightedCenter(schools, updatedWeightedCenter)) {
-      const glm::vec3 sharedDrift = updatedWeightedCenter - previousWeightedCenter;
-      const float sharedDriftLen2 = glm::dot(sharedDrift, sharedDrift);
-      if (sharedDriftLen2 > 1e-6f) {
-        const float driftDamping =
-            glm::clamp(baseAlpha * kSchoolSharedDriftDampingScale, 0.01f, 0.04f);
-        const glm::vec3 correction = sharedDrift * driftDamping;
-        for (auto &school : schools) {
-          if (!school.active) {
-            continue;
-          }
-          school.center -= correction;
-        }
-      }
-    }
+    // 等速予測した中心を後退させないよう、共有ドリフト補正は適用しない。
 
     std::stable_sort(
         schools.begin(), schools.end(),

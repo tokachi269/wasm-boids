@@ -3,7 +3,7 @@
 
 class Entry {
 public:
-    static void run();
+    static int run(int argc = 0, char **argv = nullptr);
 };
 
 #endif // ENTRY_H

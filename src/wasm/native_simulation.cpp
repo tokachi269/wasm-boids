@@ -1,15 +1,23 @@
 #include "native_simulation.h"
 #include "boids_simulation.h"
 #include "platform_utils.h"
+#include "boids_parallel_config.h"
 #include "scale_utils.h"
 
 #include <atomic>
+#include <algorithm>
+#include <charconv>
 #include <chrono>
+#include <cmath>
 #include <csignal>
+#include <cstring>
 #include <glm/glm.hpp>
 #include <iomanip>
+#include <iostream>
+#include <limits>
 #include <numeric>
 #include <sstream>
+#include <string_view>
 #include <thread>
 
 namespace {
@@ -33,13 +41,70 @@ NativeSimulation::NativeSimulation() {
   }
 }
 
+bool NativeSimulation::configureFromCommandLine(int argc, char **argv) {
+  const auto parseUnsigned = [](const char *text, auto &value) {
+    const std::string_view input(text);
+    const auto result = std::from_chars(input.data(), input.data() + input.size(), value);
+    return result.ec == std::errc{} && result.ptr == input.data() + input.size();
+  };
+
+  for (int i = 1; i < argc; ++i) {
+    const std::string_view arg(argv[i]);
+    if (arg != "--bench" && arg != "--seed" && arg != "--boids") {
+      std::cerr << "Unknown argument: " << arg << '\n';
+      return false;
+    }
+    if (++i >= argc) {
+      std::cerr << "Missing value for " << arg << '\n';
+      return false;
+    }
+
+    if (arg == "--bench") {
+      options_.bench = true;
+      if (!parseUnsigned(argv[i], options_.benchFrames) || options_.benchFrames == 0) {
+        std::cerr << "Invalid frame count: " << argv[i] << '\n';
+        return false;
+      }
+    } else if (arg == "--seed") {
+      if (!parseUnsigned(argv[i], options_.seed)) {
+        std::cerr << "Invalid seed: " << argv[i] << '\n';
+        return false;
+      }
+    } else {
+      unsigned int count = 0;
+      if (!parseUnsigned(argv[i], count) || count == 0 ||
+          count > static_cast<unsigned int>(std::numeric_limits<int>::max())) {
+        std::cerr << "Invalid boid count: " << argv[i] << '\n';
+        return false;
+      }
+      options_.benchBoids = static_cast<int>(count);
+    }
+  }
+  return true;
+}
+
 // シミュレーション全体の起動（初期化→ループ開始）
 void NativeSimulation::run() {
   std::signal(SIGINT, handleSignal); // Ctrl+C で停止可能
 
   settings_ = ensureSettingsFields(loadSettings()); // 設定値の取得・補完
+  if (options_.benchBoids > 0) {
+    int nonPrimaryCount = 0;
+    for (std::size_t i = 1; i < settings_.size(); ++i) {
+      nonPrimaryCount += settings_[i].count;
+    }
+    if (options_.benchBoids < nonPrimaryCount) {
+      std::cerr << "Boid count is smaller than the non-primary species count.\n";
+      return;
+    }
+    settings_.front().count = options_.benchBoids - nonPrimaryCount;
+  }
   startSimulation();                                // BoidSimulation 初期化
-  animate();                                        // メインループ開始
+  if (options_.bench) {
+    runBenchmark();
+  } else {
+    animate();                                      // メインループ開始
+  }
 }
 
 // デフォルトの種パラメータ（Boids/Predator）を返す
@@ -170,8 +235,91 @@ void NativeSimulation::startSimulation() {
   world_.reset(scaled);
 
   const int totalBoids = calculateTotalBoidCount(settings_);
-  logger::log("Simulation initialized with " + std::to_string(totalBoids) +
-              " boids.");
+  if (!options_.bench) {
+    logger::log("Simulation initialized with " + std::to_string(totalBoids) +
+                " boids.");
+  }
+}
+
+void NativeSimulation::runBenchmark() {
+  using clock = std::chrono::steady_clock;
+  constexpr std::size_t kWarmupFrames = 1000;
+  constexpr float kFixedDt = 1.0f / 60.0f;
+  const std::size_t measuredFrames =
+      options_.benchFrames > kWarmupFrames ? options_.benchFrames - kWarmupFrames : 0;
+  std::vector<double> frameTimes;
+  frameTimes.reserve(measuredFrames);
+
+  options_.sleepMillis = 0;
+  options_.reportInterval = 0;
+  options_.fixedTimeStep = kFixedDt;
+  world_.setFixedTimeStep(kFixedDt);
+  setBoidsMaxTasksOverride(1);
+  world_.resetPhaseTimings();
+
+  for (std::size_t frame = 0; frame < options_.benchFrames; ++frame) {
+    if (frame == kWarmupFrames) {
+      world_.resetPhaseTimings();
+    }
+    const auto start = clock::now();
+    world_.step(kFixedDt);
+    const auto end = clock::now();
+    if (frame >= kWarmupFrames) {
+      frameTimes.push_back(
+          std::chrono::duration<double, std::milli>(end - start).count());
+    }
+  }
+
+  if (options_.benchFrames <= kWarmupFrames) {
+    world_.resetPhaseTimings();
+  }
+
+  std::sort(frameTimes.begin(), frameTimes.end());
+  const auto percentile = [&frameTimes](double fraction) {
+    if (frameTimes.empty()) return 0.0;
+    const auto index = static_cast<std::size_t>(
+        std::ceil(fraction * static_cast<double>(frameTimes.size()))) - 1;
+    return frameTimes[index];
+  };
+  const double mean = frameTimes.empty()
+                          ? 0.0
+                          : std::accumulate(frameTimes.begin(), frameTimes.end(), 0.0) /
+                                static_cast<double>(frameTimes.size());
+  const double maximum = frameTimes.empty() ? 0.0 : frameTimes.back();
+
+  uint64_t checksum = 14695981039346656037ull;
+  for (const glm::vec3 &position : world_.positions()) {
+    for (const float component : {position.x, position.y, position.z}) {
+      uint32_t bits = 0;
+      std::memcpy(&bits, &component, sizeof(bits));
+      for (int byte = 0; byte < 4; ++byte) {
+        checksum ^= static_cast<uint8_t>(bits >> (byte * 8));
+        checksum *= 1099511628211ull;
+      }
+    }
+  }
+
+  const auto phases = world_.phaseTimings();
+  static constexpr const char *kPhaseNames[] = {
+      "updateRecursive", "build", "clusterUpdate", "splitMerge"};
+  std::ostringstream output;
+  output << std::setprecision(10)
+         << "{\"frames\":" << options_.benchFrames
+         << ",\"warmup\":" << kWarmupFrames
+         << ",\"seed\":" << options_.seed
+         << ",\"boids\":" << world_.boidCount()
+         << ",\"frame_ms\":{\"p50\":" << percentile(0.50)
+         << ",\"p95\":" << percentile(0.95)
+         << ",\"max\":" << maximum << ",\"mean\":" << mean << "}"
+         << ",\"phases\":{";
+  for (int i = 0; i < 4; ++i) {
+    if (i != 0) output << ',';
+    output << '\"' << kPhaseNames[i] << "\":{\"ms\":" << phases.ms[i]
+           << ",\"calls\":" << phases.calls[i] << '}';
+  }
+  output << "},\"checksum\":\"" << std::hex << std::setw(16)
+         << std::setfill('0') << checksum << "\"}";
+  std::cout << output.str() << '\n';
 }
 
 // メインループ（フレームごとに BoidSimulation を更新）

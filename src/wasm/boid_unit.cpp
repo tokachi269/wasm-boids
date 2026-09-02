@@ -51,6 +51,8 @@ constexpr float kPredatorRestMin = 2.0f;      // 休憩時間の下限（秒）
 constexpr float kPredatorRestMax = 7.0f;      // 休憩時間の上限（秒）
 constexpr float kPredatorRestSpeedScale = 0.45f; // 休憩時に維持する速度スケール
 constexpr float kTwoPi = 6.28318530718f;
+constexpr float kSchoolConfidencePullMin = 0.10f;
+constexpr float kSchoolConfidencePullFull = 0.50f;
 
 // ------------------------------------------------------------
 // NaN/Inf を「作らない」ための最小限ガード
@@ -1073,6 +1075,11 @@ void BoidUnit::updateRecursive(float dt) {
   const std::size_t hw = std::max(1u, std::thread::hardware_concurrency());
   // タスク数は CPU スレッド数に比例させるが、過剰分割は逆効果なので上限を付ける。
   std::size_t maxTasks = std::min<std::size_t>(hw, 8);
+  const std::size_t maxTasksOverride =
+      boidsMaxTasksOverride().load(std::memory_order_relaxed);
+  if (maxTasksOverride > 0) {
+    maxTasks = std::min(maxTasks, maxTasksOverride);
+  }
 
 #ifdef __EMSCRIPTEN__
   // main browser thread で Atomics.wait/futex wait すると待ち時間が支配的になりやすい。
@@ -1348,75 +1355,28 @@ void BoidUnit::computeBoidInteraction(float dt) {
     glm::vec3 schoolCenterDir(0.0f);
     float schoolRadius = 1.0f;
     float schoolWeight = 0.0f;
+    float schoolConfidence = 0.0f;
     bool hasSchoolCenterDir = false;
-
-    // 大クラスタ中心（school cluster）を「ほぼ同一点」の重複を避けつつ選ぶ。
-    // - 半径が重なっていてもOK（混ざる塊は許容）
-    // - ただし中心がほぼ同じ座標だと候補を増やしても意味がないため除外する
-    // ※ユーザー指定: minAbs = 2
-    constexpr int kMaxSchoolCoreCandidates = 3;
-    constexpr float kSchoolCoreMinAbs = 2.0f;
-    constexpr float kSchoolCoreMinAbsSq = kSchoolCoreMinAbs * kSchoolCoreMinAbs;
-    struct SchoolCoreCandidate {
-      glm::vec3 center;
-      float radius;
-      float weight;
-    };
 
     if (sid >= 0) {
       const auto *schools = simulation.getSpeciesSchoolClusters(sid);
       if (schools) {
-        std::array<SchoolCoreCandidate, kMaxSchoolCoreCandidates> coreCandidates{};
-        int coreCandidateCount = 0;
-
-        // 1) 種族の school clusters から、中心が近すぎないものを最大K個まで確保（重み優先）
-        for (const auto &school : *schools) {
-          if (!school.active || school.weight < 0.25f) {
-            continue;
-          }
-
-          bool tooClose = false;
-          for (int i = 0; i < coreCandidateCount; ++i) {
-            const glm::vec3 d = school.center - coreCandidates[i].center;
-            if (glm::dot(d, d) < kSchoolCoreMinAbsSq) {
-              tooClose = true;
-              break;
-            }
-          }
-          if (tooClose) {
-            continue;
-          }
-
-          const SchoolCoreCandidate candidate{
-              school.center, glm::max(school.radius, 1.0f), school.weight};
-          if (coreCandidateCount < kMaxSchoolCoreCandidates) {
-            coreCandidates[coreCandidateCount++] = candidate;
-          } else {
-            // 既に満杯なら、最も軽い候補を置き換える（重いコアを優先して残す）
-            int minIndex = 0;
-            float minWeight = coreCandidates[0].weight;
-            for (int i = 1; i < coreCandidateCount; ++i) {
-              if (coreCandidates[i].weight < minWeight) {
-                minWeight = coreCandidates[i].weight;
-                minIndex = i;
-              }
-            }
-            if (candidate.weight > minWeight) {
-              coreCandidates[minIndex] = candidate;
-            }
-          }
-        }
-
-        // 2) 候補コアの中から、この個体に最も近いものを選ぶ
+        // 新鮮な全 school を走査し、この個体に最も近い群れだけを選ぶ。
+        // 重み上位への偏りをなくし、小さい群れが大きい群れへ吸われるのを防ぐ。
         float bestDistSq = std::numeric_limits<float>::max();
-        for (int i = 0; i < coreCandidateCount; ++i) {
-          const glm::vec3 diff = coreCandidates[i].center - pos;
+        for (const auto &school : *schools) {
+          if (!school.active || school.weight < 0.25f ||
+              (simulation.getFrameCount() - school.lastUpdateFrame) > 45) {
+            continue;
+          }
+          const glm::vec3 diff = school.center - pos;
           const float distSq = glm::dot(diff, diff);
           if (distSq < bestDistSq) {
             bestDistSq = distSq;
             schoolCenterDir = diff;
-            schoolRadius = coreCandidates[i].radius;
-            schoolWeight = coreCandidates[i].weight;
+            schoolRadius = glm::max(school.radius, 1.0f);
+            schoolWeight = school.weight;
+            schoolConfidence = school.trackingConfidence;
             hasSchoolCenterDir = true;
           }
         }
@@ -2273,12 +2233,16 @@ void BoidUnit::computeBoidInteraction(float dt) {
             // - 中心付近の微小な揺れは、近接時だけ軽く減衰させる。
             const float nearAttenuation =
                 glm::smoothstep(0.15f, 2.0f, clusterDist);
-            const float clusterPull = baseCohesionStrength * nearAttenuation *
-                                      glm::clamp(
-                                          schoolWeight *
-                                              gSimulationTuning
-                                                  .schoolPullCoefficient,
-                                          0.0f, 0.9f);
+            float clusterPull = baseCohesionStrength * nearAttenuation *
+                                glm::clamp(
+                                    schoolWeight *
+                                        gSimulationTuning.schoolPullCoefficient,
+                                    0.0f, 0.9f);
+            // 追跡確度が低い中心の影響を抑え、安定した school だけを引力源にする。
+            const float confidenceScale = glm::smoothstep(
+                kSchoolConfidencePullMin, kSchoolConfidencePullFull,
+                schoolConfidence);
+            clusterPull *= confidenceScale;
             // 脅威中は「群れ中心へ戻す」より「回避/散開」を優先する。
             const float threatScatter = glm::smoothstep(0.10f, 0.55f, threatLevel);
             const float clusterThreatScale = 1.0f - threatScatter;

@@ -82,4 +82,16 @@ std::span<const int> BoidsWorld::speciesIds() const {
   return {buffers.speciesIds.data(), buffers.speciesIds.size()};
 }
 
+BoidsWorld::PhaseTimings BoidsWorld::phaseTimings() const {
+  const auto timings = simulation_->getPhaseTimings();
+  PhaseTimings result{};
+  for (int i = 0; i < 4; ++i) {
+    result.ms[i] = timings.ms[i];
+    result.calls[i] = timings.calls[i];
+  }
+  return result;
+}
+
+void BoidsWorld::resetPhaseTimings() { simulation_->resetPhaseTimings(); }
+
 } // namespace boids

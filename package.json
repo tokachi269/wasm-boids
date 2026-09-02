@@ -4,6 +4,7 @@
     "description": "Boids simulation using WebAssembly and Vue.js",
     "main": "index.js",
     "scripts": {
+        "build-native": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-native.ps1",
         "build-wasm:dev": "emcmake cmake -B build-dev -DCMAKE_BUILD_TYPE=Debug -DWASM_RUNTIME_OUTPUT_DIR=src/wasm/build/dev && cmake --build build-dev",
         "build-wasm:prod": "emcmake cmake -B build-prod -DCMAKE_BUILD_TYPE=Release -DWASM_RUNTIME_OUTPUT_DIR=src/wasm/build/prod && cmake --build build-prod",
     "serve": "cross-env WASM_BUILD_DIR=dev VUE_APP_WASM_BUILD_DIR=dev concurrently \"nodemon --watch src/wasm --ext cpp,h --exec \\\"npm run build-wasm:dev\\\"\" \"wait-on src/wasm/build/dev/wasm_boids.js && vue-cli-service serve\"",

@@ -8,6 +8,7 @@ class NativeSimulation {
 public:
   NativeSimulation();
   void run();
+  bool configureFromCommandLine(int argc, char **argv);
 
 private:
   struct Options {
@@ -20,6 +21,9 @@ private:
     int reportInterval = 60; // フレーム数
     int sleepMillis = 16;
     std::size_t maxFrames = 600; // 約10秒 (60FPS想定)
+    bool bench = false;
+    std::size_t benchFrames = 4000;
+    int benchBoids = -1;
   };
 
   std::vector<SpeciesParams> settings_;
@@ -38,4 +42,5 @@ private:
   void animate();
   void scheduleNextFrame();
   void printFrameSummary(std::size_t frame, float deltaSeconds) const;
+  void runBenchmark();
 };
