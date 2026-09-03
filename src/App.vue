@@ -1214,7 +1214,7 @@ function initThreeJS() {
   controls = null;
 
   scene = new THREE.Scene();
-  scene.background = new THREE.Color('#1b3340'); // 水中媒質・背景球の中層色と揃える
+  scene.background = new THREE.Color('#062040'); // フォグ色・背景球底色と揃えて遠景を統一
   createOceanSphere();
 
   camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
@@ -1513,9 +1513,9 @@ let instancedMeshLow = null;
 
 // 海中シーンの色味をまとめて管理する定数群
 const OCEAN_COLORS = {
-  SKY_HIGHLIGHT: "#789da1",   // 水面側（彩度を抑えた青灰色）
-  SKY_BLUE: "#365d68",        // 中層の低彩度な青緑
-  DEEP_BLUE: "#1b3340",       // 遠景の水中媒質と共有する深い青灰色
+  SKY_HIGHLIGHT: "#6ac8e0",   // 水面側（少しくぐもった青白）
+  SKY_BLUE: "#0574a8",        // 中層の濃い海の青
+  DEEP_BLUE: "#031c4d",       // 深い濃紺
   SEAFLOOR: "#3d5a4a",        // 海底：海藻や泥を帯びた緑灰色
   AMBIENT_LIGHT: "#3a4e5e",   // 低彩度の青灰色（影に青みが出すぎない）
   SUN_LIGHT: "#b8dff4",       // 水中を透過した青白いカスティック光
@@ -1529,7 +1529,7 @@ const toHex = (colorStr) => parseInt(colorStr.replace("#", "0x"), 16);
 
 // 距離と深度で濃さが変わる海中フォグ設定
 const heightFogConfig = {
-  color: new THREE.Color('#3a5962'), // 背景と同系統の低彩度なveiling light
+  color: new THREE.Color('#0b5270'), // 距離とともに加わる青緑のveiling light
   distanceStart: 1.5, // フォグ開始を少し手前に引き寄せ
   distanceEnd: 14.0, // 近めの距離で濃くなりくぐもり感を出す
   distanceExponent: 0.5, // 距離カーブを少し勾配に
@@ -1539,9 +1539,9 @@ const heightFogConfig = {
   heightFalloff: 0.06, // 深度方向の減衰率：強めて海底をフォグに内包する
   heightExponent: 1.2, // 深度カーブを少し勾配に
   maxOpacity: 0.95, // 最大フォグ率
-  directAttenuation: new THREE.Vector3(0.10, 0.075, 0.055), // 青への偏りを抑えつつ赤を先に失う
-  backscatterAttenuation: new THREE.Vector3(0.06, 0.055, 0.05),
-  depthLightAttenuation: new THREE.Vector3(0.003, 0.0022, 0.0015),
+  directAttenuation: new THREE.Vector3(0.11, 0.055, 0.025), // 赤ほど早く失われる
+  backscatterAttenuation: new THREE.Vector3(0.07, 0.055, 0.04),
+  depthLightAttenuation: new THREE.Vector3(0.004, 0.0018, 0.0007),
 };
 
 /**
@@ -1611,7 +1611,7 @@ function createOceanSphere() {
   gradient.addColorStop(0, OCEAN_COLORS.SKY_HIGHLIGHT);
   gradient.addColorStop(0.15, OCEAN_COLORS.SKY_BLUE);
   gradient.addColorStop(0.5, OCEAN_COLORS.DEEP_BLUE);
-  gradient.addColorStop(1, "#122733"); // 最深部も同系色でつなぎ、黒への急変を避ける
+  gradient.addColorStop(1, "#051535"); // 最深部は深海青（黒にならない程度）
 
   context.fillStyle = gradient;
   context.fillRect(0, 0, canvas.width, canvas.height);
@@ -1649,9 +1649,7 @@ function createFadeOutGroundMaterial() {
     emissiveIntensity: 0.4,
     transparent: true,
     alphaMap,
-    // 透明部分が深度だけを書き、海底Planeの外周を黒い線として
-    // 水中ポストプロセスへ残さないようにする。
-    depthWrite: false,
+    depthWrite: true,
   });
 
   material.roughness = 0.92;
