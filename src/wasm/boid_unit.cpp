@@ -1404,6 +1404,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
     float schoolRadius = 1.0f;
     float schoolWeight = 0.0f;
     float schoolConfidence = 0.0f;
+    float schoolInfluenceScale = 0.0f;
     bool hasSchoolCenterDir = false;
 
     if (sid >= 0) {
@@ -1411,6 +1412,8 @@ void BoidUnit::computeBoidInteraction(float dt) {
       if (schools) {
         // 新鮮な全 school を走査し、この個体に最も近い群れだけを選ぶ。
         // 重み上位への偏りをなくし、小さい群れが大きい群れへ吸われるのを防ぐ。
+        // school の外縁から cohesionRange より遠い個体は関連付けず、
+        // 無関係な遠方の群れへ直線的に引かれ続けるのを防ぐ。
         float bestDistSq = std::numeric_limits<float>::max();
         for (const auto &school : *schools) {
           if (!school.active || school.weight < 0.25f ||
@@ -1419,14 +1422,28 @@ void BoidUnit::computeBoidInteraction(float dt) {
           }
           const glm::vec3 diff = school.center - pos;
           const float distSq = glm::dot(diff, diff);
+          const float candidateSchoolRadius = glm::max(school.radius, 1.0f);
+          const float influenceRadius =
+              candidateSchoolRadius + glm::max(selfParams.cohesionRange, 0.0f);
+          if (distSq > influenceRadius * influenceRadius) {
+            continue;
+          }
           if (distSq < bestDistSq) {
             bestDistSq = distSq;
             schoolCenterDir = diff;
-            schoolRadius = glm::max(school.radius, 1.0f);
+            schoolRadius = candidateSchoolRadius;
             schoolWeight = school.weight;
             schoolConfidence = school.trackingConfidence;
             hasSchoolCenterDir = true;
           }
+        }
+        if (hasSchoolCenterDir) {
+          const float distance = glm::sqrt(bestDistSq);
+          const float fadeWidth = glm::max(selfParams.cohesionRange, 0.0f);
+          schoolInfluenceScale = fadeWidth > EPS
+              ? 1.0f - glm::smoothstep(
+                  schoolRadius, schoolRadius + fadeWidth, distance)
+              : (distance <= schoolRadius ? 1.0f : 0.0f);
         }
       }
     }
@@ -1813,11 +1830,23 @@ void BoidUnit::computeBoidInteraction(float dt) {
       if (hasSchoolCenterDir) {
         float clusterLen2 = glm::length2(schoolCenterDir);
         if (clusterLen2 > EPS) {
+          const float clusterDist = glm::sqrt(clusterLen2);
           glm::vec3 clusterDir = schoolCenterDir *
-                                 (1.0f / glm::sqrt(clusterLen2));
-          const float clusterPull = baseCohesionStrength *
-                                    glm::clamp(schoolWeight * 0.001f, 0.15f,
-                                               0.6f);
+                                 (1.0f / clusterDist);
+          const float nearAttenuation =
+              glm::smoothstep(0.15f, 2.0f, clusterDist);
+          float clusterPull = baseCohesionStrength * nearAttenuation *
+                              glm::clamp(
+                                  schoolWeight *
+                                      gSimulationTuning.schoolPullCoefficient,
+                                  0.0f, 0.9f);
+          const float confidenceScale = glm::smoothstep(
+              kSchoolConfidencePullMin, kSchoolConfidencePullFull,
+              schoolConfidence);
+          const float threatScatter =
+              glm::smoothstep(0.10f, 0.55f, threatLevel);
+          clusterPull *= confidenceScale * (1.0f - threatScatter) *
+                         schoolInfluenceScale;
           buf->accelerations[gIdx] += clusterDir * clusterPull;
         }
       }
@@ -2296,7 +2325,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
             const float confidenceScale = glm::smoothstep(
                 kSchoolConfidencePullMin, kSchoolConfidencePullFull,
                 schoolConfidence);
-            clusterPull *= confidenceScale;
+            clusterPull *= confidenceScale * schoolInfluenceScale;
             // 脅威中は「群れ中心へ戻す」より「回避/散開」を優先する。
             const float threatScatter = glm::smoothstep(0.10f, 0.55f, threatLevel);
             const float clusterThreatScale = 1.0f - threatScatter;
