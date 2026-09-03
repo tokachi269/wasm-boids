@@ -132,7 +132,15 @@
                     v-model="debugControls.enableFogPipeline"
                     :title="debugHelp.enableFogPipeline"
                   />
-                  フォグ/SSAO/ブルームを有効化
+                  水中の吸収/散乱を有効化
+                </label>
+                <label class="debug-checkbox" :title="debugHelp.enableEnhancedPostEffects">
+                  <input
+                    type="checkbox"
+                    v-model="debugControls.enableEnhancedPostEffects"
+                    :title="debugHelp.enableEnhancedPostEffects"
+                  />
+                  高品質エフェクト（SSAO/ブルーム）
                 </label>
                 <label class="debug-checkbox" :title="debugHelp.enableShadows">
                   <input type="checkbox" v-model="debugControls.enableShadows" :title="debugHelp.enableShadows" />
@@ -372,7 +380,8 @@ const tuningHelp = {
 
 // デバッグ表示/負荷設定の説明（ユーザ目線）。
 const debugHelp = {
-  enableFogPipeline: '見た目（フォグ/SSAO/ブルーム）を有効にします。重い場合は OFF。',
+  enableFogPipeline: '軽量な水中の色吸収と散乱を有効にします。',
+  enableEnhancedPostEffects: 'SSAOとブルームをまとめて有効にします。スマホや重い環境ではOFFを推奨。',
   enableShadows: '影描画を有効にします。見た目は良くなりますが負荷が上がりやすいです。',
   enableTailAnimation: '尾びれのアニメーションを有効にします。負荷が気になるなら OFF。',
   enableStats: 'stats-gl の計測 HUD を有効にします。通常は OFF で十分です。',
@@ -611,8 +620,9 @@ const schoolClusterColor = new THREE.Color();
 
 // GPU 負荷計測用に主要機能を切り替えるデバッグトグル群
 const debugControls = reactive({
-  enableFogPipeline: !deviceProfile.isMobile,
-  enableShadows: true,
+  enableFogPipeline: true,
+  enableEnhancedPostEffects: !useLowSpecPreset,
+  enableShadows: !useLowSpecPreset,
   enableTailAnimation: true,
   enableStats: false,
 });
@@ -1014,8 +1024,13 @@ function rebuildFogPipeline() {
 
   if (shouldEnable) {
     if (!fogPipeline) {
-      fogPipeline = new FogPipeline(heightFogConfig);
+      fogPipeline = new FogPipeline(heightFogConfig, {
+        enableEnhancedEffects: debugControls.enableEnhancedPostEffects,
+        internalScale: useLowSpecPreset ? 0.6 : 0.75,
+      });
     }
+    fogPipeline.enableEnhancedEffects = debugControls.enableEnhancedPostEffects;
+    fogPipeline.internalScale = useLowSpecPreset ? 0.6 : 0.75;
     const size = new THREE.Vector2();
     renderer.getSize(size);
     fogPipeline.init(renderer, scene, camera, size.x, size.y);
@@ -1133,6 +1148,7 @@ function scheduleWebglRecovery(reason) {
 
   if (deviceProfile.isMobile) {
     debugControls.enableShadows = false;
+    debugControls.enableEnhancedPostEffects = false;
     debugControls.enableFogPipeline = false;
   }
 
@@ -1513,7 +1529,7 @@ const toHex = (colorStr) => parseInt(colorStr.replace("#", "0x"), 16);
 
 // 距離と深度で濃さが変わる海中フォグ設定
 const heightFogConfig = {
-  color: new THREE.Color('#062040'), // 深海青（背景球と同系色で螵け込ませる）
+  color: new THREE.Color('#0b5270'), // 距離とともに加わる青緑のveiling light
   distanceStart: 1.5, // フォグ開始を少し手前に引き寄せ
   distanceEnd: 14.0, // 近めの距離で濃くなりくぐもり感を出す
   distanceExponent: 0.5, // 距離カーブを少し勾配に
@@ -1523,6 +1539,9 @@ const heightFogConfig = {
   heightFalloff: 0.06, // 深度方向の減衰率：強めて海底をフォグに内包する
   heightExponent: 1.2, // 深度カーブを少し勾配に
   maxOpacity: 0.95, // 最大フォグ率
+  directAttenuation: new THREE.Vector3(0.11, 0.055, 0.025), // 赤ほど早く失われる
+  backscatterAttenuation: new THREE.Vector3(0.07, 0.055, 0.04),
+  depthLightAttenuation: new THREE.Vector3(0.004, 0.0018, 0.0007),
 };
 
 /**
@@ -2769,6 +2788,13 @@ onUnmounted(() => {
 
 watch(
   () => debugControls.enableFogPipeline,
+  () => {
+    rebuildFogPipeline();
+  }
+);
+
+watch(
+  () => debugControls.enableEnhancedPostEffects,
   () => {
     rebuildFogPipeline();
   }

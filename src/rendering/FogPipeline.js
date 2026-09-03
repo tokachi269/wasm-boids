@@ -4,6 +4,7 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { SSAOPass } from 'three/examples/jsm/postprocessing/SSAOPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 
 /**
  * フォグやポストプロセスのセットアップを担当。
@@ -11,8 +12,9 @@ import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
  * 深度テクスチャを受け渡す責務を持ちます。
  */
 export class FogPipeline {
-  constructor(fogConfig) {
+  constructor(fogConfig, options = {}) {
     this.config = fogConfig;
+    this.enableEnhancedEffects = options.enableEnhancedEffects !== false;
     this.composer = null;
     this.heightFogPass = null;
     this.heightFogRenderTarget = null;
@@ -22,7 +24,7 @@ export class FogPipeline {
 
     // ポストプロセスはフル解像度だと GPU のフラグメント負荷が支配的になりやすい。
     // 見た目（Fog/SSAO/Bloom）を維持しつつ負荷を落とすため、内部レンダーターゲットを縮小して回す。
-    this.internalScale = 0.75;
+    this.internalScale = Number(options.internalScale) || 0.75;
   }
 
   /** HeightFog 用の ShaderPass を返します。 */
@@ -66,19 +68,14 @@ export class FogPipeline {
     const renderPass = new RenderPass(scene, camera);
     this.composer.addPass(renderPass);
 
-    // 環境の陰影を補強する SSAO
-    const ssaoPass = new SSAOPass(scene, camera, scaledWidth, scaledHeight);
-    ssaoPass.kernelRadius = 5;     // サンプル半径（大きいほど広範囲な AO）
-    ssaoPass.minDistance = 0.01;   // オクルージョン開始距離
-    ssaoPass.maxDistance = 0.3;    // 影響を与える最大距離
-    this.composer.addPass(ssaoPass);
-
-    // ハイライトを穏やかに演出するブルーム（ぎらつきを抑えてスペキュラ光を柔らかく拡散）
-    const bloomStrength = 0.5;   // ブルームの強さ（強すぎると白飛び）
-    const bloomRadius = 0.2;     // 発光の広がり（小さめで点光源感を維持）
-    const bloomThreshold = 0.85; // ブルームを適用する輝度（高めに設定して極端なハイライトのみ）
-    const bloomPass = new UnrealBloomPass(new THREE.Vector2(scaledWidth, scaledHeight), bloomStrength, bloomRadius, bloomThreshold);
-    this.composer.addPass(bloomPass);
+    if (this.enableEnhancedEffects) {
+      // SSAO と Bloom は追加レンダーターゲットを使うため、低負荷モードではまとめて外す。
+      const ssaoPass = new SSAOPass(scene, camera, scaledWidth, scaledHeight);
+      ssaoPass.kernelRadius = 5;
+      ssaoPass.minDistance = 0.01;
+      ssaoPass.maxDistance = 0.3;
+      this.composer.addPass(ssaoPass);
+    }
 
     const shader = createHeightFogShader(this.config);
     this.heightFogPass = new ShaderPass(shader);
@@ -93,7 +90,6 @@ export class FogPipeline {
       }
       originalRender(passRenderer, writeBuffer, readBuffer, deltaTime, maskActive);
     };
-    this.heightFogPass.needsSwap = false;
     this.heightFogPass.uniforms.tDepth.value = this.heightFogRenderTarget.depthTexture;
 
     applyFogConfigToUniforms(this.heightFogPass.uniforms, this.config);
@@ -104,13 +100,25 @@ export class FogPipeline {
       material.depthWrite = false;
       material.transparent = false;
       material.blending = THREE.NoBlending;
-      // RenderPass 側でトーンマッピング済みの絵を扱うため二重適用を避ける。
+      // 色空間変換と tone mapping は末尾の OutputPass に集約する。
       material.toneMapped = false;
       material.needsUpdate = true;
     }
 
-    this.heightFogPass.renderToScreen = true;
     this.composer.addPass(this.heightFogPass);
+
+    if (this.enableEnhancedEffects) {
+      // Bloom は水中媒質を通過した後の高輝度成分へ掛ける。
+      const bloomPass = new UnrealBloomPass(
+        new THREE.Vector2(scaledWidth, scaledHeight),
+        0.5,
+        0.2,
+        0.85
+      );
+      this.composer.addPass(bloomPass);
+    }
+
+    this.composer.addPass(new OutputPass());
   }
 
   /** ウィンドウリサイズ時に呼び出してバッファサイズを調整。 */
@@ -131,8 +139,6 @@ export class FogPipeline {
       return;
     }
 
-    // NOTE: 色処理（toneMapping / exposure）は renderer 側に統一する。
-    // HeightFogShader は「フォグ合成のみ」を担当し、二重適用を避ける。
     this.composer.render(delta);
   }
 
@@ -224,7 +230,10 @@ export function createHeightFogShader(config = {}) {
       cameraFar: { value: 1000 },
       projectionMatrixInverse: { value: new THREE.Matrix4() },
       cameraMatrixWorld: { value: new THREE.Matrix4() },
-      fogColor: { value: cloneColor(finalConfig.color) },                     // 霧の色
+      fogColor: { value: cloneColor(finalConfig.color) },                     // backscatter の色
+      directAttenuation: { value: cloneVector3(finalConfig.directAttenuation) },
+      backscatterAttenuation: { value: cloneVector3(finalConfig.backscatterAttenuation) },
+      depthLightAttenuation: { value: cloneVector3(finalConfig.depthLightAttenuation) },
       distanceStart: { value: finalConfig.distanceStart },                   // 距離フォグ開始位置
       distanceEnd: { value: finalConfig.distanceEnd },                       // 距離フォグ最大濃度距離
       distanceExponent: { value: finalConfig.distanceExponent },             // 距離カーブの鋭さ
@@ -251,6 +260,9 @@ export function createHeightFogShader(config = {}) {
     uniform float cameraNear;
     uniform float cameraFar;
     uniform vec3 fogColor;
+    uniform vec3 directAttenuation;
+    uniform vec3 backscatterAttenuation;
+    uniform vec3 depthLightAttenuation;
     uniform float distanceStart;
     uniform float distanceEnd;
     uniform float distanceExponent;
@@ -299,7 +311,6 @@ export function createHeightFogShader(config = {}) {
       // 「距離startの内側でも色が違う」ように見えるのを防ぐ。
       if (viewDistance <= distanceStart) {
         gl_FragColor = baseColor;
-        #include <colorspace_fragment>
         return;
       }
 
@@ -320,21 +331,25 @@ export function createHeightFogShader(config = {}) {
       float heightDistanceFade = smoothstep(distanceStart, distanceStart + 10.0, viewDistance);
       heightFactor *= heightDistanceFade;
 
-      float fogFactor = clamp(distanceFog * heightFactor, 0.0, 1.0);
-      fogFactor = mix(0.0, maxOpacity, fogFactor);
+      float mediumAmount = clamp(distanceFog * heightFactor * maxOpacity, 0.0, 1.0);
+      float opticalDistance = max(viewDistance - distanceStart, 0.0) * mediumAmount;
 
-      // 強いハイライト（反射/ブルーム源）をフォグで潰し過ぎないための補正。
-      // 物理的に厳密ではないが、水中の「キラキラ」が消える違和感を抑える目的。
-      float luma = dot(baseColor.rgb, vec3(0.2126, 0.7152, 0.0722));
-      float highlightMask = smoothstep(0.6, 1.2, luma);
-      fogFactor *= mix(1.0, 0.35, highlightMask);
+      // 物体からカメラまでの直接光はRGBごとに異なる速度で失われる。
+      // 赤を強く、青を弱く減衰させ、単色fogのmixより水中らしい色残りにする。
+      vec3 transmission = exp(-directAttenuation * opticalDistance);
 
-      // 露出はシーン側（RenderPass）には自動で効くが、フォグ色は固定だと追従しない。
-      // fogColor 側にも同じ露出を掛けて、明るさ調整時の一体感を保つ。
-      vec3 fogTarget = fogColor * uExposure;
-      vec3 fogged = mix(baseColor.rgb, fogTarget, fogFactor);
-      gl_FragColor = vec4(fogged, baseColor.a);
-      #include <colorspace_fragment>
+      // 水面から物体までの光路は、カメラまでの距離とは独立に扱う。
+      // 近距離を急に暗くしないよう、既存のheightDistanceFadeを共用する。
+      vec3 depthIllumination = exp(
+        -depthLightAttenuation * depthBelowSurface * heightDistanceFade
+      );
+      vec3 directLight = baseColor.rgb * transmission * depthIllumination;
+
+      // backscatterは物体色を暗くする項ではなく、視線方向へ加わるveiling light。
+      vec3 scatterBuildUp = 1.0 - exp(-backscatterAttenuation * opticalDistance);
+      vec3 backscatter = fogColor * uExposure * scatterBuildUp * mediumAmount;
+
+      gl_FragColor = vec4(directLight + backscatter, baseColor.a);
     }
   `,
   };
@@ -354,6 +369,9 @@ function buildFogDefaults() {
     heightFalloff: 0.01,                              // 深度方向の減衰係数
     heightExponent: 1,                                // 深度カーブの鋭さ
     maxOpacity: 1,                                    // 霧の上限不透明度
+    directAttenuation: new THREE.Vector3(0.11, 0.055, 0.025),
+    backscatterAttenuation: new THREE.Vector3(0.07, 0.055, 0.04),
+    depthLightAttenuation: new THREE.Vector3(0.004, 0.0018, 0.0007),
   };
 }
 
@@ -377,12 +395,34 @@ function cloneVector2(value) {
   return new THREE.Vector2();
 }
 
+function cloneVector3(value) {
+  if (value instanceof THREE.Vector3) {
+    return value.clone();
+  }
+  if (value && typeof value.x === 'number' && typeof value.y === 'number' && typeof value.z === 'number') {
+    return new THREE.Vector3(value.x, value.y, value.z);
+  }
+  if (Array.isArray(value) && value.length >= 3) {
+    return new THREE.Vector3(Number(value[0]) || 0, Number(value[1]) || 0, Number(value[2]) || 0);
+  }
+  return new THREE.Vector3();
+}
+
 function applyFogConfigToUniforms(uniforms, config = {}) {
   const defaults = buildFogDefaults();
   const finalConfig = { ...defaults, ...config };
 
   if (uniforms.fogColor?.value) {
     uniforms.fogColor.value.copy(cloneColor(finalConfig.color));
+  }
+  if (uniforms.directAttenuation?.value) {
+    uniforms.directAttenuation.value.copy(cloneVector3(finalConfig.directAttenuation));
+  }
+  if (uniforms.backscatterAttenuation?.value) {
+    uniforms.backscatterAttenuation.value.copy(cloneVector3(finalConfig.backscatterAttenuation));
+  }
+  if (uniforms.depthLightAttenuation?.value) {
+    uniforms.depthLightAttenuation.value.copy(cloneVector3(finalConfig.depthLightAttenuation));
   }
   if (uniforms.distanceStart) {
     uniforms.distanceStart.value = finalConfig.distanceStart;
