@@ -272,7 +272,7 @@ export class WasmtimeBridge {
       fastAttractStrength: toNumber(params.fastAttractStrength, 1.0),
       schoolPullCoefficient: Math.max(0, toNumber(params.schoolPullCoefficient, 0.0008)),
 
-      // 散らばり過ぎ防止（見えないソフト境界）。
+      // 散らばり過ぎ防止（固定ワールド原点を基準にした見えないソフト境界）。
       softBoundaryRadius: Math.max(0, toNumber(params.softBoundaryRadius, 100.0)),
       softBoundaryStart: Math.max(0, toNumber(params.softBoundaryStart, 70.0)),
       softBoundarySteer: Math.max(0, toNumber(params.softBoundarySteer, 0.25)),

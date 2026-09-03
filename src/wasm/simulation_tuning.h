@@ -11,8 +11,8 @@ struct SimulationTuningParams {
   float fastAttractStrength = 1.0f;     // 近傍不足時の補助凝集強度（0で無効）
   float schoolPullCoefficient = 0.0008f;// 大クラスタ引力係数
 
-  // 散らばり過ぎ防止の「見えないソフト境界」。
-  // - softBoundaryStart を超えたあたりから中心寄せが始まり、softBoundaryRadius に向けて強くなる。
+  // 散らばり過ぎ防止の、固定ワールド原点を基準にした「見えないソフト境界」。
+  // - softBoundaryStart を超えたあたりから原点寄せが始まり、softBoundaryRadius に向けて強くなる。
   // - 反射やクランプではなく「速度の舵取り」で戻すため、境界で溜まりにくい。
   float softBoundaryRadius = 200.0f;    // 単位: m（ワールド単位）。0以下で無効。
   float softBoundaryStart = 120.0f;     // 単位: m。半径の内側でも散開抑制を少し早めに効かせたい場合に小さくする。

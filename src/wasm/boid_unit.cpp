@@ -513,9 +513,10 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
     }
 
     // -----------------------------------------------
-    // 散らばり抑制（見えないソフト境界）
-    // - 一定距離を超えたら中心へ「少しずつ」寄せる。
+    // 散らばり抑制（固定ワールド原点を基準にした見えないソフト境界）
+    // - 一定距離を超えたらワールド中心へ「少しずつ」寄せる。
     // - 反射/クランプではなく速度の舵取りで戻すため、境界で溜まりにくい。
+    // - 群れ全体と一緒に移動する root.center は使わず、長期的な流出を止める。
     // - 追加コストは boid あたりベクトル演算のみ（近傍探索なし）。
     // -----------------------------------------------
     const float boundaryRadius = gSimulationTuning.softBoundaryRadius;
@@ -528,9 +529,7 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
       1.0f - glm::smoothstep(0.05f, 0.30f, boundaryThreat);
     if (!isPredator && boundaryThreatAttenuation > 1e-4f &&
       boundaryRadius > 0.0f && boundarySteer > 0.0f && boundaryRadius > boundaryStart) {
-      const BoidUnit *root = simulation.getRoot();
-      // root がない異常系では原点へ寄せる。
-      const glm::vec3 center = root ? root->center : glm::vec3(0.0f);
+      const glm::vec3 center(0.0f);
       const glm::vec3 toCenter = center - position;
       const float d2 = glm::length2(toCenter);
       const float start2 = boundaryStart * boundaryStart;
