@@ -1848,6 +1848,8 @@ function createOceanSphere() {
     map: texture,
     side: THREE.BackSide,
     fog: false,
+    // 8bit CanvasTexture の緩い色変化で見える帯を微小ディザで崩す。
+    dithering: true,
     // 天球は背景色だけを描く。深度を書かせると水中パスが天球上の
     // surfaceLevelを実在する海面として拾い、水平な境界線を作ってしまう。
     depthWrite: false,
