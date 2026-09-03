@@ -1610,6 +1610,7 @@ const boidInstancing = new BoidInstancing({
   identityQuaternion: IDENTITY_QUATERNION,
   lodNearDistanceSq: LOD_NEAR_DISTANCE_SQ,
   lodMidDistanceSq: LOD_MID_DISTANCE_SQ,
+  forceLowLod: deviceProfile.isMobile,
 });
 
 let instancedMeshHigh = null;
@@ -2870,6 +2871,7 @@ function animate(frameTimeMs) {
       originPosition: controls?.target,
       predatorCount,
       posRange: DEFAULT_SIMULATION_POS_RANGE,
+      preserveLod: paused.value,
     });
   const updateInfo = browserBenchmark
     ? browserBenchmark.measure('js_instance_packing', updateInstancing)

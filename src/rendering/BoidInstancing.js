@@ -12,6 +12,7 @@ export class BoidInstancing {
     identityQuaternion = [0, 0, 0, 1], // 非表示時に適用する無回転クォータニオン
     lodNearDistanceSq = 4,       // ハイポリ表示に切り替える距離²（約2m）
     lodMidDistanceSq = 25,       // LOD メッシュ＋アニメを行う距離²（約5m）
+    forceLowLod = false,         // 狭い画面では距離に関係なくローポリを使う
   } = {}) {
     this.tailAnimation = tailAnimation;
     this.tripleBufferSize = tripleBufferSize;
@@ -19,6 +20,7 @@ export class BoidInstancing {
     this.identityQuaternion = identityQuaternion;
     this.lodNearDistanceSq = lodNearDistanceSq;
     this.lodMidDistanceSq = lodMidDistanceSq;
+    this.forceLowLod = Boolean(forceLowLod);
     this.streamUsage = THREE.StreamDrawUsage ?? THREE.DynamicDrawUsage;
 
     this.scene = null;
@@ -154,6 +156,7 @@ update({
   predatorCount = 0,
   posRange,
   originPosition,
+  preserveLod = false,
 }) {
   if (!this.instancedMeshHigh || !this.instancedMeshLow || !this.bufferSetHigh || !this.bufferSetLow) {
     return { visibleCount: 0, lodFlags: null };
@@ -283,7 +286,14 @@ update({
     const dz = pz - camZ;
     // 高負荷を避けるため距離で LOD を切り替える
     const distSq = dx * dx + dy * dy + dz * dz;
-    const isNear = distSq < this.lodNearDistanceSq;
+    // 停止中は、カメラ操作だけでHighからLowへ切り替わらないよう直前のLODを維持する。
+    // 未初期化(0)はHighとして扱い、停止したまま生成された個体もLowへ落とさない。
+    const previousLod = lodFlags?.[i] ?? 0;
+    const isNear = this.forceLowLod
+      ? false
+      : preserveLod
+        ? previousLod !== 2
+        : distSq < this.lodNearDistanceSq;
     const isMid = !isNear && distSq < this.lodMidDistanceSq;
     const animateTail = tailEnabled && (isNear || (!largeFlockMode && isMid));
 
