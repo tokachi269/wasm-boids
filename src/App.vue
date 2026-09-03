@@ -1652,15 +1652,117 @@ function createFadeOutGroundMaterial() {
     emissiveIntensity: 0.4,
     transparent: true,
     alphaMap,
-    // 色だけでなく深度もalphaMapの外周で破棄し、Plane全体の四角い
-    // 深度境界が水中ポストプロセスに現れないようにする。
-    alphaTest: 0.02,
-    depthWrite: true,
+    // 半透明面を単一値のdepth bufferへ渡すと、alphaに関係なくPlane全体が
+    // 四角い深度面になる。色は通常どおりdepthTestし、媒質はmaterial内で処理する。
+    depthWrite: false,
   });
 
   material.roughness = 0.92;
   material.metalness = 0.0;
+  applyUnderwaterMediumToGroundMaterial(material, heightFogConfig);
   return material;
+}
+
+/**
+ * 半透明の海底は画面全体のdepth-based passでは正しく扱えないため、
+ * 不透明物と同じ吸収/backscatterをマテリアル側で適用する。
+ */
+function applyUnderwaterMediumToGroundMaterial(material, config) {
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.uGroundFogColor = { value: config.color.clone() };
+    shader.uniforms.uGroundDirectAttenuation = { value: config.directAttenuation.clone() };
+    shader.uniforms.uGroundBackscatterAttenuation = { value: config.backscatterAttenuation.clone() };
+    shader.uniforms.uGroundDepthLightAttenuation = { value: config.depthLightAttenuation.clone() };
+    shader.uniforms.uGroundDistanceStart = { value: config.distanceStart };
+    shader.uniforms.uGroundDistanceEnd = { value: config.distanceEnd };
+    shader.uniforms.uGroundDistanceExponent = { value: config.distanceExponent };
+    shader.uniforms.uGroundSurfaceLevel = { value: config.surfaceLevel };
+    shader.uniforms.uGroundHeightFalloff = { value: config.heightFalloff };
+    shader.uniforms.uGroundHeightExponent = { value: config.heightExponent };
+    shader.uniforms.uGroundMaxOpacity = { value: config.maxOpacity };
+
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        '#include <common>\nvarying float vGroundWorldY;'
+      )
+      .replace(
+        '#include <project_vertex>',
+        '#include <project_vertex>\nvGroundWorldY = (modelMatrix * vec4(transformed, 1.0)).y;'
+      );
+
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+varying float vGroundWorldY;
+uniform vec3 uGroundFogColor;
+uniform vec3 uGroundDirectAttenuation;
+uniform vec3 uGroundBackscatterAttenuation;
+uniform vec3 uGroundDepthLightAttenuation;
+uniform float uGroundDistanceStart;
+uniform float uGroundDistanceEnd;
+uniform float uGroundDistanceExponent;
+uniform float uGroundSurfaceLevel;
+uniform float uGroundHeightFalloff;
+uniform float uGroundHeightExponent;
+uniform float uGroundMaxOpacity;`
+      )
+      .replace(
+        '#include <opaque_fragment>',
+        `#include <opaque_fragment>
+float groundViewDistance = length(vViewPosition);
+float groundDistanceNorm = clamp(
+  (groundViewDistance - uGroundDistanceStart) /
+    max(uGroundDistanceEnd - uGroundDistanceStart, 1e-5),
+  0.0,
+  1.0
+);
+float groundDistanceFog = pow(
+  smoothstep(0.0, 1.0, groundDistanceNorm),
+  uGroundDistanceExponent
+);
+float groundDepthBelowSurface = max(uGroundSurfaceLevel - vGroundWorldY, 0.0);
+float groundHeightFactor = 1.0 - exp(
+  -groundDepthBelowSurface * uGroundHeightFalloff
+);
+groundHeightFactor = clamp(
+  pow(groundHeightFactor, uGroundHeightExponent),
+  0.0,
+  1.0
+);
+float groundHeightDistanceFade = smoothstep(
+  uGroundDistanceStart,
+  uGroundDistanceStart + 10.0,
+  groundViewDistance
+);
+groundHeightFactor *= groundHeightDistanceFade;
+float groundMediumAmount = clamp(
+  groundDistanceFog * groundHeightFactor * uGroundMaxOpacity,
+  0.0,
+  1.0
+);
+float groundOpticalDistance = max(
+  groundViewDistance - uGroundDistanceStart,
+  0.0
+) * groundMediumAmount;
+vec3 groundTransmission = exp(
+  -uGroundDirectAttenuation * groundOpticalDistance
+);
+vec3 groundDepthIllumination = exp(
+  -uGroundDepthLightAttenuation *
+    groundDepthBelowSurface * groundHeightDistanceFade
+);
+vec3 groundScatterBuildUp = 1.0 - exp(
+  -uGroundBackscatterAttenuation * groundOpticalDistance
+);
+gl_FragColor.rgb =
+  gl_FragColor.rgb * groundTransmission * groundDepthIllumination +
+  uGroundFogColor * groundScatterBuildUp * groundMediumAmount;`
+      );
+  };
+  material.customProgramCacheKey = () => 'ground-underwater-medium-v1';
+  material.needsUpdate = true;
 }
 
 function updateInstancingMaterialUniforms(time) {
