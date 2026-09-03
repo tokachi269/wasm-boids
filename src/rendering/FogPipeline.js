@@ -369,9 +369,9 @@ function buildFogDefaults() {
     heightFalloff: 0.01,                              // 深度方向の減衰係数
     heightExponent: 1,                                // 深度カーブの鋭さ
     maxOpacity: 1,                                    // 霧の上限不透明度
-    directAttenuation: new THREE.Vector3(0.11, 0.055, 0.025),
-    backscatterAttenuation: new THREE.Vector3(0.07, 0.055, 0.04),
-    depthLightAttenuation: new THREE.Vector3(0.004, 0.0018, 0.0007),
+    directAttenuation: new THREE.Vector3(0.10, 0.075, 0.055),
+    backscatterAttenuation: new THREE.Vector3(0.06, 0.055, 0.05),
+    depthLightAttenuation: new THREE.Vector3(0.003, 0.0022, 0.0015),
   };
 }
 
