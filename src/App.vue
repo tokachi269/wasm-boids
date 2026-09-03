@@ -1128,11 +1128,11 @@ function rebuildFogPipeline() {
     if (!fogPipeline) {
       fogPipeline = new FogPipeline(heightFogConfig, {
         enableEnhancedEffects: debugControls.enableEnhancedPostEffects,
-        internalScale: useLowSpecPreset ? 0.6 : 0.75,
+        internalScale: deviceProfile.isMobile ? 0.75 : 1.0,
       });
     }
     fogPipeline.enableEnhancedEffects = debugControls.enableEnhancedPostEffects;
-    fogPipeline.internalScale = useLowSpecPreset ? 0.6 : 0.75;
+    fogPipeline.internalScale = deviceProfile.isMobile ? 0.75 : 1.0;
     const size = new THREE.Vector2();
     renderer.getSize(size);
     fogPipeline.init(renderer, scene, camera, size.x, size.y);
