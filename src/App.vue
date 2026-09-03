@@ -1652,6 +1652,9 @@ function createFadeOutGroundMaterial() {
     emissiveIntensity: 0.4,
     transparent: true,
     alphaMap,
+    // 色だけでなく深度もalphaMapの外周で破棄し、Plane全体の四角い
+    // 深度境界が水中ポストプロセスに現れないようにする。
+    alphaTest: 0.02,
     depthWrite: true,
   });
 
