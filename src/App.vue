@@ -1627,6 +1627,9 @@ function createOceanSphere() {
     map: texture,
     side: THREE.BackSide,
     fog: false,
+    // 天球は背景色だけを描く。深度を書かせると水中パスが天球上の
+    // surfaceLevelを実在する海面として拾い、水平な境界線を作ってしまう。
+    depthWrite: false,
   });
 
   const oceanSphere = new THREE.Mesh(sphereGeo, sphereMat);
