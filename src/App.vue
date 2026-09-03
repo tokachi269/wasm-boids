@@ -186,19 +186,52 @@
                       <input type="range" min="0" max="0.15" step="0.002" v-model.number="fogTuning.heightFalloff" />
                       <input class="value-input" type="number" step="0.002" v-model.number="fogTuning.heightFalloff" />
                     </div>
-                    <div class="fog-vector-group">
-                      <span>直接光減衰 RGB</span>
-                      <input v-for="axis in fogVectorAxes" :key="`direct-${axis}`" class="vector-value-input" type="number" min="0" step="0.005" v-model.number="fogTuning.directAttenuation[axis]" :aria-label="`直接光減衰 ${axis.toUpperCase()}`" />
+                    <div class="setting-row compact-setting-row">
+                      <label>直接光減衰 RGB:</label>
+                      <input type="color" v-model="fogTuning.directAttenuationColor" />
+                      <input class="color-value-input" v-model="fogTuning.directAttenuationColor" />
                     </div>
-                    <div class="fog-vector-group">
-                      <span>散乱増加 RGB</span>
-                      <input v-for="axis in fogVectorAxes" :key="`scatter-${axis}`" class="vector-value-input" type="number" min="0" step="0.005" v-model.number="fogTuning.backscatterAttenuation[axis]" :aria-label="`散乱増加 ${axis.toUpperCase()}`" />
+                    <div class="setting-row compact-setting-row">
+                      <label>散乱増加 RGB:</label>
+                      <input type="color" v-model="fogTuning.backscatterAttenuationColor" />
+                      <input class="color-value-input" v-model="fogTuning.backscatterAttenuationColor" />
                     </div>
                     <div class="fog-vector-group">
                       <span>深度光減衰 RGB</span>
                       <input v-for="axis in fogVectorAxes" :key="`depth-${axis}`" class="vector-value-input" type="number" min="0" step="0.0001" v-model.number="fogTuning.depthLightAttenuation[axis]" :aria-label="`深度光減衰 ${axis.toUpperCase()}`" />
                     </div>
                     <button type="button" @click="resetFogTuning">Fog / Skyを既定値へ戻す</button>
+                  </div>
+                </details>
+                <details class="fog-tuning-section">
+                  <summary>Lighting tuning（再読込でリセット）</summary>
+                  <div class="fog-tuning-content">
+                    <div class="setting-row compact-setting-row">
+                      <label>Ambient色:</label>
+                      <input type="color" v-model="lightingTuning.ambientColor" />
+                      <input class="color-value-input" v-model="lightingTuning.ambientColor" />
+                    </div>
+                    <div class="setting-row compact-setting-row">
+                      <label>Ambient強度:</label>
+                      <input type="range" min="0" max="3" step="0.05" v-model.number="lightingTuning.ambientIntensity" />
+                      <input class="value-input" type="number" min="0" step="0.05" v-model.number="lightingTuning.ambientIntensity" />
+                    </div>
+                    <div class="setting-row compact-setting-row">
+                      <label>Sun色:</label>
+                      <input type="color" v-model="lightingTuning.sunColor" />
+                      <input class="color-value-input" v-model="lightingTuning.sunColor" />
+                    </div>
+                    <div class="setting-row compact-setting-row">
+                      <label>Sun強度:</label>
+                      <input type="range" min="0" max="20" step="0.1" v-model.number="lightingTuning.sunIntensity" />
+                      <input class="value-input" type="number" min="0" step="0.1" v-model.number="lightingTuning.sunIntensity" />
+                    </div>
+                    <div class="setting-row compact-setting-row">
+                      <label>露出:</label>
+                      <input type="range" min="0.1" max="2.5" step="0.05" v-model.number="lightingTuning.exposure" />
+                      <input class="value-input" type="number" min="0.1" step="0.05" v-model.number="lightingTuning.exposure" />
+                    </div>
+                    <button type="button" @click="resetLightingTuning">Lightingを既定値へ戻す</button>
                   </div>
                 </details>
                 <label class="debug-checkbox" :title="debugHelp.enableEnhancedPostEffects">
@@ -560,6 +593,7 @@ let scene, camera, renderer, controls;
 let fogPipeline = null; // 深度フォグパイプライン
 let particleField = null; // 背景パーティクルフィールド
 let dirLight = null; // ディレクショナルライトの参照
+let ambientLight = null; // 環境光。非永続の照明調整UIから更新する
 let groundMesh = null; // 地面メッシュの参照
 let oceanSphere = null; // 背景天球。Fog調整時の比較用に表示を切り替える
 let underwaterEnvMap = null; // 海中スペキュラ用 PMREM 環境マップ
@@ -1378,7 +1412,7 @@ function initThreeJS() {
   scene.add(groundMesh);
 
   // ライト
-  const ambientLight = new THREE.AmbientLight(
+  ambientLight = new THREE.AmbientLight(
     toHex(OCEAN_COLORS.AMBIENT_LIGHT),
     1.1
   );
@@ -1404,6 +1438,7 @@ function initThreeJS() {
   dirLight.shadow.normalBias = 0.01;
 
   scene.add(dirLight);
+  applyLightingTuning();
   initParticleSystem();
   rebuildFogPipeline();
   applyShadowDebugState();
@@ -1598,22 +1633,42 @@ const toHex = (colorStr) => parseInt(colorStr.replace("#", "0x"), 16);
 
 // 距離と深度で濃さが変わる海中フォグ設定
 const heightFogConfig = {
-  color: new THREE.Color('#0b5270'), // 距離とともに加わる青緑のveiling light
-  distanceStart: 1.5, // フォグ開始を少し手前に引き寄せ
-  distanceEnd: 14.0, // 近めの距離で濃くなりくぐもり感を出す
+  color: new THREE.Color('#1d2e35'), // 距離とともに加わる低彩度のveiling light
+  distanceStart: 0.6,
+  distanceEnd: 19.0,
   distanceExponent: 0.5, // 距離カーブを少し勾配に
   distanceControlPoint1: new THREE.Vector2(0.1, 0.25), // 開始側：早めにフォグを踏む
   distanceControlPoint2: new THREE.Vector2(0.85, 0.92), // 終端側
   surfaceLevel: 100.0, // 水面の高さ
-  heightFalloff: 0.06, // 深度方向の減衰率：強めて海底をフォグに内包する
+  heightFalloff: 0.02,
   heightExponent: 1.2, // 深度カーブを少し勾配に
-  maxOpacity: 0.95, // 最大フォグ率
+  maxOpacity: 0.59,
   directAttenuation: new THREE.Vector3(0.11, 0.055, 0.025), // 赤ほど早く失われる
   backscatterAttenuation: new THREE.Vector3(0.07, 0.055, 0.04),
   depthLightAttenuation: new THREE.Vector3(0.004, 0.0018, 0.0007),
 };
 
 const fogVectorAxes = ['x', 'y', 'z'];
+
+function attenuationVectorToHex(vector) {
+  const component = (value) => Math.round(
+    THREE.MathUtils.clamp(Number(value) || 0, 0, 1) * 255,
+  ).toString(16).padStart(2, '0');
+  return `#${component(vector.x)}${component(vector.y)}${component(vector.z)}`;
+}
+
+function attenuationHexToVector(value, fallback) {
+  const match = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(String(value));
+  if (!match) {
+    return fallback.clone();
+  }
+  return new THREE.Vector3(
+    parseInt(match[1], 16) / 255,
+    parseInt(match[2], 16) / 255,
+    parseInt(match[3], 16) / 255,
+  );
+}
+
 const initialFogTuning = Object.freeze({
   color: `#${heightFogConfig.color.getHexString()}`,
   skyHighlight: OCEAN_COLORS.SKY_HIGHLIGHT,
@@ -1624,16 +1679,8 @@ const initialFogTuning = Object.freeze({
   distanceExponent: heightFogConfig.distanceExponent,
   maxOpacity: heightFogConfig.maxOpacity,
   heightFalloff: heightFogConfig.heightFalloff,
-  directAttenuation: Object.freeze({
-    x: heightFogConfig.directAttenuation.x,
-    y: heightFogConfig.directAttenuation.y,
-    z: heightFogConfig.directAttenuation.z,
-  }),
-  backscatterAttenuation: Object.freeze({
-    x: heightFogConfig.backscatterAttenuation.x,
-    y: heightFogConfig.backscatterAttenuation.y,
-    z: heightFogConfig.backscatterAttenuation.z,
-  }),
+  directAttenuationColor: attenuationVectorToHex(heightFogConfig.directAttenuation),
+  backscatterAttenuationColor: attenuationVectorToHex(heightFogConfig.backscatterAttenuation),
   depthLightAttenuation: Object.freeze({
     x: heightFogConfig.depthLightAttenuation.x,
     y: heightFogConfig.depthLightAttenuation.y,
@@ -1645,8 +1692,6 @@ function copyInitialFogTuning() {
   return {
     ...initialFogTuning,
     showOceanSphere: true,
-    directAttenuation: { ...initialFogTuning.directAttenuation },
-    backscatterAttenuation: { ...initialFogTuning.backscatterAttenuation },
     depthLightAttenuation: { ...initialFogTuning.depthLightAttenuation },
   };
 }
@@ -1671,8 +1716,14 @@ function currentFogTuningConfig() {
     distanceExponent: Number(fogTuning.distanceExponent),
     maxOpacity: Number(fogTuning.maxOpacity),
     heightFalloff: Number(fogTuning.heightFalloff),
-    directAttenuation: tuningVector3(fogTuning.directAttenuation),
-    backscatterAttenuation: tuningVector3(fogTuning.backscatterAttenuation),
+    directAttenuation: attenuationHexToVector(
+      fogTuning.directAttenuationColor,
+      heightFogConfig.directAttenuation,
+    ),
+    backscatterAttenuation: attenuationHexToVector(
+      fogTuning.backscatterAttenuationColor,
+      heightFogConfig.backscatterAttenuation,
+    ),
     depthLightAttenuation: tuningVector3(fogTuning.depthLightAttenuation),
   };
 }
@@ -1693,6 +1744,33 @@ function applyFogTuning() {
 
 function resetFogTuning() {
   Object.assign(fogTuning, copyInitialFogTuning());
+}
+
+const initialLightingTuning = Object.freeze({
+  ambientColor: OCEAN_COLORS.AMBIENT_LIGHT,
+  ambientIntensity: 1.1,
+  sunColor: OCEAN_COLORS.SUN_LIGHT,
+  sunIntensity: 9.0,
+  exposure: 1.0,
+});
+const lightingTuning = reactive({ ...initialLightingTuning });
+
+function applyLightingTuning() {
+  if (ambientLight) {
+    ambientLight.color.set(lightingTuning.ambientColor);
+    ambientLight.intensity = Math.max(0, Number(lightingTuning.ambientIntensity) || 0);
+  }
+  if (dirLight) {
+    dirLight.color.set(lightingTuning.sunColor);
+    dirLight.intensity = Math.max(0, Number(lightingTuning.sunIntensity) || 0);
+  }
+  if (renderer) {
+    renderer.toneMappingExposure = Math.max(0.01, Number(lightingTuning.exposure) || 1);
+  }
+}
+
+function resetLightingTuning() {
+  Object.assign(lightingTuning, initialLightingTuning);
 }
 
 /**
@@ -3097,6 +3175,7 @@ watch(
 );
 
 watch(fogTuning, applyFogTuning, { deep: true });
+watch(lightingTuning, applyLightingTuning, { deep: true });
 
 watch(
   () => debugControls.enableShadows,
