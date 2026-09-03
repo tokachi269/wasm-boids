@@ -461,11 +461,11 @@ const DEFAULT_SETTINGS = [
   },
 ];
 const DEFAULT_TUNING_SETTINGS = {
-  threatDecay: 0.7, // 脅威減衰速度（1/sec）。少し長めに残して空隙を維持
-  maxEscapeWeight: 0.95, // 逃避方向の最大割合（0〜1）
-  baseEscapeStrength: 8.5, // 逃避舵取り強度（目標速度へ寄せる強さ）
+  threatDecay: 0.75, // 脅威減衰速度（1/sec）。少し長めに残して空隙を維持
+  maxEscapeWeight: 0.6, // 逃避方向の最大割合（0〜1）
+  baseEscapeStrength: 4.0, // 逃避舵取り強度（目標速度へ寄せる強さ）
   fastAttractStrength: 1.0, // 近傍不足時の補助凝集強度（0で無効）
-  schoolPullCoefficient: 0.00005, // 大クラスタ引力係数
+  schoolPullCoefficient: 0.0004, // 大クラスタ引力係数
 };
   
 // 調整スライダーの説明（ユーザ目線）。ホバー時に title として表示する。
