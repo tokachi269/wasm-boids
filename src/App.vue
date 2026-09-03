@@ -134,6 +134,73 @@
                   />
                   水中の吸収/散乱を有効化
                 </label>
+                <details class="fog-tuning-section">
+                  <summary>Fog / Sky tuning（再読込でリセット）</summary>
+                  <div class="fog-tuning-content">
+                    <label class="debug-checkbox">
+                      <input type="checkbox" v-model="fogTuning.showOceanSphere" />
+                      天球を表示
+                    </label>
+                    <div class="setting-row compact-setting-row">
+                      <label>Fog色:</label>
+                      <input type="color" v-model="fogTuning.color" />
+                      <input class="color-value-input" v-model="fogTuning.color" />
+                    </div>
+                    <div class="setting-row compact-setting-row">
+                      <label>天球・水面色:</label>
+                      <input type="color" v-model="fogTuning.skyHighlight" />
+                      <input class="color-value-input" v-model="fogTuning.skyHighlight" />
+                    </div>
+                    <div class="setting-row compact-setting-row">
+                      <label>天球・中層色:</label>
+                      <input type="color" v-model="fogTuning.skyBlue" />
+                      <input class="color-value-input" v-model="fogTuning.skyBlue" />
+                    </div>
+                    <div class="setting-row compact-setting-row">
+                      <label>天球・深部色:</label>
+                      <input type="color" v-model="fogTuning.deepBlue" />
+                      <input class="color-value-input" v-model="fogTuning.deepBlue" />
+                    </div>
+                    <div class="setting-row compact-setting-row">
+                      <label>開始距離:</label>
+                      <input type="range" min="0" max="10" step="0.1" v-model.number="fogTuning.distanceStart" />
+                      <input class="value-input" type="number" step="0.1" v-model.number="fogTuning.distanceStart" />
+                    </div>
+                    <div class="setting-row compact-setting-row">
+                      <label>最大距離:</label>
+                      <input type="range" min="2" max="50" step="0.5" v-model.number="fogTuning.distanceEnd" />
+                      <input class="value-input" type="number" step="0.5" v-model.number="fogTuning.distanceEnd" />
+                    </div>
+                    <div class="setting-row compact-setting-row">
+                      <label>距離カーブ:</label>
+                      <input type="range" min="0.1" max="2" step="0.05" v-model.number="fogTuning.distanceExponent" />
+                      <input class="value-input" type="number" step="0.05" v-model.number="fogTuning.distanceExponent" />
+                    </div>
+                    <div class="setting-row compact-setting-row">
+                      <label>最大濃度:</label>
+                      <input type="range" min="0" max="1" step="0.01" v-model.number="fogTuning.maxOpacity" />
+                      <input class="value-input" type="number" step="0.01" v-model.number="fogTuning.maxOpacity" />
+                    </div>
+                    <div class="setting-row compact-setting-row">
+                      <label>深度係数:</label>
+                      <input type="range" min="0" max="0.15" step="0.002" v-model.number="fogTuning.heightFalloff" />
+                      <input class="value-input" type="number" step="0.002" v-model.number="fogTuning.heightFalloff" />
+                    </div>
+                    <div class="fog-vector-group">
+                      <span>直接光減衰 RGB</span>
+                      <input v-for="axis in fogVectorAxes" :key="`direct-${axis}`" class="vector-value-input" type="number" min="0" step="0.005" v-model.number="fogTuning.directAttenuation[axis]" :aria-label="`直接光減衰 ${axis.toUpperCase()}`" />
+                    </div>
+                    <div class="fog-vector-group">
+                      <span>散乱増加 RGB</span>
+                      <input v-for="axis in fogVectorAxes" :key="`scatter-${axis}`" class="vector-value-input" type="number" min="0" step="0.005" v-model.number="fogTuning.backscatterAttenuation[axis]" :aria-label="`散乱増加 ${axis.toUpperCase()}`" />
+                    </div>
+                    <div class="fog-vector-group">
+                      <span>深度光減衰 RGB</span>
+                      <input v-for="axis in fogVectorAxes" :key="`depth-${axis}`" class="vector-value-input" type="number" min="0" step="0.0001" v-model.number="fogTuning.depthLightAttenuation[axis]" :aria-label="`深度光減衰 ${axis.toUpperCase()}`" />
+                    </div>
+                    <button type="button" @click="resetFogTuning">Fog / Skyを既定値へ戻す</button>
+                  </div>
+                </details>
                 <label class="debug-checkbox" :title="debugHelp.enableEnhancedPostEffects">
                   <input
                     type="checkbox"
@@ -494,6 +561,7 @@ let fogPipeline = null; // 深度フォグパイプライン
 let particleField = null; // 背景パーティクルフィールド
 let dirLight = null; // ディレクショナルライトの参照
 let groundMesh = null; // 地面メッシュの参照
+let oceanSphere = null; // 背景天球。Fog調整時の比較用に表示を切り替える
 let underwaterEnvMap = null; // 海中スペキュラ用 PMREM 環境マップ
 
 /*
@@ -1038,6 +1106,7 @@ function rebuildFogPipeline() {
     fogPipeline.dispose();
     fogPipeline = null;
   }
+  applyFogTuning();
 }
 
 function clearWebglRecoveryTimer() {
@@ -1215,7 +1284,7 @@ function initThreeJS() {
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color('#062040'); // フォグ色・背景球底色と揃えて遠景を統一
-  createOceanSphere();
+  oceanSphere = createOceanSphere();
 
   camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
   camera.position.set(3, -5, 3);
@@ -1544,6 +1613,88 @@ const heightFogConfig = {
   depthLightAttenuation: new THREE.Vector3(0.004, 0.0018, 0.0007),
 };
 
+const fogVectorAxes = ['x', 'y', 'z'];
+const initialFogTuning = Object.freeze({
+  color: `#${heightFogConfig.color.getHexString()}`,
+  skyHighlight: OCEAN_COLORS.SKY_HIGHLIGHT,
+  skyBlue: OCEAN_COLORS.SKY_BLUE,
+  deepBlue: OCEAN_COLORS.DEEP_BLUE,
+  distanceStart: heightFogConfig.distanceStart,
+  distanceEnd: heightFogConfig.distanceEnd,
+  distanceExponent: heightFogConfig.distanceExponent,
+  maxOpacity: heightFogConfig.maxOpacity,
+  heightFalloff: heightFogConfig.heightFalloff,
+  directAttenuation: Object.freeze({
+    x: heightFogConfig.directAttenuation.x,
+    y: heightFogConfig.directAttenuation.y,
+    z: heightFogConfig.directAttenuation.z,
+  }),
+  backscatterAttenuation: Object.freeze({
+    x: heightFogConfig.backscatterAttenuation.x,
+    y: heightFogConfig.backscatterAttenuation.y,
+    z: heightFogConfig.backscatterAttenuation.z,
+  }),
+  depthLightAttenuation: Object.freeze({
+    x: heightFogConfig.depthLightAttenuation.x,
+    y: heightFogConfig.depthLightAttenuation.y,
+    z: heightFogConfig.depthLightAttenuation.z,
+  }),
+});
+
+function copyInitialFogTuning() {
+  return {
+    ...initialFogTuning,
+    showOceanSphere: true,
+    directAttenuation: { ...initialFogTuning.directAttenuation },
+    backscatterAttenuation: { ...initialFogTuning.backscatterAttenuation },
+    depthLightAttenuation: { ...initialFogTuning.depthLightAttenuation },
+  };
+}
+
+// デフォルト値を決めるためだけの非永続UI。localStorageへは保存しない。
+const fogTuning = reactive(copyInitialFogTuning());
+
+function tuningVector3(value) {
+  return new THREE.Vector3(
+    Math.max(0, Number(value?.x) || 0),
+    Math.max(0, Number(value?.y) || 0),
+    Math.max(0, Number(value?.z) || 0),
+  );
+}
+
+function currentFogTuningConfig() {
+  return {
+    ...heightFogConfig,
+    color: new THREE.Color(fogTuning.color),
+    distanceStart: Number(fogTuning.distanceStart),
+    distanceEnd: Number(fogTuning.distanceEnd),
+    distanceExponent: Number(fogTuning.distanceExponent),
+    maxOpacity: Number(fogTuning.maxOpacity),
+    heightFalloff: Number(fogTuning.heightFalloff),
+    directAttenuation: tuningVector3(fogTuning.directAttenuation),
+    backscatterAttenuation: tuningVector3(fogTuning.backscatterAttenuation),
+    depthLightAttenuation: tuningVector3(fogTuning.depthLightAttenuation),
+  };
+}
+
+function applyFogTuning() {
+  const config = currentFogTuningConfig();
+  fogPipeline?.updateConfig(config);
+  updateGroundUnderwaterMedium(
+    groundMesh?.material,
+    debugControls.enableFogPipeline ? config : { ...config, maxOpacity: 0 },
+  );
+
+  if (oceanSphere) {
+    oceanSphere.visible = fogTuning.showOceanSphere;
+    updateOceanSphereGradient(oceanSphere.material?.map, fogTuning);
+  }
+}
+
+function resetFogTuning() {
+  Object.assign(fogTuning, copyInitialFogTuning());
+}
+
 /**
  * 海中環境マップを生成する。
  * 水面（上）→海の青（中）→深海（下）のグラデーションを equirectangular テクスチャとして作成し
@@ -1607,20 +1758,12 @@ function createOceanSphere() {
   canvas.width = 512;
   canvas.height = 512;
 
-  const gradient = context.createLinearGradient(0, 0, 0, canvas.height);
-  gradient.addColorStop(0, OCEAN_COLORS.SKY_HIGHLIGHT);
-  gradient.addColorStop(0.15, OCEAN_COLORS.SKY_BLUE);
-  gradient.addColorStop(0.5, OCEAN_COLORS.DEEP_BLUE);
-  gradient.addColorStop(1, "#051535"); // 最深部は深海青（黒にならない程度）
-
-  context.fillStyle = gradient;
-  context.fillRect(0, 0, canvas.width, canvas.height);
-
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.generateMipmaps = false;
   texture.minFilter = THREE.LinearFilter;
   texture.magFilter = THREE.LinearFilter;
+  updateOceanSphereGradient(texture, fogTuning);
 
   const sphereGeo = new THREE.SphereGeometry(300, 32, 32);
   const sphereMat = new THREE.MeshBasicMaterial({
@@ -1635,6 +1778,29 @@ function createOceanSphere() {
   const oceanSphere = new THREE.Mesh(sphereGeo, sphereMat);
   scene.add(oceanSphere);
   return oceanSphere;
+}
+
+function updateOceanSphereGradient(texture, colors) {
+  const canvas = texture?.image;
+  const context = canvas?.getContext?.('2d');
+  if (!canvas || !context) {
+    return;
+  }
+
+  const signature = [colors.skyHighlight, colors.skyBlue, colors.deepBlue].join('|');
+  if (texture.userData.oceanGradientSignature === signature) {
+    return;
+  }
+
+  const gradient = context.createLinearGradient(0, 0, 0, canvas.height);
+  gradient.addColorStop(0, colors.skyHighlight);
+  gradient.addColorStop(0.15, colors.skyBlue);
+  gradient.addColorStop(0.5, colors.deepBlue);
+  gradient.addColorStop(1, '#051535');
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  texture.userData.oceanGradientSignature = signature;
+  texture.needsUpdate = true;
 }
 
 function createFadeOutGroundMaterial() {
@@ -1668,18 +1834,22 @@ function createFadeOutGroundMaterial() {
  * 不透明物と同じ吸収/backscatterをマテリアル側で適用する。
  */
 function applyUnderwaterMediumToGroundMaterial(material, config) {
+  const uniforms = {
+    uGroundFogColor: { value: config.color.clone() },
+    uGroundDirectAttenuation: { value: config.directAttenuation.clone() },
+    uGroundBackscatterAttenuation: { value: config.backscatterAttenuation.clone() },
+    uGroundDepthLightAttenuation: { value: config.depthLightAttenuation.clone() },
+    uGroundDistanceStart: { value: config.distanceStart },
+    uGroundDistanceEnd: { value: config.distanceEnd },
+    uGroundDistanceExponent: { value: config.distanceExponent },
+    uGroundSurfaceLevel: { value: config.surfaceLevel },
+    uGroundHeightFalloff: { value: config.heightFalloff },
+    uGroundHeightExponent: { value: config.heightExponent },
+    uGroundMaxOpacity: { value: config.maxOpacity },
+  };
+  material.userData.underwaterMediumUniforms = uniforms;
   material.onBeforeCompile = (shader) => {
-    shader.uniforms.uGroundFogColor = { value: config.color.clone() };
-    shader.uniforms.uGroundDirectAttenuation = { value: config.directAttenuation.clone() };
-    shader.uniforms.uGroundBackscatterAttenuation = { value: config.backscatterAttenuation.clone() };
-    shader.uniforms.uGroundDepthLightAttenuation = { value: config.depthLightAttenuation.clone() };
-    shader.uniforms.uGroundDistanceStart = { value: config.distanceStart };
-    shader.uniforms.uGroundDistanceEnd = { value: config.distanceEnd };
-    shader.uniforms.uGroundDistanceExponent = { value: config.distanceExponent };
-    shader.uniforms.uGroundSurfaceLevel = { value: config.surfaceLevel };
-    shader.uniforms.uGroundHeightFalloff = { value: config.heightFalloff };
-    shader.uniforms.uGroundHeightExponent = { value: config.heightExponent };
-    shader.uniforms.uGroundMaxOpacity = { value: config.maxOpacity };
+    Object.assign(shader.uniforms, uniforms);
 
     shader.vertexShader = shader.vertexShader
       .replace(
@@ -1763,6 +1933,24 @@ gl_FragColor.rgb =
   };
   material.customProgramCacheKey = () => 'ground-underwater-medium-v1';
   material.needsUpdate = true;
+}
+
+function updateGroundUnderwaterMedium(material, config) {
+  const uniforms = material?.userData?.underwaterMediumUniforms;
+  if (!uniforms) {
+    return;
+  }
+  uniforms.uGroundFogColor.value.copy(config.color);
+  uniforms.uGroundDirectAttenuation.value.copy(config.directAttenuation);
+  uniforms.uGroundBackscatterAttenuation.value.copy(config.backscatterAttenuation);
+  uniforms.uGroundDepthLightAttenuation.value.copy(config.depthLightAttenuation);
+  uniforms.uGroundDistanceStart.value = config.distanceStart;
+  uniforms.uGroundDistanceEnd.value = config.distanceEnd;
+  uniforms.uGroundDistanceExponent.value = config.distanceExponent;
+  uniforms.uGroundSurfaceLevel.value = config.surfaceLevel;
+  uniforms.uGroundHeightFalloff.value = config.heightFalloff;
+  uniforms.uGroundHeightExponent.value = config.heightExponent;
+  uniforms.uGroundMaxOpacity.value = config.maxOpacity;
 }
 
 function updateInstancingMaterialUniforms(time) {
@@ -2908,6 +3096,8 @@ watch(
   }
 );
 
+watch(fogTuning, applyFogTuning, { deep: true });
+
 watch(
   () => debugControls.enableShadows,
   () => {
@@ -3215,5 +3405,61 @@ watch([showUnitSpheres, showUnitLines], ([newSpheres, newLines]) => {
   outline: none;
   border-color: #007bff;
   box-shadow: 0 0 3px rgba(0, 123, 255, 0.3);
+}
+
+.fog-tuning-section {
+  margin: 8px 0;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 4px;
+}
+
+.debug-settings .species-section {
+  width: min(430px, calc(100vw - 40px));
+  min-width: 0;
+}
+
+.debug-content > .debug-checkbox {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.fog-tuning-section > summary {
+  padding: 7px;
+  cursor: pointer;
+}
+
+.fog-tuning-content {
+  padding: 4px 8px 10px;
+}
+
+.compact-setting-row label {
+  width: 120px;
+}
+
+.compact-setting-row input[type="color"] {
+  width: 38px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.color-value-input {
+  width: 72px;
+  margin-left: 8px;
+}
+
+.fog-vector-group {
+  display: grid;
+  grid-template-columns: 120px repeat(3, 62px);
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.vector-value-input {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
 }
 </style>
