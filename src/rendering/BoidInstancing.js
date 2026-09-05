@@ -48,6 +48,17 @@ export class BoidInstancing {
       // NOTE: ここは「安全側の下限値」。実運用では update() の posRange ヒントで拡張される。
       extent: 64,
       originSnap: 1.0,
+      // 現在フレームの走査で得た範囲を、次フレームの量子化範囲に使う。
+      // 追加の全個体走査を避けつつ、群れが注視点から離れても固定範囲へ clamp されないようにする。
+      previousBounds: {
+        valid: false,
+        minX: 0,
+        minY: 0,
+        minZ: 0,
+        maxX: 0,
+        maxY: 0,
+        maxZ: 0,
+      },
     };
     this.positionQuantUniforms = {
       uInstanceOrigin: { value: new THREE.Vector3() },
@@ -128,6 +139,7 @@ export class BoidInstancing {
 
     this.previousVelocities = null;
     this.previousLodFlags = null;
+    this.positionQuantization.previousBounds.valid = false;
 
     if (this.scene && this.predatorModel) {
       this.ensurePredatorMeshes(0);
@@ -204,17 +216,40 @@ update({
   const camY = cameraPosition?.y ?? 0;
   const camZ = cameraPosition?.z ?? 0;
 
-  // NOTE: camera が群れから離れても量子化が破綻しないよう、可能なら「注視点」を原点に使う。
-  const originBaseX = originPosition?.x ?? camX;
-  const originBaseY = originPosition?.y ?? camY;
-  const originBaseZ = originPosition?.z ?? camZ;
+  // 捕食者は末尾に詰めている想定（C++ 側の出力仕様に合わせる）
+  const predatorStartIndex = predatorCount > 0 ? Math.max(0, count - predatorCount) : count;
+
+  // 前フレームで観測した魚群範囲へ量子化原点を追従させる。
+  // 初回だけは従来どおり注視点（なければカメラ位置）を使う。
+  const previousBounds = this.positionQuantization.previousBounds;
+  const hasPreviousBounds = previousBounds.valid;
+  const originBaseX = hasPreviousBounds
+    ? (previousBounds.minX + previousBounds.maxX) * 0.5
+    : (originPosition?.x ?? camX);
+  const originBaseY = hasPreviousBounds
+    ? (previousBounds.minY + previousBounds.maxY) * 0.5
+    : (originPosition?.y ?? camY);
+  const originBaseZ = hasPreviousBounds
+    ? (previousBounds.minZ + previousBounds.maxZ) * 0.5
+    : (originPosition?.z ?? camZ);
 
   // カメラ近傍を基準にして instancePos を量子化（GPU 側で origin/extent から復号）
   // posRange は「初期配置レンジ」なので、移動や群れの広がりも考慮して少し余裕を持たせる。
   const extentFromPosRange = Number.isFinite(posRange) && posRange > 0
     ? posRange * 16
     : 0;
-  const extent = Math.max(this.positionQuantization.extent, extentFromPosRange);
+  const extentFromPreviousBounds = hasPreviousBounds
+    ? Math.max(
+        previousBounds.maxX - previousBounds.minX,
+        previousBounds.maxY - previousBounds.minY,
+        previousBounds.maxZ - previousBounds.minZ,
+      ) * 0.5 + Math.max(2, Number.isFinite(posRange) ? posRange * 2 : 0)
+    : 0;
+  const extent = Math.max(
+    this.positionQuantization.extent,
+    extentFromPosRange,
+    extentFromPreviousBounds,
+  );
   const snap = this.positionQuantization.originSnap;
   const originX = snap > 0 ? Math.floor(originBaseX / snap) * snap : originBaseX;
   const originY = snap > 0 ? Math.floor(originBaseY / snap) * snap : originBaseY;
@@ -226,8 +261,6 @@ update({
 
   const invExtent = extent > 0 ? 1.0 / extent : 0.0;
 
-  // 捕食者は末尾に詰めている想定（C++ 側の出力仕様に合わせる）
-  const predatorStartIndex = predatorCount > 0 ? Math.max(0, count - predatorCount) : count;
   if (this.scene && this.predatorModel) {
     if (this.ensurePredatorMeshes(predatorCount)) {
       this.predatorMeshCountCache = predatorCount;
@@ -244,6 +277,12 @@ update({
   // LOD を詰めて書き込むための write index
   let highWrite = 0;
   let lowWrite = 0;
+  let observedMinX = Infinity;
+  let observedMinY = Infinity;
+  let observedMinZ = Infinity;
+  let observedMaxX = -Infinity;
+  let observedMaxY = -Infinity;
+  let observedMaxZ = -Infinity;
 
   // instanceIndex → boidIndex の対応表（色付け等で使用）
   if (!this.highInstanceToBoid || this.highInstanceToBoid.length < count) {
@@ -280,6 +319,13 @@ update({
       }
       continue;
     }
+
+    if (px < observedMinX) observedMinX = px;
+    if (py < observedMinY) observedMinY = py;
+    if (pz < observedMinZ) observedMinZ = pz;
+    if (px > observedMaxX) observedMaxX = px;
+    if (py > observedMaxY) observedMaxY = py;
+    if (pz > observedMaxZ) observedMaxZ = pz;
 
     const dx = px - camX;
     const dy = py - camY;
@@ -433,6 +479,16 @@ update({
   lowTailPhaseAttr.needsUpdate = lowTailPhaseTouched;
 
   this.bufferCursor = nextIndex;
+
+  previousBounds.valid = Number.isFinite(observedMinX);
+  if (previousBounds.valid) {
+    previousBounds.minX = observedMinX;
+    previousBounds.minY = observedMinY;
+    previousBounds.minZ = observedMinZ;
+    previousBounds.maxX = observedMaxX;
+    previousBounds.maxY = observedMaxY;
+    previousBounds.maxZ = observedMaxZ;
+  }
 
   return {
     visibleCount,
