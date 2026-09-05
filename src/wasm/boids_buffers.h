@@ -28,9 +28,6 @@ struct SoABuffers {
   std::vector<glm::quat, A16<glm::quat>> orientations;
   std::vector<glm::quat, A16<glm::quat>> orientationsWrite;
   std::vector<glm::vec3, A16<glm::vec3>> predatorInfluences;
-  // 捕食者反応の伝播はフレーム先頭の確定状態だけを読む。
-  // 並列更新中に別boidの書き込み途中を読むことを避けるためのsnapshot。
-  std::vector<glm::vec3, A16<glm::vec3>> predatorInfluencesSnapshot;
   std::vector<int> ids;
   std::vector<float> stresses;
   std::vector<int> speciesIds;
@@ -50,7 +47,6 @@ struct SoABuffers {
   std::vector<glm::vec3, A16<glm::vec3>> predatorDisengageDirs;
 
   std::vector<float> predatorThreats; // 捕食圧の蓄積値（0-1）
-  std::vector<float> predatorThreatsSnapshot;
 
   // 各BoidのcohesionMemoriesとactiveNeighbors（SOA形式）
     // WebAssembly では unordered_map の破棄が深い再帰になりがちなので、近傍キャッシュは
@@ -84,9 +80,7 @@ struct SoABuffers {
     predatorApproachDirs.reserve(n);
     predatorDisengageDirs.reserve(n);
     predatorInfluences.reserve(n);
-    predatorInfluencesSnapshot.reserve(n);
     predatorThreats.reserve(n);
-    predatorThreatsSnapshot.reserve(n);
     boidCohesionMemories.reserve(n);
     boidActiveNeighbors.reserve(n);
     boidNeighborIndices.reserve(n);
@@ -113,9 +107,7 @@ struct SoABuffers {
     predatorApproachDirs.resize(n, glm::vec3(0.0f));
     predatorDisengageDirs.resize(n, glm::vec3(0.0f));
     predatorInfluences.resize(n, glm::vec3(0.0f));
-    predatorInfluencesSnapshot.resize(n, glm::vec3(0.0f));
     predatorThreats.resize(n, 0.0f);
-    predatorThreatsSnapshot.resize(n, 0.0f);
     boidCohesionMemories.resize(n);
     boidActiveNeighbors.resize(n);
     boidNeighborIndices.resize(n);
@@ -129,11 +121,6 @@ struct SoABuffers {
     positionsWrite = positions;
     velocitiesWrite = velocities;
     orientationsWrite = orientations;
-  }
-
-  void snapshotPredatorState() {
-    predatorInfluencesSnapshot = predatorInfluences;
-    predatorThreatsSnapshot = predatorThreats;
   }
 
   // 読み取り/書き込みバッファを入れ替え（更新完了後に呼ぶ）

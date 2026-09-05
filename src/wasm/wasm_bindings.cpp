@@ -40,11 +40,6 @@ SimulationTuningParams getSimulationTuningParams() {
 void setSimulationTuningParams(const SimulationTuningParams &params) {
     gSimulationTuning = params;
     gSimulationTuning.maxEscapeWeight = std::clamp(gSimulationTuning.maxEscapeWeight, 0.0f, 1.0f);
-    gSimulationTuning.threatDecay = std::max(gSimulationTuning.threatDecay, 0.0f);
-    gSimulationTuning.threatPropagationRate =
-        std::max(gSimulationTuning.threatPropagationRate, 0.0f);
-    gSimulationTuning.threatTransmission =
-        std::clamp(gSimulationTuning.threatTransmission, 0.0f, 1.0f);
     gSimulationTuning.schoolPullCoefficient = std::max(gSimulationTuning.schoolPullCoefficient, 0.0f);
 
     // ソフト境界は「無効化しやすさ」と「破綻防止」を優先してクランプ。
@@ -97,8 +92,6 @@ value_object<SpeciesParams>("SpeciesParams")
 
 value_object<SimulationTuningParams>("SimulationTuningParams")
     .field("threatDecay", &SimulationTuningParams::threatDecay)
-    .field("threatPropagationRate", &SimulationTuningParams::threatPropagationRate)
-    .field("threatTransmission", &SimulationTuningParams::threatTransmission)
     .field("maxEscapeWeight", &SimulationTuningParams::maxEscapeWeight)
     .field("baseEscapeStrength", &SimulationTuningParams::baseEscapeStrength)
     .field("fastAttractStrength", &SimulationTuningParams::fastAttractStrength)

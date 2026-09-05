@@ -416,7 +416,11 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
       // 目的:
       // - ユーザー期待: 逃避OFFなら捕食者由来の効果が走らない
       // - 性能: 影響ベクトルの正規化や目標速度計算をホットループから外す
-      if (escapeFeatureEnabled) {
+      if (!escapeFeatureEnabled) {
+      unit->buf->predatorThreats[gIdx] = glm::max(
+        unit->buf->predatorThreats[gIdx] - gSimulationTuning.threatDecay * dt,
+        0.0f);
+      } else {
       float currentStress = unit->buf->stresses[gIdx];
       glm::vec3 storedInfluence = unit->buf->predatorInfluences[gIdx];
       // `length()` は内部で sqrt を行うため、まず length2 を取り、必要なときだけ sqrt する。
@@ -472,25 +476,17 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
             acceleration * (1.0f - escapeBlend) + escapeForce * escapeBlend;
       }
 
-        unit->buf->predatorThreats[gIdx] =
-            glm::max(unit->buf->predatorThreats[gIdx], threatState);
+      // threat レベルを時間経過で減衰
+        float decayedThreat =
+            glm::max(threatState - gSimulationTuning.threatDecay * dt, 0.0f);
+        unit->buf->predatorThreats[gIdx] = decayedThreat;
       }
     } else {
-      // ストレスも影響もない場合も、共通の時間減衰だけを適用する。
+      // ストレスも影響もない場合は threat を徐々に減衰
+      unit->buf->predatorThreats[gIdx] = glm::max(
+          unit->buf->predatorThreats[gIdx] - gSimulationTuning.threatDecay * dt,
+          0.0f);
     }
-
-    // threatの減衰は入力処理後に一度だけ行う。
-    // 状態量に比例した減衰にすることで、弱い伝播cueが固定減算に即座に消されるのを防ぐ。
-    const float threatDecayRate = glm::max(gSimulationTuning.threatDecay, 0.0f);
-    const float threatRetention = glm::max(1.0f - threatDecayRate * dt, 0.0f);
-    float decayedThreat =
-        glm::clamp(unit->buf->predatorThreats[gIdx], 0.0f, 1.0f) *
-        threatRetention;
-    if (decayedThreat < 1e-5f) {
-      decayedThreat = 0.0f;
-    }
-    unit->buf->predatorThreats[gIdx] = decayedThreat;
-
     float currentStress = unit->buf->stresses[gIdx];
     float stressFactor = 1.0f;
 
@@ -1206,6 +1202,22 @@ void BoidUnit::updateRecursive(float dt) {
                                                 treeTraversalStart)
           .count());
 
+  // leaf の相互作用（高コスト）をチャンク並列で実行
+  const auto interactionStart = PhaseClock::now();
+  runParallelRanges(leafUnits.size(), 0, [&](std::size_t begin, std::size_t end) {
+    for (std::size_t i = begin; i < end; ++i) {
+      BoidUnit *unit = leafUnits[i];
+      if (unit) {
+        unit->computeBoidInteraction(dt);
+      }
+    }
+  });
+  simulation.recordPhaseTiming(
+      BoidSimulation::Phase::ComputeBoidInteraction,
+      std::chrono::duration<double, std::milli>(PhaseClock::now() -
+                                                interactionStart)
+          .count());
+
   // 捕食者の影響は「ペアごと」だと冗長なので、捕食者ユニットごとに一回だけ実行。
   // 捕食者数は少数が前提のため、ここは敢えて逐次実行してデータ競合も避ける。
   const auto predatorStart = PhaseClock::now();
@@ -1223,27 +1235,6 @@ void BoidUnit::updateRecursive(float dt) {
                                                 predatorStart)
           .count(),
       predatorLeafUnits.empty() ? 0 : 1);
-
-  // 捕食者の直接検知を確定してからsnapshotを作る。
-  // computeBoidInteractionはこのsnapshotだけを読み、個体ごとの次状態を書き込む。
-  // これにより最新の直接検知を同じフレームで伝播しつつ、task実行順依存を避ける。
-  simulation.getBuffersMutable().snapshotPredatorState();
-
-  // leaf の相互作用（高コスト）をチャンク並列で実行
-  const auto interactionStart = PhaseClock::now();
-  runParallelRanges(leafUnits.size(), 0, [&](std::size_t begin, std::size_t end) {
-    for (std::size_t i = begin; i < end; ++i) {
-      BoidUnit *unit = leafUnits[i];
-      if (unit) {
-        unit->computeBoidInteraction(dt);
-      }
-    }
-  });
-  simulation.recordPhaseTiming(
-      BoidSimulation::Phase::ComputeBoidInteraction,
-      std::chrono::duration<double, std::milli>(PhaseClock::now() -
-                                                interactionStart)
-          .count());
 
   // ----------------------------------------------
   // 第二段階: 位置と速度を更新
@@ -1883,19 +1874,14 @@ void BoidUnit::computeBoidInteraction(float dt) {
       // 注意:
       // - 値域は 0〜1 のまま（正規化スカラー）
       // - 伝搬は距離で減衰し、dt でブレンドしてフレームレートに依存しにくくする
-      const auto &threatSnapshot = buf->predatorThreatsSnapshot;
-      const auto &influenceSnapshot = buf->predatorInfluencesSnapshot;
-      float selfThreat = glm::clamp(threatSnapshot[gIdx], 0.0f, 1.0f);
+      float selfThreat = glm::clamp(buf->predatorThreats[gIdx], 0.0f, 1.0f);
       float threatGainSum = 0.0f;
       float threatWeightSum = 0.0f;
-      glm::vec3 threatDirectionSum(0.0f);
       const float threatPropagationRadius = propagationRadius * 1.25f;
-      const float threatPropagationRate =
-          glm::max(gSimulationTuning.threatPropagationRate, 0.0f);
+      const float threatPropagationBlend = 0.9f;
       // 伝搬は hop ごとに減衰させないと、捕食者が遠い場所まで 0〜1 が均一に広がりやすい。
       // ここでは「近傍から受け取る脅威」を少し減衰させ、距離や hop を経るほど弱まるようにする。
-      const float threatTransmission =
-          glm::clamp(gSimulationTuning.threatTransmission, 0.0f, 1.0f);
+      const float threatTransmission = 0.82f;
 
       glm::vec3 sumSep = glm::vec3(0.0f);
       glm::vec3 sumAlign = glm::vec3(0.0f);
@@ -2001,13 +1987,12 @@ void BoidUnit::computeBoidInteraction(float dt) {
         // predatorThreat の伝搬（stress より反応を少し速く、半径もやや広げる）
         if (dist < threatPropagationRadius) {
           const float neighborThreat =
-              glm::clamp(threatSnapshot[gNeighbor], 0.0f, 1.0f);
-          // 逃避方向cueが無い低脅威まで無制限に伝搬すると「関係ない場所が逃げる」状態になりやすい。
+              glm::clamp(buf->predatorThreats[gNeighbor], 0.0f, 1.0f);
+          // 直接の捕食者影響が無い低脅威まで無制限に伝搬すると「関係ない場所が逃げる」状態になりやすい。
           // ある程度の脅威、または逃避方向（predatorInfluences）がある個体からの伝搬のみ許可する。
-          const glm::vec3 neighborInfluence = influenceSnapshot[gNeighbor];
-          const float neighborInfluence2 = glm::length2(neighborInfluence);
-          const bool hasEscapeCue = neighborInfluence2 > 1e-4f;
-          if ((hasEscapeCue || neighborThreat > 0.25f) && neighborThreat > selfThreat) {
+          const float neighborInfluence2 = glm::length2(buf->predatorInfluences[gNeighbor]);
+          const bool hasDirectInfluence = neighborInfluence2 > 1e-4f;
+          if ((hasDirectInfluence || neighborThreat > 0.25f) && neighborThreat > selfThreat) {
             const float threatStrength =
                 glm::smoothstep(0.20f, 0.80f, neighborThreat);
             const float distanceFactor = glm::clamp(
@@ -2017,10 +2002,6 @@ void BoidUnit::computeBoidInteraction(float dt) {
               const float transmittedThreat = neighborThreat * threatTransmission;
               threatGainSum += transmittedThreat * weight;
               threatWeightSum += weight;
-              if (neighborInfluence2 > 1e-6f) {
-                threatDirectionSum +=
-                    neighborInfluence * (weight / glm::sqrt(neighborInfluence2));
-              }
             }
           }
         }
@@ -2113,11 +2094,10 @@ void BoidUnit::computeBoidInteraction(float dt) {
         // predatorThreat の伝搬（外部近傍も同様に加味する）
         if (dist < threatPropagationRadius) {
           const float neighborThreat =
-              glm::clamp(threatSnapshot[gNeighbor], 0.0f, 1.0f);
-          const glm::vec3 neighborInfluence = influenceSnapshot[gNeighbor];
-          const float neighborInfluence2 = glm::length2(neighborInfluence);
-          const bool hasEscapeCue = neighborInfluence2 > 1e-4f;
-          if ((hasEscapeCue || neighborThreat > 0.25f) && neighborThreat > selfThreat) {
+              glm::clamp(buf->predatorThreats[gNeighbor], 0.0f, 1.0f);
+          const float neighborInfluence2 = glm::length2(buf->predatorInfluences[gNeighbor]);
+          const bool hasDirectInfluence = neighborInfluence2 > 1e-4f;
+          if ((hasDirectInfluence || neighborThreat > 0.25f) && neighborThreat > selfThreat) {
             const float threatStrength =
                 glm::smoothstep(0.20f, 0.80f, neighborThreat);
             const float distanceFactor = glm::clamp(
@@ -2127,10 +2107,6 @@ void BoidUnit::computeBoidInteraction(float dt) {
               const float transmittedThreat = neighborThreat * threatTransmission;
               threatGainSum += transmittedThreat * weight;
               threatWeightSum += weight;
-              if (neighborInfluence2 > 1e-6f) {
-                threatDirectionSum +=
-                    neighborInfluence * (weight / glm::sqrt(neighborInfluence2));
-              }
             }
           }
         }
@@ -2213,25 +2189,11 @@ void BoidUnit::computeBoidInteraction(float dt) {
         const float propagatedThreat = threatGainSum / threatWeightSum;
         const float delta = propagatedThreat - selfThreat;
         if (delta > 0.0f) {
-          const float blend =
-              glm::clamp(threatPropagationRate * dt, 0.0f, 0.8f);
+          const float blend = glm::clamp(threatPropagationBlend * dt, 0.0f, 0.8f);
           const float updatedThreat =
               glm::clamp(selfThreat + delta * blend, 0.0f, 1.0f);
           buf->predatorThreats[gIdx] = std::max(buf->predatorThreats[gIdx], updatedThreat);
           selfThreat = updatedThreat;
-
-          // scalar threatだけでは逃げる方向が無いため、反応中の近傍が持つ
-          // predatorInfluenceの方向も同期伝播する。直接検知の強いcueは上書きしない。
-          const float directionLen2 = glm::length2(threatDirectionSum);
-          if (directionLen2 > 1e-6f) {
-            const glm::vec3 propagatedInfluence =
-                threatDirectionSum *
-                (updatedThreat / glm::sqrt(directionLen2));
-            if (glm::length2(propagatedInfluence) >
-                glm::length2(buf->predatorInfluences[gIdx])) {
-              buf->predatorInfluences[gIdx] = propagatedInfluence;
-            }
-          }
         }
       }
 

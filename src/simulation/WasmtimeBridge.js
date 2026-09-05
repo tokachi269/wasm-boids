@@ -267,8 +267,6 @@ export class WasmtimeBridge {
     };
     handle({
       threatDecay: toNumber(params.threatDecay, 0.5),
-      threatPropagationRate: Math.max(0, toNumber(params.threatPropagationRate, 4.0)),
-      threatTransmission: Math.min(1, Math.max(0, toNumber(params.threatTransmission, 0.82))),
       maxEscapeWeight: toNumber(params.maxEscapeWeight, 1.0),
       baseEscapeStrength: toNumber(params.baseEscapeStrength, 3.0),
       fastAttractStrength: toNumber(params.fastAttractStrength, 1.0),
