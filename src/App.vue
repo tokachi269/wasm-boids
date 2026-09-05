@@ -80,24 +80,6 @@
                   />
                 </div>
                 <div class="setting-row">
-                  <label :title="tuningHelp.fastAttractStrength">補助凝集強度<br />(fastAttractStrength):</label>
-                  <input
-                    type="range"
-                    min="0"
-                    max="3"
-                    step="0.05"
-                    v-model.number="systemSettings.fastAttractStrength"
-                    :title="tuningHelp.fastAttractStrength"
-                  />
-                  <input
-                    class="value-input"
-                    type="number"
-                    step="0.05"
-                    v-model.number="systemSettings.fastAttractStrength"
-                    :title="tuningHelp.fastAttractStrength"
-                  />
-                </div>
-                <div class="setting-row">
                   <label :title="tuningHelp.schoolPullCoefficient">大クラスタ引力係数<br />(schoolPullCoefficient):</label>
                   <input
                     type="range"
@@ -485,7 +467,6 @@ const DEFAULT_TUNING_SETTINGS = {
   threatDecay: 0.75, // 脅威減衰速度（1/sec）。少し長めに残して空隙を維持
   maxEscapeWeight: 0.5, // 逃避方向の最大割合（0〜1）
   baseEscapeStrength: 4.0, // 逃避舵取り強度（目標速度へ寄せる強さ）
-  fastAttractStrength: 1.0, // 近傍不足時の補助凝集強度（0で無効）
   schoolPullCoefficient: 0.0002, // 大クラスタ引力係数
 };
   
@@ -495,7 +476,6 @@ const tuningHelp = {
   threatDecay: '脅威（捕食者などの危険度）が時間でどれだけ早く消えるか。大きいほど早く落ち着きます。',
   maxEscapeWeight: '逃避行動をどれだけ優先するか（0〜1）。1 に近いほど、危険時はほぼ逃げが優先されます。',
   baseEscapeStrength: '逃避の舵取り強度（目標速度へ寄せる強さ）。大きいほど素早く逃げ方向へ乗ります。',
-  fastAttractStrength: '近くの仲間が少ないときに、群れへ戻す補助の凝集強度（0で無効）。',
   schoolPullCoefficient: '大きな群れ（大クラスタ）へ引き寄せる強さ。大きいほど大群にまとまりやすいです。',
 };
 

@@ -955,7 +955,6 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
   if (!indices.empty() && !other->indices.empty()) {
     for (int idxA : indices) {
       glm::vec3 sumVel = glm::vec3(0.00001f);
-      glm::vec3 sumPos = glm::vec3(0.00001f);
       glm::vec3 sep = glm::vec3(0.00001f);
       int cnt = 0;
       int sidA = speciesId;
@@ -986,23 +985,15 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
           float w = std::max(0.0f, 1.0f - (d / interRange));
 
           sumVel += other->buf->velocities[idxB] * w;
-          sumPos += other->buf->positions[idxB] * w;
           sep += (diff / (d2 + 1.0f)) * w;
           ++cnt;
         }
       }
       if (cnt > 0) {
-        const float longRangeCohesionScale =
-            glm::clamp(gSimulationTuning.fastAttractStrength, 0.0f, 1.0f);
-        // ストレス状態に応じた段階的動作制御
-        float currentStress = buf->stresses[idxA];
         const float predatorThreat =
             glm::clamp(buf->predatorThreats[idxA], 0.0f, 1.0f);
-        float cohesionMultiplier = 1.0f;
-        float speedMultiplier = 1.0f;
 
-        // 捕食者が近い間は「再結集」より「散開」を優先する。
-        // - 凝集/整列を弱めて、捕食者方向へ引っ張られにくくする
+        // 捕食者が近い間は整列を弱め、散開を優先する。
         // - 分離を強めて、捕食者突入時に局所的な“穴”ができやすくする
         // predatorThreat は距離由来で即応性が高い（stress より先に上がりやすい）ため優先する。
         // ただし「群れが大きいほど、少し近い程度では焦らない」ように、閾値を近傍数で動かす。
@@ -1010,32 +1001,12 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
         const float underThreatThreshold = glm::mix(0.08f, 0.22f, groupSafety);
         const bool isUnderPredatorThreat = predatorThreat > underThreatThreshold;
 
-        const bool threatCleared = predatorThreat < (underThreatThreshold * 0.5f);
-        // 逃走後の再結集フェーズ（脅威が十分下がり、ストレスも落ち着いたら）
-        if (threatCleared && currentStress < 0.35f) {
-          cohesionMultiplier = 4.0f;
-          speedMultiplier = 1.2f;
-        }
-        // 高ストレス時 or 脅威継続中は逃走優先（凝集力抑制）
-        else if (currentStress >= 0.7f || isUnderPredatorThreat) {
-          cohesionMultiplier = 0.2f; // 凝集を強く抑えて散開しやすくする
-        }
-
         buf->accelerations[idxA] +=
           (sumVel / float(cnt) - buf->velocities[idxA]) *
           (paramsA.alignment * (isUnderPredatorThreat ? 0.4f : 1.0f));
-        buf->accelerations[idxA] +=
-          (sumPos / float(cnt) - buf->positions[idxA]) *
-          (paramsA.cohesion * cohesionMultiplier * longRangeCohesionScale);
         // 捕食者が近いほど分離を強め、局所密度を素早く下げる。
         const float separationBoost = isUnderPredatorThreat ? (1.0f + predatorThreat * 2.0f) : 1.0f;
         buf->accelerations[idxA] += sep * (paramsA.separation * separationBoost);
-
-        // 再結集中の速度向上を後で適用するため、ストレス情報を保持
-        float scaledSpeedBoost =
-            1.0f + (speedMultiplier - 1.0f) * longRangeCohesionScale;
-        buf->stresses[idxA] =
-            glm::max(buf->stresses[idxA], scaledSpeedBoost - 1.0f);
       }
     }
   }

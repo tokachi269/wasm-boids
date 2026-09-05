@@ -313,7 +313,6 @@ export class WasmtimeBridge {
       threatDecay: toNumber(params.threatDecay, 0.5),
       maxEscapeWeight: toNumber(params.maxEscapeWeight, 1.0),
       baseEscapeStrength: toNumber(params.baseEscapeStrength, 3.0),
-      fastAttractStrength: toNumber(params.fastAttractStrength, 1.0),
       schoolPullCoefficient: Math.max(0, toNumber(params.schoolPullCoefficient, 0.0008)),
 
       // 散らばり過ぎ防止（固定ワールド原点を基準にした見えないソフト境界）。
