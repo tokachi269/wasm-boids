@@ -432,7 +432,7 @@ const DEFAULT_SETTINGS = [
     torqueStrength: 1.5, // 回転トルク強度
     lambda: 0.102, // 速度調整係数（減衰係数）
     tau: 0.5, // 記憶時間
-    predatorAlertRadius: 2.5, // 捕食者を早めに察知して空隙を作る距離
+    predatorAlertRadius: 3.5, // 捕食者を早めに察知して空隙を作る距離
     densityReturnStrength: 0.0, // 密度復帰強度
     schoolPullEnabled: true, // 大クラスタ引力係数を反映するか
     isPredator: false,
