@@ -65,3 +65,7 @@ tree rebuildは100回/1,000フレームで、50,000個体では合計2,223ms。�
 | コンパイラSIMD化を妨げる依存関係の調査 | 相互作用・kinematicsの演算短縮 | 中〜大 | 中〜高。浮動小数点順序が変わる | boid_unitはscalar命令が大多数 |
 
 まず相互作用内部の読み取り専用プロファイルを追加し、その後に各候補を別ブランチ・同一checksum条件で比較する。通常4タスクの非決定性は最適化より先に原因を診断する必要がある。
+
+## 捕食者反応の診断
+
+`npm run build-native` 後に `build-native\wasm_boids_native.exe --predator-diagnostic 120 --seed 1 --tasks 1` を実行する。`first_threat_frame` は直接検知した魚と近傍魚が脅威閾値を初めて超えたframe、`first_direction_frame` は逃避方向cueを初めて受け取ったframeで、`-1` は測定中に反応しなかったことを表す。

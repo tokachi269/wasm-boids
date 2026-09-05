@@ -22,6 +22,7 @@ private:
     int sleepMillis = 16;
     std::size_t maxFrames = 600; // 約10秒 (60FPS想定)
     bool bench = false;
+    bool predatorDiagnostic = false;
     std::size_t benchFrames = 4000;
     int benchBoids = -1;
     std::size_t benchTasks = 1;
@@ -44,4 +45,5 @@ private:
   void scheduleNextFrame();
   void printFrameSummary(std::size_t frame, float deltaSeconds) const;
   void runBenchmark();
+  void runPredatorDiagnostic();
 };

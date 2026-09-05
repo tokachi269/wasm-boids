@@ -3,6 +3,7 @@
 #include "platform_utils.h"
 #include "boids_parallel_config.h"
 #include "scale_utils.h"
+#include "simulation_tuning.h"
 
 #include <atomic>
 #include <algorithm>
@@ -50,8 +51,8 @@ bool NativeSimulation::configureFromCommandLine(int argc, char **argv) {
 
   for (int i = 1; i < argc; ++i) {
     const std::string_view arg(argv[i]);
-    if (arg != "--bench" && arg != "--seed" && arg != "--boids" &&
-        arg != "--tasks") {
+    if (arg != "--bench" && arg != "--predator-diagnostic" &&
+        arg != "--seed" && arg != "--boids" && arg != "--tasks") {
       std::cerr << "Unknown argument: " << arg << '\n';
       return false;
     }
@@ -64,6 +65,12 @@ bool NativeSimulation::configureFromCommandLine(int argc, char **argv) {
       options_.bench = true;
       if (!parseUnsigned(argv[i], options_.benchFrames) || options_.benchFrames == 0) {
         std::cerr << "Invalid frame count: " << argv[i] << '\n';
+        return false;
+      }
+    } else if (arg == "--predator-diagnostic") {
+      options_.predatorDiagnostic = true;
+      if (!parseUnsigned(argv[i], options_.benchFrames) || options_.benchFrames == 0) {
+        std::cerr << "Invalid diagnostic frame count: " << argv[i] << '\n';
         return false;
       }
     } else if (arg == "--seed") {
@@ -93,6 +100,11 @@ bool NativeSimulation::configureFromCommandLine(int argc, char **argv) {
 // シミュレーション全体の起動（初期化→ループ開始）
 void NativeSimulation::run() {
   std::signal(SIGINT, handleSignal); // Ctrl+C で停止可能
+
+  if (options_.predatorDiagnostic) {
+    runPredatorDiagnostic();
+    return;
+  }
 
   settings_ = ensureSettingsFields(loadSettings()); // 設定値の取得・補完
   if (options_.benchBoids > 0) {
@@ -246,6 +258,105 @@ void NativeSimulation::startSimulation() {
     logger::log("Simulation initialized with " + std::to_string(totalBoids) +
                 " boids.");
   }
+}
+
+void NativeSimulation::runPredatorDiagnostic() {
+  constexpr float kFixedDt = 1.0f / 60.0f;
+  constexpr int kPreyCount = 3;
+
+  SpeciesParams prey;
+  prey.species = "DiagnosticPrey";
+  prey.count = kPreyCount;
+  prey.speciesId = 0;
+  prey.cohesion = 0.0f;
+  prey.separation = 0.0f;
+  prey.alignment = 0.0f;
+  prey.maxSpeed = 0.3f;
+  prey.minSpeed = 0.0f;
+  prey.maxTurnAngle = 15.0f;
+  prey.separationRange = 0.1f;
+  prey.alignmentRange = 1.0f;
+  prey.cohesionRange = 1.0f;
+  prey.maxNeighbors = 2;
+  prey.lambda = 1.0f;
+  prey.tau = 1.0f;
+  prey.fieldOfViewDeg = 360.0f;
+  prey.predatorAlertRadius = 0.55f;
+  prey.isPredator = false;
+
+  SpeciesParams predator;
+  predator.species = "DiagnosticPredator";
+  predator.count = 1;
+  predator.speciesId = 1;
+  predator.maxSpeed = 0.0f;
+  predator.minSpeed = 0.0f;
+  predator.maxTurnAngle = 0.0f;
+  predator.maxNeighbors = 0;
+  predator.isPredator = true;
+
+  BoidSimulation simulation;
+  simulation.setRandomSeed(options_.seed);
+  simulation.setFixedTimeStep(kFixedDt);
+  simulation.setMaxBoidsPerUnit(8);
+  simulation.initializeBoids({prey, predator}, 0.0f, 0.0f);
+
+  auto &buffers = simulation.getBuffersMutable();
+  buffers.positions[0] = glm::vec3(0.0f, 0.0f, 0.0f);
+  buffers.positions[1] = glm::vec3(0.65f, 0.0f, 0.0f);
+  buffers.positions[2] = glm::vec3(1.30f, 0.0f, 0.0f);
+  buffers.positions[3] = glm::vec3(-0.40f, 0.0f, 0.0f);
+  std::fill(buffers.velocities.begin(), buffers.velocities.end(),
+            glm::vec3(0.0f));
+  buffers.syncWriteFromRead();
+  simulation.build();
+
+  gSimulationTuning.threatDecay = 0.75f;
+  gSimulationTuning.maxEscapeWeight = 0.6f;
+  gSimulationTuning.baseEscapeStrength = 4.0f;
+  setBoidsMaxTasksOverride(options_.benchTasks);
+
+  std::array<int, kPreyCount> firstThreatFrame{-1, -1, -1};
+  std::array<int, kPreyCount> firstDirectionFrame{-1, -1, -1};
+  std::array<float, kPreyCount> maxThreat{0.0f, 0.0f, 0.0f};
+
+  for (std::size_t frame = 0; frame < options_.benchFrames; ++frame) {
+    simulation.update(kFixedDt);
+    for (int i = 0; i < kPreyCount; ++i) {
+      const float threat = buffers.predatorThreats[i];
+      maxThreat[i] = std::max(maxThreat[i], threat);
+      if (firstThreatFrame[i] < 0 && threat > 0.02f) {
+        firstThreatFrame[i] = static_cast<int>(frame);
+      }
+      if (firstDirectionFrame[i] < 0 &&
+          glm::length2(buffers.predatorInfluences[i]) > 1e-6f) {
+        firstDirectionFrame[i] = static_cast<int>(frame);
+      }
+    }
+  }
+
+  std::ostringstream output;
+  output << std::setprecision(8)
+         << "{\"mode\":\"predator-diagnostic\",\"frames\":"
+         << options_.benchFrames << ",\"seed\":" << options_.seed
+         << ",\"tasks\":" << options_.benchTasks;
+  const auto writeArray = [&output](const char *name, const auto &values) {
+    output << ",\"" << name << "\":[";
+    for (std::size_t i = 0; i < values.size(); ++i) {
+      if (i != 0) output << ',';
+      output << values[i];
+    }
+    output << ']';
+  };
+  writeArray("first_threat_frame", firstThreatFrame);
+  writeArray("first_direction_frame", firstDirectionFrame);
+  writeArray("max_threat", maxThreat);
+  std::array<float, kPreyCount> finalThreat{};
+  for (int i = 0; i < kPreyCount; ++i) {
+    finalThreat[i] = buffers.predatorThreats[i];
+  }
+  writeArray("final_threat", finalThreat);
+  output << '}';
+  std::cout << output.str() << '\n';
 }
 
 void NativeSimulation::runBenchmark() {
