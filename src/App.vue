@@ -464,9 +464,9 @@ const DEFAULT_SETTINGS = [
   },
 ];
 const DEFAULT_TUNING_SETTINGS = {
-  threatDecay: 0.85, // 脅威減衰速度（1/sec）。少し長めに残して空隙を維持
+  threatDecay: 1.3, // 脅威減衰速度（1/sec）。少し長めに残して空隙を維持
   maxEscapeWeight: 0.6, // 逃避方向の最大割合（0〜1）
-  baseEscapeStrength: 6.5, // 逃避舵取り強度（目標速度へ寄せる強さ）
+  baseEscapeStrength: 8.0, // 逃避舵取り強度（目標速度へ寄せる強さ）
   schoolPullCoefficient: 0.0002, // 大クラスタ引力係数
 };
   
