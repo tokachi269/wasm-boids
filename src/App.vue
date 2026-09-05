@@ -440,9 +440,9 @@ const DEFAULT_SETTINGS = [
     species: "Boids", // 種族名
     count: defaultBoidCount, // 群れの数（低スペックでは軽量化）
     // 画面ガワの初期値（画像の値）
-    cohesion: 3.66, // 凝集
+    cohesion: 5.0, // 凝集
     cohesionRange: 5, // 凝集範囲
-    separation: 1.0, // 分離
+    separation: 0.75, // 分離
     separationRange: 0.4, // 分離範囲
     alignment: 8.0, // 整列
     alignmentRange: 1, // 整列範囲
@@ -453,7 +453,7 @@ const DEFAULT_SETTINGS = [
     torqueStrength: 1.5, // 回転トルク強度
     lambda: 0.102, // 速度調整係数（減衰係数）
     tau: 0.5, // 記憶時間
-    predatorAlertRadius: 3.5, // 捕食者を早めに察知して空隙を作る距離
+    predatorAlertRadius: 2.5, // 捕食者を察知して逃避を始める距離
     densityReturnStrength: 0.0, // 密度復帰強度
     schoolPullEnabled: true, // 大クラスタ引力係数を反映するか
     isPredator: false,
@@ -483,10 +483,10 @@ const DEFAULT_SETTINGS = [
 ];
 const DEFAULT_TUNING_SETTINGS = {
   threatDecay: 0.75, // 脅威減衰速度（1/sec）。少し長めに残して空隙を維持
-  maxEscapeWeight: 0.6, // 逃避方向の最大割合（0〜1）
+  maxEscapeWeight: 0.5, // 逃避方向の最大割合（0〜1）
   baseEscapeStrength: 4.0, // 逃避舵取り強度（目標速度へ寄せる強さ）
   fastAttractStrength: 1.0, // 近傍不足時の補助凝集強度（0で無効）
-  schoolPullCoefficient: 0.0004, // 大クラスタ引力係数
+  schoolPullCoefficient: 0.0002, // 大クラスタ引力係数
 };
   
 // 調整スライダーの説明（ユーザ目線）。ホバー時に title として表示する。
