@@ -44,6 +44,45 @@
                   />
                 </div>
                 <div class="setting-row">
+                  <label :title="tuningHelp.threatPropagationRate">反応伝播速度<br />(threatPropagationRate):</label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="12"
+                    step="0.1"
+                    v-model.number="systemSettings.threatPropagationRate"
+                    :title="tuningHelp.threatPropagationRate"
+                  />
+                  <input
+                    class="value-input"
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    v-model.number="systemSettings.threatPropagationRate"
+                    :title="tuningHelp.threatPropagationRate"
+                  />
+                </div>
+                <div class="setting-row">
+                  <label :title="tuningHelp.threatTransmission">反応伝達率<br />(threatTransmission):</label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    v-model.number="systemSettings.threatTransmission"
+                    :title="tuningHelp.threatTransmission"
+                  />
+                  <input
+                    class="value-input"
+                    type="number"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    v-model.number="systemSettings.threatTransmission"
+                    :title="tuningHelp.threatTransmission"
+                  />
+                </div>
+                <div class="setting-row">
                   <label :title="tuningHelp.maxEscapeWeight">逃避優先度<br />(maxEscapeWeight):</label>
                   <input
                     type="range"
@@ -462,6 +501,8 @@ const DEFAULT_SETTINGS = [
 ];
 const DEFAULT_TUNING_SETTINGS = {
   threatDecay: 0.75, // 脅威減衰速度（1/sec）。少し長めに残して空隙を維持
+  threatPropagationRate: 4.0, // 近傍の脅威へ追従する速度（1/sec）
+  threatTransmission: 0.82, // 1 hopで伝わる脅威の割合
   maxEscapeWeight: 0.6, // 逃避方向の最大割合（0〜1）
   baseEscapeStrength: 4.0, // 逃避舵取り強度（目標速度へ寄せる強さ）
   fastAttractStrength: 1.0, // 近傍不足時の補助凝集強度（0で無効）
@@ -472,6 +513,8 @@ const DEFAULT_TUNING_SETTINGS = {
 // NOTE: 実装の内部用語ではなく「何がどう変わるか」を短く書く。
 const tuningHelp = {
   threatDecay: '脅威（捕食者などの危険度）が時間でどれだけ早く消えるか。大きいほど早く落ち着きます。',
+  threatPropagationRate: '直接反応した魚の逃避反応が、近くの魚へ伝わる速さ。大きいほど波及が速くなります。',
+  threatTransmission: '逃避反応が隣の魚へ伝わるたびに残る割合。小さいほど遠くまで伝わりにくくなります。',
   maxEscapeWeight: '逃避行動をどれだけ優先するか（0〜1）。1 に近いほど、危険時はほぼ逃げが優先されます。',
   baseEscapeStrength: '逃避の舵取り強度（目標速度へ寄せる強さ）。大きいほど素早く逃げ方向へ乗ります。',
   fastAttractStrength: '近くの仲間が少ないときに、群れへ戻す補助の凝集強度（0で無効）。',

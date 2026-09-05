@@ -6,6 +6,8 @@
  */
 struct SimulationTuningParams {
   float threatDecay = 1.6f;             // 単位: 1/sec。値が大きいほど恐怖が早く薄れる
+  float threatPropagationRate = 4.0f;   // 単位: 1/sec。近傍の脅威へ追従する速さ
+  float threatTransmission = 0.82f;     // 1 hopで伝わる脅威の割合（0〜1）
   float maxEscapeWeight = 0.8f;         // 逃走方向に割ける最大割合（0〜1）
   float baseEscapeStrength = 5.0f;      // 逃走ステアリング（目標速度への舵取り）強度の基礎値
   float fastAttractStrength = 1.0f;     // 近傍不足時の補助凝集強度（0で無効）
