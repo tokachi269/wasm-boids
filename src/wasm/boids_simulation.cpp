@@ -83,6 +83,77 @@ void BoidSimulation::setFixedTimeStep(float dt) {
   fixedTimeStep_ = dt > 0.0f ? dt : (1.0f / 60.0f);
 }
 
+void BoidSimulation::setBehaviorInspectorIndex(int index) {
+  behaviorInspectorIndex_ = index >= 0 ? index : -1;
+  behaviorInspectorBuffer_.fill(0.0f);
+  if (behaviorInspectorIndex_ >= 0) {
+    behaviorInspectorBuffer_[1] = static_cast<float>(behaviorInspectorIndex_);
+  }
+}
+
+void BoidSimulation::recordBehaviorInteraction(
+    int index, const glm::vec3 &separation, const glm::vec3 &alignment,
+    const glm::vec3 &cohesion, const glm::vec3 &schoolPull,
+    int neighborCount, float schoolDistance, float schoolInfluenceScale) {
+  if (!isBehaviorInspectorTarget(index)) {
+    return;
+  }
+  behaviorInspectorBuffer_[0] = 1.0f;
+  behaviorInspectorBuffer_[2] = separation.x;
+  behaviorInspectorBuffer_[3] = separation.y;
+  behaviorInspectorBuffer_[4] = separation.z;
+  behaviorInspectorBuffer_[5] = alignment.x;
+  behaviorInspectorBuffer_[6] = alignment.y;
+  behaviorInspectorBuffer_[7] = alignment.z;
+  behaviorInspectorBuffer_[8] = cohesion.x;
+  behaviorInspectorBuffer_[9] = cohesion.y;
+  behaviorInspectorBuffer_[10] = cohesion.z;
+  behaviorInspectorBuffer_[11] = schoolPull.x;
+  behaviorInspectorBuffer_[12] = schoolPull.y;
+  behaviorInspectorBuffer_[13] = schoolPull.z;
+  behaviorInspectorBuffer_[24] = static_cast<float>(neighborCount);
+  behaviorInspectorBuffer_[25] = schoolDistance;
+  behaviorInspectorBuffer_[26] = schoolInfluenceScale;
+}
+
+void BoidSimulation::recordBehaviorDesiredMotion(
+    int index, const glm::vec3 &desiredDirection, float desiredSpeed) {
+  if (!isBehaviorInspectorTarget(index)) {
+    return;
+  }
+  behaviorInspectorBuffer_[0] = 1.0f;
+  behaviorInspectorBuffer_[14] = desiredDirection.x;
+  behaviorInspectorBuffer_[15] = desiredDirection.y;
+  behaviorInspectorBuffer_[16] = desiredDirection.z;
+  behaviorInspectorBuffer_[20] = desiredSpeed;
+}
+
+void BoidSimulation::recordBehaviorTurnLimited(int index) {
+  if (isBehaviorInspectorTarget(index)) {
+    behaviorInspectorBuffer_[22] = 1.0f;
+  }
+}
+
+void BoidSimulation::recordBehaviorFinalMotion(
+    int index, const glm::vec3 &actualDirection, float finalSpeed,
+    bool speedClamped) {
+  if (!isBehaviorInspectorTarget(index)) {
+    return;
+  }
+  behaviorInspectorBuffer_[0] = 1.0f;
+  behaviorInspectorBuffer_[17] = actualDirection.x;
+  behaviorInspectorBuffer_[18] = actualDirection.y;
+  behaviorInspectorBuffer_[19] = actualDirection.z;
+  behaviorInspectorBuffer_[21] = finalSpeed;
+  behaviorInspectorBuffer_[23] = speedClamped ? 1.0f : 0.0f;
+}
+
+uintptr_t BoidSimulation::getBehaviorInspectorPtr() {
+  return behaviorInspectorIndex_ >= 0
+             ? reinterpret_cast<uintptr_t>(behaviorInspectorBuffer_.data())
+             : 0;
+}
+
 SpeciesParams BoidSimulation::getGlobalSpeciesParams(const std::string species) {
   const auto &globalSpeciesParams = speciesParams_;
   auto it = std::find_if(
@@ -919,6 +990,11 @@ void BoidSimulation::update(float dt) {
   // ここは1フレーム1回の防波堤としてコスト無視できる。
   if (!std::isfinite(dt) || dt < 0.0f) {
     dt = 0.0f;
+  }
+
+  if (behaviorInspectorIndex_ >= 0) {
+    behaviorInspectorBuffer_.fill(0.0f);
+    behaviorInspectorBuffer_[1] = static_cast<float>(behaviorInspectorIndex_);
   }
 
   const bool debugRecent = (frameCount - debugLastRequestFrame_) <= kDebugRequestKeepAliveFrames;

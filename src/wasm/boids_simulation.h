@@ -1,6 +1,7 @@
 #pragma once
 #include <stack>
 #include <vector>
+#include <array>
 #include <cstdint>
 #include <atomic>
 #include <random>
@@ -30,6 +31,7 @@ public:
     };
     static constexpr int kPhaseCount = static_cast<int>(Phase::Count);
     static constexpr int kParallelPhaseCount = 2;
+    static constexpr int kBehaviorInspectorFloatCount = 27;
 
     struct PhaseTimings {
         double ms[kPhaseCount]{};
@@ -126,6 +128,29 @@ public:
     LocalityStats getLocalityStats() const;
     void recordNeighborIndexDistance(bool external, int selfIndex,
                                      int neighborIndex);
+
+    // 選択した1個体だけを対象にする読み取り専用の挙動診断。
+    // -1 で無効。通常実行時は記録処理を行わない。
+    void setBehaviorInspectorIndex(int index);
+    int getBehaviorInspectorIndex() const { return behaviorInspectorIndex_; }
+    bool isBehaviorInspectorTarget(int index) const {
+        return behaviorInspectorIndex_ >= 0 && behaviorInspectorIndex_ == index;
+    }
+    void recordBehaviorInteraction(int index, const glm::vec3 &separation,
+                                   const glm::vec3 &alignment,
+                                   const glm::vec3 &cohesion,
+                                   const glm::vec3 &schoolPull,
+                                   int neighborCount, float schoolDistance,
+                                   float schoolInfluenceScale);
+    void recordBehaviorDesiredMotion(int index, const glm::vec3 &desiredDirection,
+                                     float desiredSpeed);
+    void recordBehaviorTurnLimited(int index);
+    void recordBehaviorFinalMotion(int index, const glm::vec3 &actualDirection,
+                                   float finalSpeed, bool speedClamped);
+    uintptr_t getBehaviorInspectorPtr();
+    int getBehaviorInspectorCount() const {
+        return behaviorInspectorIndex_ >= 0 ? kBehaviorInspectorFloatCount : 0;
+    }
 
     // 空間インデックス（現状は BoidUnit ツリー）を保持値で再構築する。
     void rebuildSpatialIndex() { build(); }
@@ -228,6 +253,8 @@ private:
     std::atomic<uint64_t> localityBuckets_[2][6]{};
     std::atomic<uint64_t> localityDistanceSum_[2]{};
     std::atomic<uint64_t> localitySamples_[2]{};
+    int behaviorInspectorIndex_ = -1;
+    std::array<float, kBehaviorInspectorFloatCount> behaviorInspectorBuffer_{};
     std::vector<float> unitSimpleDensities;
     std::vector<SpeciesEnvelope> speciesEnvelopes;
     std::vector<std::vector<SpeciesCluster>> speciesClusters;

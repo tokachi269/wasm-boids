@@ -130,6 +130,18 @@ int EMSCRIPTEN_KEEPALIVE speciesSchoolClustersCount() {
   return BoidSimulation::instance().getSpeciesSchoolClustersCount();
 }
 
+void EMSCRIPTEN_KEEPALIVE setBehaviorInspectorIndex(int index) {
+  BoidSimulation::instance().setBehaviorInspectorIndex(index);
+}
+
+uintptr_t EMSCRIPTEN_KEEPALIVE behaviorInspectorPtr() {
+  return BoidSimulation::instance().getBehaviorInspectorPtr();
+}
+
+int EMSCRIPTEN_KEEPALIVE behaviorInspectorCount() {
+  return BoidSimulation::instance().getBehaviorInspectorCount();
+}
+
 void syncReadToWriteBuffers() {
   BoidSimulation::instance().syncWriteFromReadBuffers();
 }

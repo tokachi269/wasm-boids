@@ -270,6 +270,24 @@
                   <input type="checkbox" v-model="showSpeciesSchoolClusters" :title="debugHelp.showSpeciesSchoolClusters" />
                   大クラスター表示
                 </label>
+                <label class="debug-checkbox">
+                  <input type="checkbox" v-model="showBehaviorInspector" />
+                  Behavior Inspector
+                </label>
+                <div v-if="showBehaviorInspector" class="behavior-inspector-controls">
+                  <label>
+                    Boid index:
+                    <input
+                      class="value-input"
+                      type="number"
+                      min="0"
+                      :max="Math.max(totalBoids - 1, 0)"
+                      step="1"
+                      v-model.number="behaviorInspectorIndex"
+                    />
+                  </label>
+                  <span>魚をダブルクリックして選択</span>
+                </div>
                 <label class="debug-checkbox" :title="debugHelp.showWorldAxisGrid">
                   <input type="checkbox" v-model="showWorldAxisGrid" :title="debugHelp.showWorldAxisGrid" />
                   ワールド座標グリッド/軸（目盛り）表示
@@ -292,6 +310,9 @@
     -->
     <pre v-if="showSpeciesEnvelopes && speciesEnvelopeHudText" class="debug-hud">
 {{ speciesEnvelopeHudText }}
+    </pre>
+    <pre v-if="showBehaviorInspector && behaviorInspectorHudText" class="debug-hud behavior-debug-hud">
+{{ behaviorInspectorHudText }}
     </pre>
 
     <div ref="threeContainer" class="three-container" />
@@ -683,6 +704,9 @@ const showUnitColors = ref(false);
 const showSpeciesEnvelopes = ref(false);
 const showSpeciesClusters = ref(false);
 const showSpeciesSchoolClusters = ref(false);
+const showBehaviorInspector = ref(false);
+const behaviorInspectorIndex = ref(0);
+const behaviorInspectorHudText = ref("");
 
 // Blenderのビューポートのように、座標系の目盛り（グリッド/軸）を表示するデバッグトグル。
 // - 画面上の数値HUDではなく、3D空間に基準を置くことでスケール感を掴みやすくする。
@@ -712,6 +736,10 @@ let schoolClusterGeometry = null;
 let schoolClusterMaterial = null;
 let schoolClusterMaxInstances = 0;
 
+let behaviorInspectorMarker = null;
+let latestBoidPositions = null;
+const behaviorInspectorProjection = new THREE.Vector3();
+
 // InstancedMesh 更新用の一時オブジェクト（GC削減）
 const clusterDummy = new THREE.Object3D();
 const clusterColor = new THREE.Color();
@@ -728,6 +756,137 @@ const debugControls = reactive({
   enableTailAnimation: true,
   enableStats: false,
 });
+
+function clampBehaviorInspectorIndex(value) {
+  const maxIndex = Math.max(0, Number(totalBoids.value || 0) - 1);
+  const numeric = Number(value);
+  return Math.min(Math.max(Number.isFinite(numeric) ? Math.floor(numeric) : 0, 0), maxIndex);
+}
+
+function applyBehaviorInspectorState() {
+  if (!wasmBridge) {
+    return;
+  }
+  if (!showBehaviorInspector.value) {
+    wasmBridge.setBehaviorInspectorIndex(-1);
+    behaviorInspectorHudText.value = "";
+    if (behaviorInspectorMarker) {
+      behaviorInspectorMarker.visible = false;
+    }
+    return;
+  }
+  const index = clampBehaviorInspectorIndex(behaviorInspectorIndex.value);
+  if (index !== behaviorInspectorIndex.value) {
+    behaviorInspectorIndex.value = index;
+  }
+  wasmBridge.setBehaviorInspectorIndex(index);
+  if (!behaviorInspectorMarker && scene) {
+    behaviorInspectorMarker = new THREE.Mesh(
+      new THREE.SphereGeometry(0.12, 10, 8),
+      new THREE.MeshBasicMaterial({
+        color: 0xffd54a,
+        depthTest: false,
+        depthWrite: false,
+        transparent: true,
+        opacity: 0.9,
+      }),
+    );
+    behaviorInspectorMarker.renderOrder = 1000;
+    scene.add(behaviorInspectorMarker);
+  }
+  if (behaviorInspectorMarker) {
+    behaviorInspectorMarker.visible = true;
+  }
+}
+
+function formatBehaviorVector(buffer, offset) {
+  const x = buffer[offset] || 0;
+  const y = buffer[offset + 1] || 0;
+  const z = buffer[offset + 2] || 0;
+  const magnitude = Math.hypot(x, y, z);
+  return `${magnitude.toFixed(3)}  (${x.toFixed(3)}, ${y.toFixed(3)}, ${z.toFixed(3)})`;
+}
+
+function updateBehaviorInspector(positions) {
+  if (!showBehaviorInspector.value || !wasmBridge) {
+    return;
+  }
+  const index = clampBehaviorInspectorIndex(behaviorInspectorIndex.value);
+  const positionOffset = index * 3;
+  if (behaviorInspectorMarker && positions && positionOffset + 2 < positions.length) {
+    behaviorInspectorMarker.position.set(
+      positions[positionOffset],
+      positions[positionOffset + 1],
+      positions[positionOffset + 2],
+    );
+    behaviorInspectorMarker.visible = true;
+  }
+  if ((frameCounter & 3) !== 0) {
+    return;
+  }
+  const sample = wasmBridge.getBehaviorInspectorBuffer();
+  if (!sample || sample.length < 27 || sample[0] < 0.5) {
+    behaviorInspectorHudText.value = `Behavior Inspector\nBoid #${index}\nwaiting for sample`;
+    return;
+  }
+  behaviorInspectorHudText.value = [
+    `Behavior Inspector  Boid #${Math.floor(sample[1])}`,
+    `neighbors       ${Math.floor(sample[24])}`,
+    `separation      ${formatBehaviorVector(sample, 2)}`,
+    `alignment       ${formatBehaviorVector(sample, 5)}`,
+    `cohesion        ${formatBehaviorVector(sample, 8)}`,
+    `school pull     ${formatBehaviorVector(sample, 11)}`,
+    `school distance ${sample[25].toFixed(3)}  influence ${sample[26].toFixed(3)}`,
+    `desired dir     ${formatBehaviorVector(sample, 14)}`,
+    `actual dir      ${formatBehaviorVector(sample, 17)}`,
+    `speed           ${sample[20].toFixed(3)} -> ${sample[21].toFixed(3)}${sample[23] > 0.5 ? "  CLAMPED" : ""}`,
+    `turn limited    ${sample[22] > 0.5 ? "YES" : "no"}`,
+  ].join("\n");
+}
+
+function handleBehaviorInspectorDoubleClick(event) {
+  if (!showBehaviorInspector.value || !camera || !rendererCanvas || !latestBoidPositions) {
+    return;
+  }
+  const rect = rendererCanvas.getBoundingClientRect();
+  let bestIndex = -1;
+  let bestDistanceSq = 24 * 24;
+  for (let index = 0; index * 3 + 2 < latestBoidPositions.length; index += 1) {
+    const offset = index * 3;
+    behaviorInspectorProjection
+      .set(
+        latestBoidPositions[offset],
+        latestBoidPositions[offset + 1],
+        latestBoidPositions[offset + 2],
+      )
+      .project(camera);
+    if (behaviorInspectorProjection.z < -1 || behaviorInspectorProjection.z > 1) {
+      continue;
+    }
+    const screenX = rect.left + (behaviorInspectorProjection.x + 1) * 0.5 * rect.width;
+    const screenY = rect.top + (1 - behaviorInspectorProjection.y) * 0.5 * rect.height;
+    const dx = screenX - event.clientX;
+    const dy = screenY - event.clientY;
+    const distanceSq = dx * dx + dy * dy;
+    if (distanceSq < bestDistanceSq) {
+      bestDistanceSq = distanceSq;
+      bestIndex = index;
+    }
+  }
+  if (bestIndex >= 0) {
+    behaviorInspectorIndex.value = bestIndex;
+  }
+}
+
+function disposeBehaviorInspectorMarker() {
+  if (!behaviorInspectorMarker) {
+    return;
+  }
+  behaviorInspectorMarker.parent?.remove(behaviorInspectorMarker);
+  behaviorInspectorMarker.geometry?.dispose?.();
+  behaviorInspectorMarker.material?.dispose?.();
+  behaviorInspectorMarker = null;
+}
 
 /**
  * Blender風の「座標の目盛り」を3D空間に表示する。
@@ -1155,6 +1314,7 @@ function detachRendererCanvas() {
   if (!canvas) {
     return;
   }
+  canvas.removeEventListener('dblclick', handleBehaviorInspectorDoubleClick, false);
   if (canvas.parentElement) {
     canvas.parentElement.removeChild(canvas);
   }
@@ -1312,6 +1472,7 @@ function initThreeJS() {
   disposeRendererAndPipeline();
 
   // 以前の scene を保持したまま再生成するとメモリが積み上がるので、都度作り直す。
+  disposeBehaviorInspectorMarker();
   scene = null;
   camera = null;
   controls = null;
@@ -1376,6 +1537,8 @@ function initThreeJS() {
   rendererCanvas = renderer.domElement;
   rendererCanvas.addEventListener('webglcontextlost', onWebglContextLost, false);
   rendererCanvas.addEventListener('webglcontextrestored', onWebglContextRestored, false);
+  rendererCanvas.removeEventListener('dblclick', handleBehaviorInspectorDoubleClick, false);
+  rendererCanvas.addEventListener('dblclick', handleBehaviorInspectorDoubleClick, false);
 
   threeContainer.value.appendChild(renderer.domElement);
 
@@ -1444,6 +1607,7 @@ function initThreeJS() {
   applyShadowDebugState();
   applyTailAnimationDebugState();
   applyWorldAxisGridState();
+  applyBehaviorInspectorState();
   // ウィンドウリサイズ対応
   if (!resizeHooked) {
     resizeHooked = true;
@@ -2857,6 +3021,7 @@ function animate(frameTimeMs) {
   const { positions, orientations, velocities } = browserBenchmark
     ? browserBenchmark.measure('wasm_to_js_views', () => getWasmViews(count))
     : getWasmViews(count);
+  latestBoidPositions = positions;
   if ((frameCounter++ & 63) === 0) {
     wasmBridge?.getDiagnostics?.({ firstBoidX: true });
   }
@@ -2876,6 +3041,7 @@ function animate(frameTimeMs) {
   const updateInfo = browserBenchmark
     ? browserBenchmark.measure('js_instance_packing', updateInstancing)
     : updateInstancing();
+  updateBehaviorInspector(positions);
 
   const visibleCount =
     updateInfo.visibleCount ?? Math.max(0, count - predatorCount);
@@ -3158,6 +3324,8 @@ onUnmounted(() => {
   }
 
   clearWebglRecoveryTimer();
+  wasmBridge?.setBehaviorInspectorIndex?.(-1);
+  disposeBehaviorInspectorMarker();
   setStatsOverlayVisibility(false);
   stats = null;
   statsInitPromise = null;
@@ -3205,6 +3373,16 @@ watch(
 watch(showWorldAxisGrid, () => {
   // ON/OFFの即時反映
   applyWorldAxisGridState();
+});
+
+watch(showBehaviorInspector, () => {
+  applyBehaviorInspectorState();
+});
+
+watch(behaviorInspectorIndex, () => {
+  if (showBehaviorInspector.value) {
+    applyBehaviorInspectorState();
+  }
 });
 
 // グローバル調整値の変更を監視し、wasm 側へ逐次反映する。
@@ -3396,6 +3574,24 @@ watch([showUnitSpheres, showUnitLines], ([newSpheres, newLines]) => {
 
   font-size: 12px;
   line-height: 1.35;
+}
+
+.behavior-debug-hud {
+  left: auto;
+  right: 12px;
+}
+
+.behavior-inspector-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0 8px 20px;
+  font-size: 12px;
+}
+
+.behavior-inspector-controls .value-input {
+  width: 72px;
+  margin-left: 6px;
 }
 
 .add-species-button {

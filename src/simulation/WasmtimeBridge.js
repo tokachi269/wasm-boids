@@ -46,6 +46,9 @@ export class WasmtimeBridge {
     this.cachedSpeciesSchoolClusterPtr = 0;
     this.cachedSpeciesSchoolClusterCount = 0;
     this.cachedSpeciesSchoolClusterView = null;
+    this.cachedBehaviorInspectorPtr = 0;
+    this.cachedBehaviorInspectorCount = 0;
+    this.cachedBehaviorInspectorView = null;
 
     // cwrap された wasm 関数を遅延束縛で保持
     this.stepSimulationHandle = createWrappedFunction(this.wasm, 'stepSimulation', 'number', ['number']);
@@ -82,6 +85,14 @@ export class WasmtimeBridge {
     // Species school clusters debug export
     this.speciesSchoolClustersPtrHandle = createWrappedFunction(this.wasm, 'speciesSchoolClustersPtr', 'number', []);
     this.speciesSchoolClustersCountHandle = createWrappedFunction(this.wasm, 'speciesSchoolClustersCount', 'number', []);
+    this.setBehaviorInspectorIndexHandle = createWrappedFunction(
+      this.wasm,
+      'setBehaviorInspectorIndex',
+      'void',
+      ['number'],
+    );
+    this.behaviorInspectorPtrHandle = createWrappedFunction(this.wasm, 'behaviorInspectorPtr', 'number', []);
+    this.behaviorInspectorCountHandle = createWrappedFunction(this.wasm, 'behaviorInspectorCount', 'number', []);
 
     this.configureGroundPlaneHandle = createWrappedFunction(
       this.wasm,
@@ -206,6 +217,39 @@ export class WasmtimeBridge {
 
   endLocalitySample() {
     ensureHandle(this.endLocalitySampleHandle, 'endLocalitySample')();
+  }
+
+  setBehaviorInspectorIndex(index = -1) {
+    ensureHandle(this.setBehaviorInspectorIndexHandle, 'setBehaviorInspectorIndex')(
+      Number.isFinite(index) ? Math.floor(index) : -1,
+    );
+  }
+
+  getBehaviorInspectorBuffer() {
+    if (
+      !this.wasm ||
+      typeof this.behaviorInspectorPtrHandle !== 'function' ||
+      typeof this.behaviorInspectorCountHandle !== 'function'
+    ) {
+      return null;
+    }
+    const count = this.behaviorInspectorCountHandle();
+    const ptr = this.behaviorInspectorPtrHandle();
+    if (!ptr || count <= 0) {
+      return null;
+    }
+    const heapBuffer = this.wasm.HEAPF32.buffer;
+    if (
+      this.cachedBehaviorInspectorView === null ||
+      this.cachedBehaviorInspectorPtr !== ptr ||
+      this.cachedBehaviorInspectorCount !== count ||
+      this.cachedBehaviorInspectorView.buffer !== heapBuffer
+    ) {
+      this.cachedBehaviorInspectorPtr = ptr;
+      this.cachedBehaviorInspectorCount = count;
+      this.cachedBehaviorInspectorView = new Float32Array(heapBuffer, ptr, count);
+    }
+    return this.cachedBehaviorInspectorView;
   }
 
   getLocalityStats() {
@@ -424,6 +468,9 @@ export class WasmtimeBridge {
       this.cachedSpeciesSchoolClusterPtr = 0;
       this.cachedSpeciesSchoolClusterCount = 0;
       this.cachedSpeciesSchoolClusterView = null;
+      this.cachedBehaviorInspectorPtr = 0;
+      this.cachedBehaviorInspectorCount = 0;
+      this.cachedBehaviorInspectorView = null;
     }
 
     if (!this.latestPositionsPtr || !this.latestOrientationsPtr || !this.latestVelocitiesPtr || count <= 0) {

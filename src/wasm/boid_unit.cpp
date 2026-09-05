@@ -594,6 +594,9 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
       speed = glm::sqrt(desiredSpeedSq);
       newDir = desiredVelocity / speed;
     }
+    if (simulation.isBehaviorInspectorTarget(gIdx)) {
+      simulation.recordBehaviorDesiredMotion(gIdx, newDir, speed);
+    }
 
     // 旋回制限は「角度(acos)」を直接求めず、cos しきい値で判定する。
     // - `acosf` は高コストなので、ホットループでは避ける。
@@ -626,6 +629,9 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
 
     // maxTurnStep が 0 のときは無駄な軸計算を避ける。
     if (maxTurnStep > 0.0f && clampedDot < std::cos(maxTurnStep)) {
+      if (simulation.isBehaviorInspectorTarget(gIdx)) {
+        simulation.recordBehaviorTurnLimited(gIdx);
+      }
       glm::vec3 axis = glm::cross(oldDir, newDir);
       float axisLength2 = glm::length2(axis);
       if (axisLength2 > 1e-8f) {
@@ -671,6 +677,11 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
     // -----------------------------------------------
     float finalSpeed =
         glm::clamp(speed, globalSpeciesParams[sid].minSpeed, maxSpeed);
+
+    if (simulation.isBehaviorInspectorTarget(gIdx)) {
+      simulation.recordBehaviorFinalMotion(
+          gIdx, newDir, finalSpeed, finalSpeed != speed);
+    }
 
     const glm::vec3 newVelocity = newDir * finalSpeed;
     unit->buf->velocitiesWrite[gIdx] = newVelocity;
@@ -1848,6 +1859,12 @@ void BoidUnit::computeBoidInteraction(float dt) {
           clusterPull *= confidenceScale * (1.0f - threatScatter) *
                          schoolInfluenceScale;
           buf->accelerations[gIdx] += clusterDir * clusterPull;
+          if (simulation.isBehaviorInspectorTarget(gIdx)) {
+            simulation.recordBehaviorInteraction(
+                gIdx, glm::vec3(0.0f), glm::vec3(0.0f), glm::vec3(0.0f),
+                clusterDir * clusterPull, 0, clusterDist,
+                schoolInfluenceScale);
+          }
         }
       }
 
@@ -2276,6 +2293,17 @@ void BoidUnit::computeBoidInteraction(float dt) {
         const glm::vec3 combinedCohesion =
           (totalCohesion + longTermCohesion) * fleeCohesionScale;
       const glm::vec3 combinedAlignment = totalAlignment;
+
+      if (simulation.isBehaviorInspectorTarget(gIdx)) {
+        const float selectedSchoolDistance = hasSchoolCenterDir
+            ? glm::sqrt(glm::length2(schoolCenterDir))
+            : 0.0f;
+        simulation.recordBehaviorInteraction(
+            gIdx, totalSeparation, combinedAlignment,
+            totalCohesion * fleeCohesionScale,
+            longTermCohesion * fleeCohesionScale, totalNeighborCount,
+            selectedSchoolDistance, schoolInfluenceScale);
+      }
 
       // --- 回転トルクによる向き補正（alignment方向へ向ける） ---
       float velLen2_2 = glm::length2(vel);
