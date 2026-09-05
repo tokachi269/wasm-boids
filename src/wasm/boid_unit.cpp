@@ -1862,26 +1862,9 @@ void BoidUnit::computeBoidInteraction(float dt) {
     float phi = float(totalNeighborCount) / float(phiDenom);
 
     if (totalNeighborCount > 0) {
-      // 近傍のストレスを集約し、逃走の波を伝搬させる。
+      // 直接検知した捕食者脅威を、このフレームの社会力へ反映する。
       float selfStress = buf->stresses[gIdx];
-      const float propagationRadius =
-          glm::max(globalSpeciesParams[sid].cohesionRange, 1.0f);
-
-      // predatorThreats(0〜1) も近傍から伝搬させる。
-      // 目的:
-      // - 捕食者が群れに突入した際に、直接見ていない個体も「周囲が逃げている」ことで素早く散開する
-      // - 逃避が局所だけで終わって「突っ込む/曲がれない」状態になりにくくする
-      // 注意:
-      // - 値域は 0〜1 のまま（正規化スカラー）
-      // - 伝搬は距離で減衰し、dt でブレンドしてフレームレートに依存しにくくする
       float selfThreat = glm::clamp(buf->predatorThreats[gIdx], 0.0f, 1.0f);
-      float threatGainSum = 0.0f;
-      float threatWeightSum = 0.0f;
-      const float threatPropagationRadius = propagationRadius * 1.25f;
-      const float threatPropagationBlend = 0.9f;
-      // 伝搬は hop ごとに減衰させないと、捕食者が遠い場所まで 0〜1 が均一に広がりやすい。
-      // ここでは「近傍から受け取る脅威」を少し減衰させ、距離や hop を経るほど弱まるようにする。
-      const float threatTransmission = 0.82f;
 
       glm::vec3 sumSep = glm::vec3(0.0f);
       glm::vec3 sumAlign = glm::vec3(0.0f);
@@ -1984,28 +1967,6 @@ void BoidUnit::computeBoidInteraction(float dt) {
 
         float dist = glm::sqrt(distSq);
 
-        // predatorThreat の伝搬（stress より反応を少し速く、半径もやや広げる）
-        if (dist < threatPropagationRadius) {
-          const float neighborThreat =
-              glm::clamp(buf->predatorThreats[gNeighbor], 0.0f, 1.0f);
-          // 直接の捕食者影響が無い低脅威まで無制限に伝搬すると「関係ない場所が逃げる」状態になりやすい。
-          // ある程度の脅威、または逃避方向（predatorInfluences）がある個体からの伝搬のみ許可する。
-          const float neighborInfluence2 = glm::length2(buf->predatorInfluences[gNeighbor]);
-          const bool hasDirectInfluence = neighborInfluence2 > 1e-4f;
-          if ((hasDirectInfluence || neighborThreat > 0.25f) && neighborThreat > selfThreat) {
-            const float threatStrength =
-                glm::smoothstep(0.20f, 0.80f, neighborThreat);
-            const float distanceFactor = glm::clamp(
-                1.0f - dist / threatPropagationRadius, 0.0f, 1.0f);
-            if (distanceFactor > 0.0f) {
-              const float weight = threatStrength * distanceFactor;
-              const float transmittedThreat = neighborThreat * threatTransmission;
-              threatGainSum += transmittedThreat * weight;
-              threatWeightSum += weight;
-            }
-          }
-        }
-
         float separationRange = globalSpeciesParams[sid].separationRange;
         if (separationRange <= 1e-4f) {
           // separationRange が0近辺の場合は体長・体幅から最低限の距離を構成。
@@ -2091,26 +2052,6 @@ void BoidUnit::computeBoidInteraction(float dt) {
 
         float dist = glm::sqrt(distSq);
 
-        // predatorThreat の伝搬（外部近傍も同様に加味する）
-        if (dist < threatPropagationRadius) {
-          const float neighborThreat =
-              glm::clamp(buf->predatorThreats[gNeighbor], 0.0f, 1.0f);
-          const float neighborInfluence2 = glm::length2(buf->predatorInfluences[gNeighbor]);
-          const bool hasDirectInfluence = neighborInfluence2 > 1e-4f;
-          if ((hasDirectInfluence || neighborThreat > 0.25f) && neighborThreat > selfThreat) {
-            const float threatStrength =
-                glm::smoothstep(0.20f, 0.80f, neighborThreat);
-            const float distanceFactor = glm::clamp(
-                1.0f - dist / threatPropagationRadius, 0.0f, 1.0f);
-            if (distanceFactor > 0.0f) {
-              const float weight = threatStrength * distanceFactor;
-              const float transmittedThreat = neighborThreat * threatTransmission;
-              threatGainSum += transmittedThreat * weight;
-              threatWeightSum += weight;
-            }
-          }
-        }
-
         float separationRange = globalSpeciesParams[sid].separationRange;
         if (separationRange <= 1e-4f) {
           float bodyDiameter = std::max(selfRadiusAbs * 2.0f, 0.0f);
@@ -2184,25 +2125,11 @@ void BoidUnit::computeBoidInteraction(float dt) {
       // 近傍数は leaf 内 + 外部を合算したもので正規化する。
       float invN = 1.0f / float(std::max(aggregatedNeighborCount, 1));
 
-      // predatorThreats は「最大値」ベースで維持しつつ、近傍平均との差分だけを滑らかに追従する。
-      if (threatWeightSum > 0.0f) {
-        const float propagatedThreat = threatGainSum / threatWeightSum;
-        const float delta = propagatedThreat - selfThreat;
-        if (delta > 0.0f) {
-          const float blend = glm::clamp(threatPropagationBlend * dt, 0.0f, 0.8f);
-          const float updatedThreat =
-              glm::clamp(selfThreat + delta * blend, 0.0f, 1.0f);
-          buf->predatorThreats[gIdx] = std::max(buf->predatorThreats[gIdx], updatedThreat);
-          selfThreat = updatedThreat;
-        }
-      }
-
-      // 以降の合成（凝集抑制など）には、伝搬後の threat を反映する。
+      // 以降の合成（凝集抑制など）には、直接検知した threat を反映する。
       threatLevel = glm::max(threatLevel, selfThreat);
 
-      // stress は別系統で伝搬させず、threat の波に追従させて調整点を減らす。
+      // stress は直接検知した threat に滑らかに追従させる。
       // - 直接脅威: applyPredatorSweep が即座に stress を押し上げる
-      // - 間接脅威: threat 伝搬で「ゾワっと」を作り、stress はそれに滑らかに追従
       const float threatDrivenStress =
           glm::clamp(0.4f * selfThreat + 0.6f * selfThreat * selfThreat, 0.0f, 1.0f);
       if (threatDrivenStress > selfStress) {
