@@ -1785,9 +1785,9 @@ const heightFogConfig = {
   distanceControlPoint1: new THREE.Vector2(0.1, 0.25), // 開始側：早めにフォグを踏む
   distanceControlPoint2: new THREE.Vector2(0.85, 0.92), // 終端側
   surfaceLevel: 100.0, // 水面の高さ
-  heightFalloff: 0.028,
+  heightFalloff: 0.004,
   heightExponent: 1.2, // 深度カーブを少し勾配に
-  maxOpacity: 0.6,
+  maxOpacity: 0.45,
   directAttenuation: new THREE.Vector3(0x60 / 255, 0x38 / 255, 0x1f / 255), // UI #60381f。RGB各成分の減衰係数
   backscatterAttenuation: new THREE.Vector3(0x21 / 255, 0x1a / 255, 0x12 / 255), // UI #211a12
   depthLightAttenuation: new THREE.Vector3(0.004, 0.0018, 0.0007),
