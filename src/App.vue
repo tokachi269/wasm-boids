@@ -1779,16 +1779,16 @@ const toHex = (colorStr) => parseInt(colorStr.replace("#", "0x"), 16);
 // 距離と深度で濃さが変わる海中フォグ設定
 const heightFogConfig = {
   color: new THREE.Color('#1d2e35'), // 距離とともに加わる低彩度のveiling light
-  distanceStart: 0.4,
-  distanceEnd: 15.0,
-  distanceExponent: 0.3, // 距離カーブを少し勾配に
+  distanceStart: 0.8,
+  distanceEnd: 26.0,
+  distanceExponent: 0.25, // 距離カーブを少し勾配に
   distanceControlPoint1: new THREE.Vector2(0.1, 0.25), // 開始側：早めにフォグを踏む
   distanceControlPoint2: new THREE.Vector2(0.85, 0.92), // 終端側
   surfaceLevel: 100.0, // 水面の高さ
-  heightFalloff: 0.024,
+  heightFalloff: 0.028,
   heightExponent: 1.2, // 深度カーブを少し勾配に
-  maxOpacity: 0.56,
-  directAttenuation: new THREE.Vector3(0x15 / 255, 0x0b / 255, 0x05 / 255), // UI #150b05。赤ほど早く失われる
+  maxOpacity: 0.6,
+  directAttenuation: new THREE.Vector3(0x60 / 255, 0x38 / 255, 0x1f / 255), // UI #60381f。RGB各成分の減衰係数
   backscatterAttenuation: new THREE.Vector3(0x21 / 255, 0x1a / 255, 0x12 / 255), // UI #211a12
   depthLightAttenuation: new THREE.Vector3(0.004, 0.0018, 0.0007),
 };
@@ -1895,7 +1895,7 @@ const initialLightingTuning = Object.freeze({
   ambientColor: '#466177',
   ambientIntensity: 1.55,
   sunColor: OCEAN_COLORS.SUN_LIGHT,
-  sunIntensity: 7.7,
+  sunIntensity: 6.9,
   exposure: 1.1,
 });
 const lightingTuning = reactive({ ...initialLightingTuning });
