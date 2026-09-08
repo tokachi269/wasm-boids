@@ -444,7 +444,7 @@ const DEFAULT_SETTINGS = [
     species: "Predator",
     count: 2,
     cohesion: 0.0, // 捕食者は群集力学を使わない
-    cohesionRange: 5.0,
+    cohesionRange: 5.5,
     separation: 0.0,
     separationRange: 0.1,
     alignment: 0.0,
@@ -1778,7 +1778,7 @@ const toHex = (colorStr) => parseInt(colorStr.replace("#", "0x"), 16);
 
 // 距離と深度で濃さが変わる海中フォグ設定
 const heightFogConfig = {
-  color: new THREE.Color('#1d2e35'), // 距離とともに加わる低彩度のveiling light
+  color: new THREE.Color('#4c626b'), // 距離とともに加わる低彩度のveiling light
   distanceStart: 0.8,
   distanceEnd: 26.0,
   distanceExponent: 0.25, // 距離カーブを少し勾配に
