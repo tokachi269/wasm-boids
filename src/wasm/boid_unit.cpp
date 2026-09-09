@@ -386,7 +386,8 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
       if (d2 > 1e-6f) {
         restDir = disengage * (1.0f / glm::sqrt(d2));
       } else {
-        const float wanderSeed = fastHash01(uint32_t(gIdx) * 747796405u);
+        const float wanderSeed =
+            fastHash01(uint32_t(unit->buf->ids[gIdx]) * 747796405u);
         const float wanderPhase = wanderSeed * kTwoPi + framePhaseBase * 0.05f;
         restDir = glm::vec3(std::cos(wanderPhase), 0.0f, std::sin(wanderPhase));
       }
@@ -1356,6 +1357,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
     cohesion = glm::vec3(0.00001f);
     sid = speciesId;
     gIdx = indices[index];
+    const int stableId = buf->ids[gIdx];
     pos = buf->positions[gIdx];
     vel = buf->velocities[gIdx];
     const SpeciesParams &selfParams = globalSpeciesParams[sid];
@@ -1373,11 +1375,6 @@ void BoidUnit::computeBoidInteraction(float dt) {
     // - 近傍ごとの高コスト計算や、相手状態の更新は避けて並列性を保つ。
     float threatLevel = glm::clamp(buf->predatorThreats[gIdx], 0.0f, 1.0f);
     const float viewRangeSq = leafViewRangeSq;
-
-    // FastAttract 機能を廃止したため、状態は毎フレーム明示的にリセットする。
-    // バッファを持ち越すと「過去のON状態」が残って挙動が不安定になり得る。
-    buf->isAttracting[gIdx] = 0;
-    buf->attractTimers[gIdx] = 0.0f;
 
     // 小クラスターより更に上位の「群れ（大クラスター）」中心を使う。
     // - 小クラスターはフレーム間でスイッチしやすく、群れ全体の中心としては不安定になりがち
@@ -1521,7 +1518,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
             if (approachDistSq <= kEngageRadius * kEngageRadius) {
                 const int pick = rand_range(
                   static_cast<int>(predatorTargetCandidates.size()),
-                  uint32_t(gIdx) * 747796405u +
+                  uint32_t(stableId) * 747796405u +
                     uint32_t(globalFrame) * 2891336453u);
               tgtIdx = predatorTargetCandidates[pick];
               tgtTime = globalSpeciesParams[sid].tau;
@@ -1550,7 +1547,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
                   globalSpeciesParams[sid].tau * kPredatorRestScale,
                   kPredatorRestMin, kPredatorRestMax);
               const float restNoise = hash01(
-                  uint32_t(gIdx) * 1664525u +
+                  uint32_t(stableId) * 1664525u +
                   uint32_t(globalFrame) * 1013904223u);
               restTimer = restBase * glm::mix(0.7f, 1.3f, restNoise);
               chaseTimer = 0.0f;
@@ -1569,7 +1566,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
                 globalSpeciesParams[sid].tau * kPredatorRestScale,
                 kPredatorRestMin, kPredatorRestMax);
             const float restNoise = hash01(
-                uint32_t(gIdx) * 1664525u + uint32_t(globalFrame) * 1013904223u);
+                uint32_t(stableId) * 1664525u + uint32_t(globalFrame) * 1013904223u);
             restTimer = restBase * glm::mix(0.7f, 1.3f, restNoise);
             chaseTimer = 0.0f;
             // 離脱方向は「現在の獲物方向と逆」にして、群れの外へ抜ける見た目を作る
@@ -1593,65 +1590,54 @@ void BoidUnit::computeBoidInteraction(float dt) {
     //    - tau を超えたら 0 に戻してビットをクリア
     //    - activeCount には有効な隣接 Boid 数を数える
     // -------------------------------------------------------
-    int activeCount = 0;
-
     // SOA バッファの境界確認
-    if (gIdx >= static_cast<int>(buf->boidCohesionMemories.size()) ||
-        gIdx >= static_cast<int>(buf->boidActiveNeighbors.size()) ||
-        gIdx >= static_cast<int>(buf->boidNeighborIndices.size())) {
+    if (gIdx < 0 ||
+        gIdx >= static_cast<int>(buf->neighborCounts.size()) ||
+        static_cast<std::size_t>(gIdx + 1) >= buf->neighborOffsets.size()) {
       // 境界を超えた場合はスキップ
       continue;
     }
 
-    auto &cohesionMemories =
-        buf->boidCohesionMemories[gIdx]; // dt累積（-1.0fで未使用）
-    auto &activeNeighbors =
-        buf->boidActiveNeighbors[gIdx]; // 使用中slotのインデックス
-    auto &neighborIndices =
-        buf->boidNeighborIndices[gIdx]; // slotに対応する近傍のglobal index
-
-    // 近傍キャッシュは固定スロット数で管理するため、maxNeighbors はその範囲にクランプする。
-    // - 設定値だけが大きいと「近傍不足」判定が常態化し、補助ロジックが過剰に走りやすい。
-    const int neighborSlotLimit = static_cast<int>(
-      std::min<std::size_t>(cohesionMemories.size(), SoABuffers::NeighborSlotCount));
+    const std::size_t neighborBegin = buf->neighborOffsets[gIdx];
+    const std::size_t neighborEnd = buf->neighborOffsets[gIdx + 1];
+    const int neighborSlotLimit = static_cast<int>(neighborEnd - neighborBegin);
     const int maxNeighbors = glm::clamp(globalSpeciesParams[sid].maxNeighbors, 0,
                       neighborSlotLimit);
+    uint8_t &neighborCountRef = buf->neighborCounts[gIdx];
+    int activeCount = std::min<int>(neighborCountRef, maxNeighbors);
+    auto *neighborEntries = buf->neighborEntries.data() + neighborBegin;
 
-    const size_t neighborSlots = static_cast<std::size_t>(maxNeighbors);
-
-    for (size_t slot = 0; slot < neighborSlots; ++slot) {
-      if (!activeNeighbors.test(slot) || cohesionMemories[slot] <= 0.0f) {
-        cohesionMemories[slot] = 0.0f;
-        activeNeighbors.reset(slot);
-        neighborIndices[slot] = -1;
-        continue;
+    auto eraseNeighborAt = [&](int entryIndex) {
+      for (int move = entryIndex + 1; move < activeCount; ++move) {
+        neighborEntries[move - 1] = neighborEntries[move];
       }
+      --activeCount;
+    };
 
-      const int cachedNeighbor = neighborIndices[slot];
+    for (int entryIndex = 0; entryIndex < activeCount;) {
+      auto &entry = neighborEntries[entryIndex];
+      const int cachedNeighbor = entry.index;
       if (cachedNeighbor < 0 ||
           cachedNeighbor >= static_cast<int>(buf->positions.size()) ||
           cachedNeighbor == gIdx || buf->speciesIds[cachedNeighbor] != sid) {
-        cohesionMemories[slot] = 0.0f;
-        activeNeighbors.reset(slot);
-        neighborIndices[slot] = -1;
+        eraseNeighborAt(entryIndex);
         continue;
       }
 
-      cohesionMemories[slot] += dt;
+      entry.age += dt;
 
       // 記憶の寿命は完全に一律にせず、個体・スロットごとに微小ジッタを入れる。
       // これにより近傍の入れ替わりが分散し、全体の急旋回を抑える。
       const float baseTau = globalSpeciesParams[sid].tau;
       const float tauJitter =
-          baseTau * (0.85f + 0.30f * hash01(uint32_t(gIdx) * 1664525u + uint32_t(slot) * 1013904223u));
-      if (cohesionMemories[slot] > tauJitter) {
-        cohesionMemories[slot] = 0.0f;
-        activeNeighbors.reset(slot);
-        neighborIndices[slot] = -1;
-      } else {
-        activeCount++;
+          baseTau * (0.85f + 0.30f * hash01(uint32_t(stableId) * 1664525u + uint32_t(entry.slot) * 1013904223u));
+      if (entry.age > tauJitter) {
+        eraseNeighborAt(entryIndex);
+        continue;
       }
+      ++entryIndex;
     } // -------------------------------------------------------
+    neighborCountRef = static_cast<uint8_t>(activeCount);
     // 3. 未登録Boidで最も近い（距離かつ視界内）ものを探索
     //    - activeCount < maxNeighbors のときだけ実行
     //    - 距離判定: distSq < viewRangeSq
@@ -1674,9 +1660,8 @@ void BoidUnit::computeBoidInteraction(float dt) {
 
         int gNeighbor = indices[i];
         bool alreadyCached = false;
-        for (size_t slot = 0; slot < neighborSlots; ++slot) {
-          if (activeNeighbors.test(slot) &&
-              neighborIndices[slot] == gNeighbor) {
+        for (int entryIndex = 0; entryIndex < activeCount; ++entryIndex) {
+          if (neighborEntries[entryIndex].index == gNeighbor) {
             alreadyCached = true;
             break;
           }
@@ -1711,15 +1696,27 @@ void BoidUnit::computeBoidInteraction(float dt) {
       toAdd = 0;
     }
     auto cacheNeighbor = [&](int globalNeighbor) {
-      for (size_t slot = 0; slot < neighborSlots; ++slot) {
-        if (activeNeighbors.test(slot) || cohesionMemories[slot] > 0.0f) {
-          continue;
-        }
-        neighborIndices[slot] = globalNeighbor;
-        cohesionMemories[slot] = dt;
-        activeNeighbors.set(slot);
+      if (activeCount >= maxNeighbors) {
         return;
       }
+      uint32_t usedSlots = 0;
+      for (int entryIndex = 0; entryIndex < activeCount; ++entryIndex) {
+        usedSlots |= (uint32_t{1} << neighborEntries[entryIndex].slot);
+      }
+      uint8_t freeSlot = 0;
+      while (freeSlot < static_cast<uint8_t>(maxNeighbors) &&
+             (usedSlots & (uint32_t{1} << freeSlot)) != 0) {
+        ++freeSlot;
+      }
+      int insertAt = activeCount;
+      while (insertAt > 0 && neighborEntries[insertAt - 1].slot > freeSlot) {
+        neighborEntries[insertAt] = neighborEntries[insertAt - 1];
+        --insertAt;
+      }
+      neighborEntries[insertAt] =
+          SoABuffers::NeighborEntry{globalNeighbor, dt, freeSlot};
+      ++activeCount;
+      neighborCountRef = static_cast<uint8_t>(activeCount);
     };
 
     if (toAdd > 0 && !candidates.empty()) {
@@ -1746,16 +1743,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
     //      - φᵢ < 1 なら吸引 ON, タイマー τ をリセット
     //      - φᵢ = 1 なら τ カウントダウン → 0 で OFF
     // -------------------------------------------------------
-    int neighborCount = 0;
-    for (size_t slot = 0; slot < neighborSlots; ++slot) {
-      if (!activeNeighbors.test(slot)) {
-        continue;
-      }
-      if (cohesionMemories[slot] <= 0.0f || neighborIndices[slot] < 0) {
-        continue;
-      }
-      ++neighborCount;
-    }
+    const int neighborCount = activeCount;
 
     // -------------------------------------------------------
     // 4.5. SpatialIndex（球クエリ）からユニット外の近傍を補う
@@ -1769,7 +1757,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
     const bool wantsExternal = (neighborCount * 2 < maxNeighbors);
     constexpr int kExternalNeighborStride = 8;
     const bool externalThrottleHit =
-        (((globalFrame + gIdx) % kExternalNeighborStride) == 0);
+        (((globalFrame + stableId) % kExternalNeighborStride) == 0);
     const bool lostBoid = (neighborCount == 0);
     if (wantsExternal && (externalThrottleHit || lostBoid)) {
       // cohesionRange を基本に、最低限 separationRange も含む半径にする。
@@ -1797,9 +1785,8 @@ void BoidUnit::computeBoidInteraction(float dt) {
                 return;
               }
 
-              for (size_t slot = 0; slot < neighborSlots; ++slot) {
-                if (activeNeighbors.test(slot) &&
-                    neighborIndices[slot] == candidateIdx) {
+              for (int entryIndex = 0; entryIndex < activeCount; ++entryIndex) {
+                if (neighborEntries[entryIndex].index == candidateIdx) {
                   return;
                 }
               }
@@ -1876,7 +1863,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
     // 近傍数が不足している状況を検出し、凝集の補助などに利用する。
     const int phiDenom = std::max(
         1, std::min(maxNeighbors,
-                    static_cast<int>(neighborSlots) + externalNeighborCount));
+                    maxNeighbors + externalNeighborCount));
     float phi = float(totalNeighborCount) / float(phiDenom);
 
     if (totalNeighborCount > 0) {
@@ -1909,25 +1896,20 @@ void BoidUnit::computeBoidInteraction(float dt) {
       float maxPenetrationRatio = 0.0f;
 
       // ---- 近傍(leaf内) ----
-      for (size_t slot = 0; slot < neighborSlots; ++slot) {
-        if (!activeNeighbors.test(slot)) {
-          continue;
-        }
-
-        if (cohesionMemories[slot] <= 0.0f) {
-          continue;
-        }
+      for (int entryIndex = 0; entryIndex < activeCount; ++entryIndex) {
+        const auto &neighborEntry = neighborEntries[entryIndex];
+        const uint8_t slot = neighborEntry.slot;
 
         // 近傍寄与を記憶年齢でフェードさせ、期限切れの瞬間の急変を抑える。
         // ※activeNeighborsはバイナリだが、力は連続的に落ちる。
         const float baseTau = globalSpeciesParams[sid].tau;
         const float tauJitter =
-            baseTau * (0.85f + 0.30f * hash01(uint32_t(gIdx) * 1664525u + uint32_t(slot) * 1013904223u));
-        const float memoryAge = cohesionMemories[slot];
+            baseTau * (0.85f + 0.30f * hash01(uint32_t(stableId) * 1664525u + uint32_t(slot) * 1013904223u));
+        const float memoryAge = neighborEntry.age;
         const float memoryFade =
             tauJitter > 1e-6f ? glm::clamp(1.0f - (memoryAge / tauJitter), 0.0f, 1.0f) : 0.0f;
 
-        const int gNeighbor = neighborIndices[slot];
+        const int gNeighbor = neighborEntry.index;
         if (gNeighbor < 0 ||
             gNeighbor >= static_cast<int>(buf->positions.size())) {
           continue;

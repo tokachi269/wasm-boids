@@ -759,7 +759,9 @@ function applyBehaviorInspectorState() {
   if (index !== behaviorInspectorIndex.value) {
     behaviorInspectorIndex.value = index;
   }
-  wasmBridge.setBehaviorInspectorIndex(index);
+  const currentStableIds = getWasmViews(totalBoids.value).stableIds;
+  const physicalIndex = findPhysicalIndexForStableId(currentStableIds, index);
+  wasmBridge.setBehaviorInspectorIndex(physicalIndex);
   if (!behaviorInspectorMarker && scene) {
     behaviorInspectorMarker = new THREE.Mesh(
       new THREE.SphereGeometry(0.12, 10, 8),
@@ -787,11 +789,28 @@ function formatBehaviorVector(buffer, offset) {
   return `${magnitude.toFixed(3)}  (${x.toFixed(3)}, ${y.toFixed(3)}, ${z.toFixed(3)})`;
 }
 
-function updateBehaviorInspector(positions) {
+function findPhysicalIndexForStableId(stableIds, stableId) {
+  if (!stableIds || stableIds.length === 0) {
+    return stableId;
+  }
+  for (let index = 0; index < stableIds.length; index += 1) {
+    if (stableIds[index] === stableId) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function updateBehaviorInspector(positions, stableIds) {
   if (!showBehaviorInspector.value || !wasmBridge) {
     return;
   }
-  const index = clampBehaviorInspectorIndex(behaviorInspectorIndex.value);
+  const stableId = clampBehaviorInspectorIndex(behaviorInspectorIndex.value);
+  const index = findPhysicalIndexForStableId(stableIds, stableId);
+  if (index < 0) {
+    return;
+  }
+  wasmBridge.setBehaviorInspectorIndex(index);
   const positionOffset = index * 3;
   if (behaviorInspectorMarker && positions && positionOffset + 2 < positions.length) {
     behaviorInspectorMarker.position.set(
@@ -806,11 +825,11 @@ function updateBehaviorInspector(positions) {
   }
   const sample = wasmBridge.getBehaviorInspectorBuffer();
   if (!sample || sample.length < 27 || sample[0] < 0.5) {
-    behaviorInspectorHudText.value = `Behavior Inspector\nBoid #${index}\nwaiting for sample`;
+    behaviorInspectorHudText.value = `Behavior Inspector\nBoid #${stableId}\nwaiting for sample`;
     return;
   }
   behaviorInspectorHudText.value = [
-    `Behavior Inspector  Boid #${Math.floor(sample[1])}`,
+    `Behavior Inspector  Boid #${stableId}`,
     `neighbors       ${Math.floor(sample[24])}`,
     `separation      ${formatBehaviorVector(sample, 2)}`,
     `alignment       ${formatBehaviorVector(sample, 5)}`,
@@ -854,7 +873,8 @@ function handleBehaviorInspectorDoubleClick(event) {
     }
   }
   if (bestIndex >= 0) {
-    behaviorInspectorIndex.value = bestIndex;
+    const { stableIds } = getWasmViews(totalBoids.value);
+    behaviorInspectorIndex.value = stableIds?.[bestIndex] ?? bestIndex;
   }
 }
 
@@ -2247,6 +2267,7 @@ function getWasmViews(count) {
       orientations: new Float32Array(0),
       velocities: new Float32Array(0),
       speciesIds: new Int32Array(0),
+      stableIds: new Int32Array(0),
     };
   }
   return wasmBridge.getBuffers(count);
@@ -2998,7 +3019,7 @@ function animate(frameTimeMs) {
     return;
   }
 
-  const { positions, orientations, velocities } = browserBenchmark
+  const { positions, orientations, velocities, stableIds } = browserBenchmark
     ? browserBenchmark.measure('wasm_to_js_views', () => getWasmViews(count))
     : getWasmViews(count);
   latestBoidPositions = positions;
@@ -3012,6 +3033,7 @@ function animate(frameTimeMs) {
       positions,
       orientations,
       velocities,
+      stableIds,
       cameraPosition: camera.position,
       originPosition: controls?.target,
       predatorCount,
@@ -3021,7 +3043,7 @@ function animate(frameTimeMs) {
   const updateInfo = browserBenchmark
     ? browserBenchmark.measure('js_instance_packing', updateInstancing)
     : updateInstancing();
-  updateBehaviorInspector(positions);
+  updateBehaviorInspector(positions, stableIds);
 
   const visibleCount =
     updateInfo.visibleCount ?? Math.max(0, count - predatorCount);

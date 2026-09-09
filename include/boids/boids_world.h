@@ -25,8 +25,8 @@ struct BoidsWorldConfig {
 class BoidsWorld {
 public:
   struct PhaseTimings {
-    double ms[8];
-    long calls[8];
+    double ms[9];
+    long calls[9];
   };
   struct ParallelTimings {
     double taskMs[2];
@@ -69,6 +69,10 @@ public:
   std::span<const glm::vec3> velocities() const;
   std::span<const glm::quat> orientations() const;
   std::span<const int> speciesIds() const;
+  std::span<const int> stableIds() const;
+  void setSpatialReorderCadence(int frames);
+  void setReorderValidationEnabled(bool enabled);
+  int reorderValidationFailures() const;
   PhaseTimings phaseTimings() const;
   ParallelTimings parallelTimings() const;
   void resetPhaseTimings();

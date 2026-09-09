@@ -94,6 +94,10 @@ uintptr_t speciesIdsPtr() {
   return BoidSimulation::instance().getSpeciesIdsPtr();
 }
 
+uintptr_t stableIdsPtr() {
+  return BoidSimulation::instance().getStableIdsPtr();
+}
+
 uintptr_t unitSimpleDensityPtr() {
   return BoidSimulation::instance().getUnitSimpleDensityPtr();
 }

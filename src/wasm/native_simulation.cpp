@@ -52,7 +52,9 @@ bool NativeSimulation::configureFromCommandLine(int argc, char **argv) {
   for (int i = 1; i < argc; ++i) {
     const std::string_view arg(argv[i]);
     if (arg != "--bench" && arg != "--predator-diagnostic" &&
-        arg != "--seed" && arg != "--boids" && arg != "--tasks") {
+        arg != "--seed" && arg != "--boids" && arg != "--tasks" &&
+        arg != "--warmup" && arg != "--reorder" &&
+        arg != "--max-neighbors" && arg != "--validate-reorder") {
       std::cerr << "Unknown argument: " << arg << '\n';
       return false;
     }
@@ -86,6 +88,32 @@ bool NativeSimulation::configureFromCommandLine(int argc, char **argv) {
         return false;
       }
       options_.benchBoids = static_cast<int>(count);
+    } else if (arg == "--warmup") {
+      if (!parseUnsigned(argv[i], options_.benchWarmupFrames)) {
+        std::cerr << "Invalid warmup frame count: " << argv[i] << '\n';
+        return false;
+      }
+    } else if (arg == "--reorder") {
+      unsigned int cadence = 0;
+      if (!parseUnsigned(argv[i], cadence) || cadence > 10000) {
+        std::cerr << "Invalid reorder cadence: " << argv[i] << '\n';
+        return false;
+      }
+      options_.reorderCadence = static_cast<int>(cadence);
+    } else if (arg == "--max-neighbors") {
+      unsigned int maxNeighbors = 0;
+      if (!parseUnsigned(argv[i], maxNeighbors) || maxNeighbors > 32) {
+        std::cerr << "Invalid max-neighbors: " << argv[i] << '\n';
+        return false;
+      }
+      options_.maxNeighborsOverride = static_cast<int>(maxNeighbors);
+    } else if (arg == "--validate-reorder") {
+      unsigned int enabled = 0;
+      if (!parseUnsigned(argv[i], enabled) || enabled > 1) {
+        std::cerr << "Invalid validate-reorder flag: " << argv[i] << '\n';
+        return false;
+      }
+      options_.validateReorder = enabled != 0;
     } else {
       if (!parseUnsigned(argv[i], options_.benchTasks) ||
           options_.benchTasks > 64) {
@@ -118,7 +146,12 @@ void NativeSimulation::run() {
     }
     settings_.front().count = options_.benchBoids - nonPrimaryCount;
   }
+  if (options_.maxNeighborsOverride >= 0 && !settings_.empty()) {
+    settings_.front().maxNeighbors = options_.maxNeighborsOverride;
+  }
   startSimulation();                                // BoidSimulation 初期化
+  world_.setSpatialReorderCadence(options_.reorderCadence);
+  world_.setReorderValidationEnabled(options_.validateReorder);
   if (options_.bench) {
     runBenchmark();
   } else {
@@ -361,10 +394,10 @@ void NativeSimulation::runPredatorDiagnostic() {
 
 void NativeSimulation::runBenchmark() {
   using clock = std::chrono::steady_clock;
-  constexpr std::size_t kWarmupFrames = 1000;
+  const std::size_t warmupFrames = options_.benchWarmupFrames;
   constexpr float kFixedDt = 1.0f / 60.0f;
   const std::size_t measuredFrames =
-      options_.benchFrames > kWarmupFrames ? options_.benchFrames - kWarmupFrames : 0;
+      options_.benchFrames > warmupFrames ? options_.benchFrames - warmupFrames : 0;
   std::vector<double> frameTimes;
   frameTimes.reserve(measuredFrames);
 
@@ -377,11 +410,11 @@ void NativeSimulation::runBenchmark() {
   world_.resetPhaseTimings();
 
   for (std::size_t frame = 0; frame < options_.benchFrames; ++frame) {
-    const bool sampleLocality = frame + 1 == kWarmupFrames;
+    const bool sampleLocality = frame + 1 == warmupFrames;
     if (sampleLocality) {
       world_.beginLocalitySample();
     }
-    if (frame == kWarmupFrames) {
+    if (frame == warmupFrames) {
       world_.resetPhaseTimings();
     }
     const auto start = clock::now();
@@ -390,13 +423,13 @@ void NativeSimulation::runBenchmark() {
     if (sampleLocality) {
       world_.endLocalitySample();
     }
-    if (frame >= kWarmupFrames) {
+    if (frame >= warmupFrames) {
       frameTimes.push_back(
           std::chrono::duration<double, std::milli>(end - start).count());
     }
   }
 
-  if (options_.benchFrames <= kWarmupFrames) {
+  if (options_.benchFrames <= warmupFrames) {
     world_.resetPhaseTimings();
   }
 
@@ -413,8 +446,28 @@ void NativeSimulation::runBenchmark() {
                                 static_cast<double>(frameTimes.size());
   const double maximum = frameTimes.empty() ? 0.0 : frameTimes.back();
 
-  uint64_t checksum = 14695981039346656037ull;
+  uint64_t storageChecksum = 14695981039346656037ull;
   for (const glm::vec3 &position : world_.positions()) {
+    for (const float component : {position.x, position.y, position.z}) {
+      uint32_t bits = 0;
+      std::memcpy(&bits, &component, sizeof(bits));
+      for (int byte = 0; byte < 4; ++byte) {
+        storageChecksum ^= static_cast<uint8_t>(bits >> (byte * 8));
+        storageChecksum *= 1099511628211ull;
+      }
+    }
+  }
+
+  uint64_t checksum = 14695981039346656037ull;
+  const auto positions = world_.positions();
+  const auto stableIds = world_.stableIds();
+  std::vector<int> stableOrder(positions.size());
+  std::iota(stableOrder.begin(), stableOrder.end(), 0);
+  std::sort(stableOrder.begin(), stableOrder.end(), [&](int lhs, int rhs) {
+    return stableIds[lhs] < stableIds[rhs];
+  });
+  for (const int index : stableOrder) {
+    const glm::vec3 &position = positions[index];
     for (const float component : {position.x, position.y, position.z}) {
       uint32_t bits = 0;
       std::memcpy(&bits, &component, sizeof(bits));
@@ -429,7 +482,7 @@ void NativeSimulation::runBenchmark() {
   std::ostringstream output;
   output << std::setprecision(10)
          << "{\"frames\":" << options_.benchFrames
-         << ",\"warmup\":" << kWarmupFrames
+         << ",\"warmup\":" << warmupFrames
          << ",\"seed\":" << options_.seed
          << ",\"boids\":" << world_.boidCount()
          << ",\"frame_ms\":{\"p50\":" << percentile(0.50)
@@ -439,8 +492,8 @@ void NativeSimulation::runBenchmark() {
          << ",\"phases\":{";
   static constexpr const char *kPhaseNames[] = {
       "updateRecursive", "treeTraversal", "computeBoidInteraction",
-      "predator", "kinematics", "build", "clusterUpdate", "splitMerge"};
-  for (int i = 0; i < 8; ++i) {
+      "predator", "kinematics", "build", "reorder", "clusterUpdate", "splitMerge"};
+  for (int i = 0; i < 9; ++i) {
     if (i != 0) output << ',';
     output << '\"' << kPhaseNames[i] << "\":{\"ms\":" << phases.ms[i]
            << ",\"calls\":" << phases.calls[i] << '}';
@@ -483,8 +536,12 @@ void NativeSimulation::runBenchmark() {
     }
     output << "}}";
   }
-  output << "},\"checksum\":\"" << std::hex << std::setw(16)
-         << std::setfill('0') << checksum << "\"}";
+  output << "},\"reorder\":" << options_.reorderCadence
+         << ",\"reorder_validation_failures\":"
+         << world_.reorderValidationFailures()
+         << ",\"checksum\":\"" << std::hex << std::setw(16)
+         << std::setfill('0') << checksum << "\",\"storage_checksum\":\""
+         << std::setw(16) << storageChecksum << "\"}";
   std::cout << output.str() << '\n';
 }
 

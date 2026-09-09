@@ -25,6 +25,7 @@ public:
         Predator,
         Kinematics,
         Build,
+        Reorder,
         ClusterUpdate,
         SplitMerge,
         Count
@@ -112,6 +113,15 @@ public:
     uint32_t getRandomSeed() const { return randomSeed_; }
     void setFixedTimeStep(float dt);
     float getFixedTimeStep() const { return fixedTimeStep_; }
+    void setSpatialReorderCadence(int frames) {
+        spatialReorderCadence_ = frames > 0 ? frames : 0;
+    }
+    int getSpatialReorderCadence() const { return spatialReorderCadence_; }
+    void setReorderValidationEnabled(bool enabled) {
+        reorderValidationEnabled_ = enabled;
+        reorderValidationFailures_ = 0;
+    }
+    int getReorderValidationFailures() const { return reorderValidationFailures_; }
     PhaseTimings getPhaseTimings() const { return phaseTimings_; }
     ParallelTimings getParallelTimings() const { return parallelTimings_; }
     void resetPhaseTimings();
@@ -159,6 +169,9 @@ public:
     uintptr_t getSpeciesIdsPtr() const {
         const auto &ids = buf.speciesIds;
         return ids.empty() ? 0 : reinterpret_cast<uintptr_t>(ids.data());
+    }
+    uintptr_t getStableIdsPtr() const {
+        return buf.ids.empty() ? 0 : reinterpret_cast<uintptr_t>(buf.ids.data());
     }
 
     // SoA ダブルバッファの読み取り側→書き込み側を同期する（デバッグ/可視化用途）。
@@ -242,9 +255,18 @@ private:
     int mergeIndex = 0;
     int maxBoidsPerUnit = 32;
     SoABuffers buf; // 中央バッファに一本化
+    SoABuffers reorderScratch_;
     std::vector<SpeciesParams> speciesParams_;
     uint32_t randomSeed_ = 5489u;
     float fixedTimeStep_ = 1.0f / 60.0f;
+    int spatialReorderCadence_ = 30;
+    bool reorderValidationEnabled_ = false;
+    int reorderValidationFailures_ = 0;
+    std::vector<int> reorderOldToNew_;
+    std::vector<int> reorderNewToOld_;
+    std::vector<std::vector<int>> reorderSpeciesOrder_;
+    std::vector<int> reorderSpeciesBegin_;
+    std::vector<int> reorderSpeciesCount_;
     std::mt19937 randomEngine_;
     PhaseTimings phaseTimings_{};
     ParallelTimings parallelTimings_{};
@@ -295,6 +317,9 @@ private:
     void clearPool();
 
     void initializeBoidMemories(const std::vector<SpeciesParams> &speciesParamsList);
+    bool reorderStorageByLeafOrder();
+    bool validateReorderedState(const SoABuffers &before) const;
+    void remapTreeIndices(BoidUnit *node, const std::vector<int> &oldToNew);
     void buildRecursive(BoidUnit *node, const std::vector<int> &indices);
     void trySplitRecursive(BoidUnit *node);
     void collectLeaves(const BoidUnit *node, std::vector<BoidUnit *> &leaves) const;

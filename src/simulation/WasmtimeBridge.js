@@ -23,14 +23,17 @@ export class WasmtimeBridge {
     this.cachedOrientationsPtr = 0;
     this.cachedVelocitiesPtr = 0;
     this.cachedSpeciesIdsPtr = 0;
+    this.cachedStableIdsPtr = 0;
     this.cachedPositionsView = null;
     this.cachedOrientationsView = null;
     this.cachedVelocitiesView = null;
     this.cachedSpeciesIdsView = null;
+    this.cachedStableIdsView = null;
     this.cachedPositionsCount = 0;
     this.cachedOrientationsCount = 0;
     this.cachedVelocitiesCount = 0;
     this.cachedSpeciesIdsCount = 0;
+    this.cachedStableIdsCount = 0;
     this.cachedSpeciesIdsBuffer = null;
     this.cachedUnitDensityPtr = 0;
     this.cachedUnitDensityCount = 0;
@@ -58,6 +61,7 @@ export class WasmtimeBridge {
     this.boidUnitMappingPtrHandle = createWrappedFunction(this.wasm, 'boidUnitMappingPtr', 'number', []);
     this.currentFirstBoidXHandle = createWrappedFunction(this.wasm, 'currentFirstBoidX', 'number', []);
     this.speciesIdsPtrHandle = createWrappedFunction(this.wasm, 'speciesIdsPtr', 'number', []);
+    this.stableIdsPtrHandle = createWrappedFunction(this.wasm, 'stableIdsPtr', 'number', []);
     this.syncReadToWriteBuffersHandle = createWrappedFunction(this.wasm, 'syncReadToWriteBuffers', 'void', []);
     this.resetPhaseTimingsHandle = createWrappedFunction(this.wasm, 'resetPhaseTimings', 'void', []);
     this.phaseTimingMsHandle = createWrappedFunction(this.wasm, 'phaseTimingMs', 'number', ['number']);
@@ -180,6 +184,7 @@ export class WasmtimeBridge {
       'predator',
       'kinematics',
       'build',
+      'reorder',
       'clusterUpdate',
       'splitMerge',
     ];
@@ -432,6 +437,7 @@ export class WasmtimeBridge {
         orientations: new Float32Array(0),
         velocities: new Float32Array(0),
         speciesIds: new Int32Array(0),
+        stableIds: new Int32Array(0),
       };
     }
 
@@ -445,14 +451,17 @@ export class WasmtimeBridge {
       this.cachedOrientationsPtr = 0;
       this.cachedVelocitiesPtr = 0;
       this.cachedSpeciesIdsPtr = 0;
+      this.cachedStableIdsPtr = 0;
       this.cachedPositionsView = null;
       this.cachedOrientationsView = null;
       this.cachedVelocitiesView = null;
       this.cachedSpeciesIdsView = null;
+      this.cachedStableIdsView = null;
       this.cachedPositionsCount = 0;
       this.cachedOrientationsCount = 0;
       this.cachedVelocitiesCount = 0;
       this.cachedSpeciesIdsCount = 0;
+      this.cachedStableIdsCount = 0;
       this.cachedUnitDensityPtr = 0;
       this.cachedUnitDensityCount = 0;
       this.cachedUnitDensityView = null;
@@ -478,6 +487,7 @@ export class WasmtimeBridge {
         orientations: this.cachedOrientationsView ?? new Float32Array(0),
         velocities: this.cachedVelocitiesView ?? new Float32Array(0),
         speciesIds: this.cachedSpeciesIdsView ?? new Int32Array(0),
+        stableIds: this.cachedStableIdsView ?? new Int32Array(0),
       };
     }
 
@@ -526,11 +536,26 @@ export class WasmtimeBridge {
       this.cachedSpeciesIdsView = new Int32Array(heapBufferI32, speciesPtr, count);
     }
 
+    const stableIdsPtr = typeof this.stableIdsPtrHandle === 'function' ? this.stableIdsPtrHandle() : 0;
+    if (
+      stableIdsPtr && (
+        this.cachedStableIdsView === null ||
+        this.cachedStableIdsPtr !== stableIdsPtr ||
+        this.cachedStableIdsCount !== count ||
+        this.cachedSpeciesIdsBuffer !== heapBufferI32
+      )
+    ) {
+      this.cachedStableIdsPtr = stableIdsPtr;
+      this.cachedStableIdsCount = count;
+      this.cachedStableIdsView = new Int32Array(heapBufferI32, stableIdsPtr, count);
+    }
+
     return {
       positions: this.cachedPositionsView,
       orientations: this.cachedOrientationsView,
       velocities: this.cachedVelocitiesView,
       speciesIds: this.cachedSpeciesIdsView,
+      stableIds: this.cachedStableIdsView,
     };
   }
 

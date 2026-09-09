@@ -14,8 +14,11 @@
 #include <glm/gtx/rotate_vector.hpp>
 #include <glm/gtx/string_cast.hpp>
 #include <iostream>
+#include <cstring>
+#include <memory>
 #include <numeric>
 #include <random>
+#include <type_traits>
 #include <utility>
 #include <vector>
 #include <limits>
@@ -1082,6 +1085,14 @@ void BoidSimulation::update(float dt) {
   recordPhase(Phase::Build, buildStart,
               (frameCount % kTreeRebuildStride) == 0 ? 1 : 0);
 
+  const auto reorderStart = PhaseClock::now();
+  const bool shouldReorder =
+      spatialReorderCadence_ > 0 &&
+      (frameCount % kTreeRebuildStride) == 0 &&
+      (frameCount % spatialReorderCadence_) == 0;
+  const bool reordered = shouldReorder && reorderStorageByLeafOrder();
+  recordPhase(Phase::Reorder, reorderStart, reordered ? 1 : 0);
+
   // 分割と結合の処理
   const auto splitMergeStart = PhaseClock::now();
   if (!leafCache.empty()) {
@@ -1375,10 +1386,6 @@ void BoidSimulation::setFlockSize(int newSize, float posRange, float velRange) {
     buf.predatorTargetTimers.resize(newSize, 0.0f);
     buf.predatorRestTimers.resize(newSize, 0.0f);
     buf.predatorChaseTimers.resize(newSize, 0.0f);
-    buf.boidCohesionMemories.resize(newSize);
-    buf.boidActiveNeighbors.resize(newSize);
-    buf.boidNeighborIndices.resize(newSize);
-
   }
   // 個体を増やす
   else if (newSize > current) {
@@ -1424,20 +1431,6 @@ void BoidSimulation::setFlockSize(int newSize, float posRange, float velRange) {
       // velocitiesWrite は後段の syncWriteFromRead() で同期される。
     }
 
-    // 新しいBoidのメモリを初期化
-    buf.boidCohesionMemories.resize(newSize);
-    buf.boidActiveNeighbors.resize(newSize);
-    buf.boidNeighborIndices.resize(newSize);
-
-    // 新しく追加されたBoidのメモリを初期化（デフォルトのmaxNeighbors=4を使用）
-    for (int i = current; i < newSize; ++i) {
-      buf.boidCohesionMemories[i].assign(
-          4,
-          0.0f); // cohesionMemoriesをmaxNeighbors分確保（dt累積（-1.0fで未使用））
-      buf.boidActiveNeighbors[i]
-          .reset(); // activeNeighborsをリセット（使用中slotのインデックス）
-      buf.boidNeighborIndices[i].fill(-1);
-    }
   }
 
   // ルートが中央バッファを指していることを保証
@@ -1521,62 +1514,269 @@ int BoidSimulation::getBoidCount() const {
   return static_cast<int>(buf.positions.size());
 }
 
-// BoidメモリーとActiveNeighborsを初期化
+// Boidごとの近傍容量をspecies設定から作り、有効entryを空にする。
 void BoidSimulation::initializeBoidMemories(
     const std::vector<SpeciesParams> &speciesParamsList) {
-  int totalCount = static_cast<int>(buf.positions.size());
+  const std::size_t totalCount = buf.positions.size();
+  buf.neighborOffsets.resize(totalCount + 1);
+  buf.neighborCounts.assign(totalCount, 0);
+  buf.neighborOffsets[0] = 0;
 
-  // 空の speciesParamsList に対する安全装置
   if (speciesParamsList.empty()) {
     logger::log("Warning: speciesParamsList is empty, using default values");
+  }
 
-    // バッファのサイズを調整
-    buf.boidCohesionMemories.resize(totalCount);
-    buf.boidActiveNeighbors.resize(totalCount);
-    buf.boidNeighborIndices.resize(totalCount);
-
-    // デフォルト値で初期化
-    for (int boidIndex = 0; boidIndex < totalCount; ++boidIndex) {
-      buf.boidCohesionMemories[boidIndex].assign(
-          4, 0.0f); // デフォルト maxNeighbors = 4
-      buf.boidActiveNeighbors[boidIndex].reset();
-      buf.boidNeighborIndices[boidIndex].fill(-1);
+  for (std::size_t boidIndex = 0; boidIndex < totalCount; ++boidIndex) {
+    const int speciesId = buf.speciesIds[boidIndex];
+    int maxNeighbors = 4;
+    if (!speciesParamsList.empty() && speciesId >= 0 &&
+        speciesId < static_cast<int>(speciesParamsList.size())) {
+      maxNeighbors = speciesParamsList[speciesId].maxNeighbors;
     }
+    maxNeighbors = glm::clamp(
+        maxNeighbors, 0, static_cast<int>(SoABuffers::NeighborSlotCount));
+    buf.neighborOffsets[boidIndex + 1] =
+        buf.neighborOffsets[boidIndex] + static_cast<std::size_t>(maxNeighbors);
+  }
+
+  buf.neighborEntries.assign(buf.neighborOffsets.back(), {});
+}
+
+void BoidSimulation::remapTreeIndices(
+    BoidUnit *node, const std::vector<int> &oldToNew) {
+  if (!node) {
     return;
   }
+  for (int &index : node->indices) {
+    if (index >= 0 && index < static_cast<int>(oldToNew.size())) {
+      index = oldToNew[index];
+    }
+  }
+  for (BoidUnit *child : node->children) {
+    remapTreeIndices(child, oldToNew);
+  }
+}
 
-  // バッファのサイズを調整
-  buf.boidCohesionMemories.resize(totalCount);
-  buf.boidActiveNeighbors.resize(totalCount);
-  buf.boidNeighborIndices.resize(totalCount);
+bool BoidSimulation::validateReorderedState(const SoABuffers &before) const {
+  const int count = static_cast<int>(buf.positions.size());
+  const auto samePermuted = [&](const auto &oldValues, const auto &newValues) {
+    if (oldValues.size() != newValues.size()) {
+      return false;
+    }
+    using Value = typename std::decay_t<decltype(oldValues)>::value_type;
+    for (int oldIndex = 0; oldIndex < count; ++oldIndex) {
+      const int newIndex = reorderOldToNew_[oldIndex];
+      if (newIndex < 0 || newIndex >= count ||
+          std::memcmp(&oldValues[oldIndex], &newValues[newIndex],
+                      sizeof(Value)) != 0) {
+        return false;
+      }
+    }
+    return true;
+  };
 
-  // 各Boidごとに実際のspeciesIdに基づいてmaxNeighbors分のメモリを確保
-  for (int boidIndex = 0; boidIndex < totalCount; ++boidIndex) {
-    int speciesId = buf.speciesIds[boidIndex];
+  if (!samePermuted(before.positions, buf.positions) ||
+      !samePermuted(before.positionsWrite, buf.positionsWrite) ||
+      !samePermuted(before.velocities, buf.velocities) ||
+      !samePermuted(before.velocitiesWrite, buf.velocitiesWrite) ||
+      !samePermuted(before.accelerations, buf.accelerations) ||
+      !samePermuted(before.orientations, buf.orientations) ||
+      !samePermuted(before.orientationsWrite, buf.orientationsWrite) ||
+      !samePermuted(before.predatorInfluences, buf.predatorInfluences) ||
+      !samePermuted(before.ids, buf.ids) ||
+      !samePermuted(before.stresses, buf.stresses) ||
+      !samePermuted(before.speciesIds, buf.speciesIds) ||
+      !samePermuted(before.predatorTargetTimers, buf.predatorTargetTimers) ||
+      !samePermuted(before.predatorRestTimers, buf.predatorRestTimers) ||
+      !samePermuted(before.predatorChaseTimers, buf.predatorChaseTimers) ||
+      !samePermuted(before.predatorApproachDirs, buf.predatorApproachDirs) ||
+      !samePermuted(before.predatorDisengageDirs, buf.predatorDisengageDirs) ||
+      !samePermuted(before.predatorThreats, buf.predatorThreats)) {
+    return false;
+  }
 
-    // speciesIdが有効な範囲内か確認
-    if (speciesId < 0 ||
-        speciesId >= static_cast<int>(speciesParamsList.size())) {
-      // 無効なspeciesIdの場合はデフォルト値を使用
-      buf.boidCohesionMemories[boidIndex].assign(4, 0.0f);
-      buf.boidActiveNeighbors[boidIndex].reset();
-      buf.boidNeighborIndices[boidIndex].fill(-1);
-      continue;
+  for (int oldIndex = 0; oldIndex < count; ++oldIndex) {
+    const int newIndex = reorderOldToNew_[oldIndex];
+    const int oldTarget = before.predatorTargetIndices[oldIndex];
+    const int expectedTarget =
+        oldTarget >= 0 && oldTarget < count ? reorderOldToNew_[oldTarget] : -1;
+    if (buf.predatorTargetIndices[newIndex] != expectedTarget) {
+      return false;
     }
 
-    const auto &species = speciesParamsList[speciesId];
-    // 近傍スロット数と maxNeighbors がズレると、薄さ判定やFastAttractが常時ONになり
-    // 飛び散りやすくなるため、キャッシュ上限でクランプして整合を保つ。
-    const int maxNeighbors = glm::clamp(
-      species.maxNeighbors, 1,
-      static_cast<int>(SoABuffers::NeighborSlotCount));
-
-    // cohesionMemoriesをmaxNeighbors分確保（dt累積（-1.0fで未使用））
-    buf.boidCohesionMemories[boidIndex].assign(maxNeighbors, 0.0f);
-    // activeNeighborsをリセット（使用中slotのインデックス）
-    buf.boidActiveNeighbors[boidIndex].reset();
-    buf.boidNeighborIndices[boidIndex].fill(-1);
+    const std::size_t oldBegin = before.neighborOffsets[oldIndex];
+    const std::size_t newBegin = buf.neighborOffsets[newIndex];
+    const uint8_t active = before.neighborCounts[oldIndex];
+    if (buf.neighborCounts[newIndex] != active) {
+      return false;
+    }
+    for (uint8_t entryIndex = 0; entryIndex < active; ++entryIndex) {
+      const auto &oldEntry = before.neighborEntries[oldBegin + entryIndex];
+      const auto &newEntry = buf.neighborEntries[newBegin + entryIndex];
+      const int expectedNeighbor =
+          oldEntry.index >= 0 && oldEntry.index < count
+              ? reorderOldToNew_[oldEntry.index]
+              : -1;
+      if (newEntry.index != expectedNeighbor || newEntry.age != oldEntry.age ||
+          newEntry.slot != oldEntry.slot) {
+        return false;
+      }
+    }
   }
+  return true;
+}
+
+bool BoidSimulation::reorderStorageByLeafOrder() {
+  const int count = static_cast<int>(buf.positions.size());
+  const int speciesCount = static_cast<int>(speciesParams_.size());
+  if (!root || count <= 1 || speciesCount <= 0) {
+    return false;
+  }
+
+  std::unique_ptr<SoABuffers> validationBefore;
+  if (reorderValidationEnabled_) {
+    validationBefore = std::make_unique<SoABuffers>(buf);
+  }
+
+  reorderOldToNew_.assign(count, -1);
+  reorderNewToOld_.assign(count, -1);
+  reorderSpeciesBegin_.assign(speciesCount, -1);
+  reorderSpeciesCount_.assign(speciesCount, 0);
+  if (reorderSpeciesOrder_.size() != static_cast<std::size_t>(speciesCount)) {
+    reorderSpeciesOrder_.resize(speciesCount);
+  }
+  for (auto &order : reorderSpeciesOrder_) {
+    order.clear();
+  }
+
+  for (int oldIndex = 0; oldIndex < count; ++oldIndex) {
+    const int sid = buf.speciesIds[oldIndex];
+    if (sid < 0 || sid >= speciesCount) {
+      return false;
+    }
+    if (reorderSpeciesBegin_[sid] < 0) {
+      reorderSpeciesBegin_[sid] = oldIndex;
+    }
+    ++reorderSpeciesCount_[sid];
+  }
+
+  // 既存のspecies partition（predator末尾を含む）が連続であることを確認する。
+  for (int sid = 0; sid < speciesCount; ++sid) {
+    const int begin = reorderSpeciesBegin_[sid];
+    const int speciesBoids = reorderSpeciesCount_[sid];
+    if (speciesBoids == 0) {
+      continue;
+    }
+    if (begin < 0 || begin + speciesBoids > count) {
+      return false;
+    }
+    reorderSpeciesOrder_[sid].reserve(speciesBoids);
+    for (int index = begin; index < begin + speciesBoids; ++index) {
+      if (buf.speciesIds[index] != sid) {
+        return false;
+      }
+    }
+  }
+
+  treeSpatialIndex_.forEachLeaf([&](const SpatialLeaf &leaf) {
+    for (std::size_t i = 0; i < leaf.count; ++i) {
+      const int oldIndex = leaf.indices[i];
+      if (oldIndex < 0 || oldIndex >= count) {
+        continue;
+      }
+      const int sid = buf.speciesIds[oldIndex];
+      reorderSpeciesOrder_[sid].push_back(oldIndex);
+    }
+  });
+
+  for (int sid = 0; sid < speciesCount; ++sid) {
+    const auto &order = reorderSpeciesOrder_[sid];
+    if (order.size() != static_cast<std::size_t>(reorderSpeciesCount_[sid])) {
+      return false;
+    }
+    const int begin = reorderSpeciesBegin_[sid];
+    for (std::size_t offset = 0; offset < order.size(); ++offset) {
+      const int oldIndex = order[offset];
+      const int newIndex = begin + static_cast<int>(offset);
+      if (reorderOldToNew_[oldIndex] >= 0) {
+        return false;
+      }
+      reorderOldToNew_[oldIndex] = newIndex;
+      reorderNewToOld_[newIndex] = oldIndex;
+    }
+  }
+
+  const auto permute = [&](auto &source, auto &scratch) {
+    scratch.resize(source.size());
+    for (int newIndex = 0; newIndex < count; ++newIndex) {
+      scratch[newIndex] = source[reorderNewToOld_[newIndex]];
+    }
+    source.swap(scratch);
+  };
+
+  permute(buf.positions, reorderScratch_.positions);
+  permute(buf.positionsWrite, reorderScratch_.positionsWrite);
+  permute(buf.velocities, reorderScratch_.velocities);
+  permute(buf.velocitiesWrite, reorderScratch_.velocitiesWrite);
+  permute(buf.accelerations, reorderScratch_.accelerations);
+  permute(buf.orientations, reorderScratch_.orientations);
+  permute(buf.orientationsWrite, reorderScratch_.orientationsWrite);
+  permute(buf.predatorInfluences, reorderScratch_.predatorInfluences);
+  permute(buf.ids, reorderScratch_.ids);
+  permute(buf.stresses, reorderScratch_.stresses);
+  permute(buf.speciesIds, reorderScratch_.speciesIds);
+  permute(buf.predatorTargetIndices, reorderScratch_.predatorTargetIndices);
+  permute(buf.predatorTargetTimers, reorderScratch_.predatorTargetTimers);
+  permute(buf.predatorRestTimers, reorderScratch_.predatorRestTimers);
+  permute(buf.predatorChaseTimers, reorderScratch_.predatorChaseTimers);
+  permute(buf.predatorApproachDirs, reorderScratch_.predatorApproachDirs);
+  permute(buf.predatorDisengageDirs, reorderScratch_.predatorDisengageDirs);
+  permute(buf.predatorThreats, reorderScratch_.predatorThreats);
+
+  for (int &target : buf.predatorTargetIndices) {
+    if (target >= 0 && target < count) {
+      target = reorderOldToNew_[target];
+    } else {
+      target = -1;
+    }
+  }
+
+  reorderScratch_.neighborCounts.resize(buf.neighborCounts.size());
+  reorderScratch_.neighborEntries.resize(buf.neighborEntries.size());
+  for (int newIndex = 0; newIndex < count; ++newIndex) {
+    const int oldIndex = reorderNewToOld_[newIndex];
+    const std::size_t oldBegin = buf.neighborOffsets[oldIndex];
+    const std::size_t oldEnd = buf.neighborOffsets[oldIndex + 1];
+    const std::size_t newBegin = buf.neighborOffsets[newIndex];
+    const std::size_t newEnd = buf.neighborOffsets[newIndex + 1];
+    if (oldEnd - oldBegin != newEnd - newBegin) {
+      return false;
+    }
+    const uint8_t active = buf.neighborCounts[oldIndex];
+    reorderScratch_.neighborCounts[newIndex] = active;
+    for (uint8_t entryIndex = 0; entryIndex < active; ++entryIndex) {
+      auto entry = buf.neighborEntries[oldBegin + entryIndex];
+      if (entry.index >= 0 && entry.index < count) {
+        entry.index = reorderOldToNew_[entry.index];
+      } else {
+        entry.index = -1;
+      }
+      reorderScratch_.neighborEntries[newBegin + entryIndex] = entry;
+    }
+  }
+  buf.neighborCounts.swap(reorderScratch_.neighborCounts);
+  buf.neighborEntries.swap(reorderScratch_.neighborEntries);
+
+  remapTreeIndices(root, reorderOldToNew_);
+  if (behaviorInspectorIndex_ >= 0 && behaviorInspectorIndex_ < count) {
+    behaviorInspectorIndex_ = reorderOldToNew_[behaviorInspectorIndex_];
+    behaviorInspectorBuffer_[1] = static_cast<float>(behaviorInspectorIndex_);
+  }
+  setRenderPointersToReadBuffers();
+  if (validationBefore && !validateReorderedState(*validationBefore)) {
+    ++reorderValidationFailures_;
+  }
+  return true;
 }
 
 void BoidSimulation::collectLeavesForCache(BoidUnit *node, BoidUnit *parent) {

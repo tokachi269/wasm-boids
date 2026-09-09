@@ -82,6 +82,23 @@ std::span<const int> BoidsWorld::speciesIds() const {
   return {buffers.speciesIds.data(), buffers.speciesIds.size()};
 }
 
+std::span<const int> BoidsWorld::stableIds() const {
+  const auto &buffers = simulation_->getBuffers();
+  return {buffers.ids.data(), buffers.ids.size()};
+}
+
+void BoidsWorld::setSpatialReorderCadence(int frames) {
+  simulation_->setSpatialReorderCadence(frames);
+}
+
+void BoidsWorld::setReorderValidationEnabled(bool enabled) {
+  simulation_->setReorderValidationEnabled(enabled);
+}
+
+int BoidsWorld::reorderValidationFailures() const {
+  return simulation_->getReorderValidationFailures();
+}
+
 BoidsWorld::PhaseTimings BoidsWorld::phaseTimings() const {
   const auto timings = simulation_->getPhaseTimings();
   PhaseTimings result{};

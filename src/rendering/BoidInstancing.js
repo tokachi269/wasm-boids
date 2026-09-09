@@ -164,6 +164,7 @@ update({
   positions,
   orientations,
   velocities,
+  stableIds,
   cameraPosition,
   predatorCount = 0,
   posRange,
@@ -293,6 +294,8 @@ update({
   for (let i = 0; i < count; i++) {
     const basePos = i * 3;
     const baseQuat = i * 4;
+    const stableId = stableIds && i < stableIds.length ? stableIds[i] : i;
+    const stableBasePos = stableId * 3;
 
     const px = positions[basePos];
     const py = positions[basePos + 1];
@@ -315,7 +318,7 @@ update({
         }
       }
       if (lodFlags) {
-        lodFlags[i] = 0;
+        lodFlags[stableId] = 0;
       }
       continue;
     }
@@ -334,7 +337,7 @@ update({
     const distSq = dx * dx + dy * dy + dz * dz;
     // 停止中は、カメラ操作だけでHighからLowへ切り替わらないよう直前のLODを維持する。
     // 未初期化(0)はHighとして扱い、停止したまま生成された個体もLowへ落とさない。
-    const previousLod = lodFlags?.[i] ?? 0;
+    const previousLod = lodFlags?.[stableId] ?? 0;
     const isNear = this.forceLowLod
       ? false
       : preserveLod
@@ -357,9 +360,9 @@ update({
       // 前フレームからの向きの差異を Y 軸回転量として近似
         tailSpeedValue = speed;
         if (prevVel) {
-          const prevVx = prevVel[basePos];
-          const prevVy = prevVel[basePos + 1];
-          const prevVz = prevVel[basePos + 2];
+          const prevVx = prevVel[stableBasePos];
+          const prevVy = prevVel[stableBasePos + 1];
+          const prevVz = prevVel[stableBasePos + 2];
           const prevLenSq = prevVx * prevVx + prevVy * prevVy + prevVz * prevVz;
           if (prevLenSq > 1e-10) {
             const crossY = prevVz * vx - prevVx * vz;
@@ -401,7 +404,7 @@ update({
       highTailParamsArray[outTail + 2] = driveValue;
       // フレームごとにパックし直しても同一個体の揺れ位相が変化しないよう、Boid 固有シードを保持する
       // tailPhase 属性も Boid 固有シードで詰め直し、LOD 切り替え時の位相ジャンプを防ぐ
-      const seedValue = tailSeeds && i < tailSeeds.length ? tailSeeds[i] : 0;
+      const seedValue = tailSeeds && stableId < tailSeeds.length ? tailSeeds[stableId] : 0;
       highTailPhaseArray[writeIndex] = seedValue;
 
       this.highInstanceToBoid[writeIndex] = i;
@@ -438,7 +441,7 @@ update({
       lowTailParamsArray[outTail] = tailSpeedValue;
       lowTailParamsArray[outTail + 1] = tailTurnValue;
       lowTailParamsArray[outTail + 2] = driveValue;
-      const seedValue = tailSeeds && i < tailSeeds.length ? tailSeeds[i] : 0;
+      const seedValue = tailSeeds && stableId < tailSeeds.length ? tailSeeds[stableId] : 0;
       lowTailPhaseArray[writeIndex] = seedValue;
 
       this.lowInstanceToBoid[writeIndex] = i;
@@ -450,13 +453,13 @@ update({
     }
 
     if (lodFlags) {
-      lodFlags[i] = isNear ? 1 : 2;
+      lodFlags[stableId] = isNear ? 1 : 2;
     }
 
     if (prevVel) {
-      prevVel[basePos] = vx;
-      prevVel[basePos + 1] = vy;
-      prevVel[basePos + 2] = vz;
+      prevVel[stableBasePos] = vx;
+      prevVel[stableBasePos + 1] = vy;
+      prevVel[stableBasePos + 2] = vz;
     }
   }
 

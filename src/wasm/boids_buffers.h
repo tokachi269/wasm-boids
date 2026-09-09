@@ -1,8 +1,6 @@
 #pragma once
 
 #include "boid.h"
-#include <array>
-#include <bitset>
 #include <boost/align/aligned_allocator.hpp>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -20,6 +18,12 @@ struct SoABuffers {
   // maxNeighbors がこれを超える場合は初期化時にクランプする。
   static constexpr std::size_t NeighborSlotCount = 32;
 
+  struct NeighborEntry {
+    int index = -1;
+    float age = 0.0f;
+    uint8_t slot = 0;
+  };
+
   std::vector<glm::vec3, A16<glm::vec3>> positions;
   std::vector<glm::vec3, A16<glm::vec3>> positionsWrite;
   std::vector<glm::vec3, A16<glm::vec3>> velocities;
@@ -31,9 +35,6 @@ struct SoABuffers {
   std::vector<int> ids;
   std::vector<float> stresses;
   std::vector<int> speciesIds;
-  std::vector<uint8_t> isAttracting; // 0: 吸引オフ, 1: 吸引オン
-  std::vector<float> attractTimers;  // 吸引が続く残時間 (秒)
-
   std::vector<int> predatorTargetIndices; // 捕食者の捕食対象index
   std::vector<float>
       predatorTargetTimers; // 捕食者の捕食対象ターゲット残時間 (秒)
@@ -48,17 +49,11 @@ struct SoABuffers {
 
   std::vector<float> predatorThreats; // 捕食圧の蓄積値（0-1）
 
-  // 各BoidのcohesionMemoriesとactiveNeighbors（SOA形式）
-    // WebAssembly では unordered_map の破棄が深い再帰になりがちなので、近傍キャッシュは
-    // フラットな vector で管理してスタック消費を抑える。
-    std::vector<std::vector<float>>
-      boidCohesionMemories;                         // dt累積（-1.0fで未使用）
-  std::vector<std::bitset<NeighborSlotCount>>
-      boidActiveNeighbors; // 使用中slotのインデックス
-  // boidActiveNeighbors の各 slot に対応する「近傍Boidのグローバルindex」。
-  // これにより BoidUnit(葉) の indices 順序に依存せず、SpatialIndex（球クエリ）の結果を
-  // 安定してキャッシュできる。
-  std::vector<std::array<int, NeighborSlotCount>> boidNeighborIndices;
+  // 魚ごとの可変上限を offsets で表し、有効な近傍だけを各区間の先頭へ詰める。
+  // slot は近傍寿命 jitter と加算順を従来どおり維持するため残す。
+  std::vector<std::size_t> neighborOffsets;
+  std::vector<uint8_t> neighborCounts;
+  std::vector<NeighborEntry> neighborEntries;
 
   void reserveAll(std::size_t n) {
     positions.reserve(n);
@@ -69,8 +64,6 @@ struct SoABuffers {
     ids.reserve(n);
     stresses.reserve(n);
     speciesIds.reserve(n);
-    isAttracting.reserve(n);
-    attractTimers.reserve(n);
     orientations.reserve(n);
     orientationsWrite.reserve(n);
     predatorTargetIndices.reserve(n);
@@ -81,9 +74,8 @@ struct SoABuffers {
     predatorDisengageDirs.reserve(n);
     predatorInfluences.reserve(n);
     predatorThreats.reserve(n);
-    boidCohesionMemories.reserve(n);
-    boidActiveNeighbors.reserve(n);
-    boidNeighborIndices.reserve(n);
+    neighborOffsets.reserve(n + 1);
+    neighborCounts.reserve(n);
   }
 
   // Boid 数に合わせてフラグをクリア/サイズ調整
@@ -98,8 +90,6 @@ struct SoABuffers {
     ids.resize(n);
     stresses.resize(n);
     speciesIds.resize(n);
-    isAttracting.resize(n, 0);
-    attractTimers.resize(n, 0.0f);
     predatorTargetIndices.resize(n, -1);
     predatorTargetTimers.resize(n, 0.0f);
     predatorRestTimers.resize(n, 0.0f);
@@ -108,12 +98,9 @@ struct SoABuffers {
     predatorDisengageDirs.resize(n, glm::vec3(0.0f));
     predatorInfluences.resize(n, glm::vec3(0.0f));
     predatorThreats.resize(n, 0.0f);
-    boidCohesionMemories.resize(n);
-    boidActiveNeighbors.resize(n);
-    boidNeighborIndices.resize(n);
-    for (std::size_t i = 0; i < n; ++i) {
-      boidNeighborIndices[i].fill(-1);
-    }
+    neighborOffsets.assign(n + 1, 0);
+    neighborCounts.assign(n, 0);
+    neighborEntries.clear();
   }
 
   // 書き込みバッファを読み取りバッファから同期（初期化時用）
