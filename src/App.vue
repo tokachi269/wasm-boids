@@ -1915,7 +1915,7 @@ const initialLightingTuning = Object.freeze({
   ambientColor: '#466177',
   ambientIntensity: 1.55,
   sunColor: OCEAN_COLORS.SUN_LIGHT,
-  sunIntensity: 6.9,
+  sunIntensity: 5.5,
   exposure: 1.1,
 });
 const lightingTuning = reactive({ ...initialLightingTuning });
