@@ -236,9 +236,9 @@
                   />
                   尾びれアニメーションを有効化
                 </label>
-                <label class="debug-checkbox" :title="debugHelp.enableStats">
-                  <input type="checkbox" v-model="debugControls.enableStats" :title="debugHelp.enableStats" />
-                  stats-gl を有効化
+                <label class="debug-checkbox" :title="debugHelp.showPerformanceHud">
+                  <input type="checkbox" v-model="debugControls.showPerformanceHud" :title="debugHelp.showPerformanceHud" />
+                  パフォーマンスHUDを表示
                 </label>
                 <label class="debug-checkbox" :title="debugHelp.showSpeciesEnvelopes">
                   <input type="checkbox" v-model="showSpeciesEnvelopes" :title="debugHelp.showSpeciesEnvelopes" />
@@ -297,6 +297,27 @@
 {{ behaviorInspectorHudText }}
     </pre>
 
+    <section
+      v-if="debugControls.showPerformanceHud"
+      class="performance-hud"
+      aria-label="Live performance"
+    >
+      <div class="performance-hud-primary">
+        <strong>{{ performanceHud.fps.toFixed(1) }} FPS</strong>
+        <span>{{ performanceHud.frameMs.toFixed(2) }} ms</span>
+      </div>
+      <canvas ref="performanceHudCanvas" class="performance-hud-graph" />
+      <div class="performance-hud-values">
+        <span><b>SIM</b> {{ performanceHud.simulationMs.toFixed(2) }}</span>
+        <span><b>GPU</b> {{ performanceHud.gpuMs === null ? "N/A" : performanceHud.gpuMs.toFixed(2) }}</span>
+        <span><b>JS</b> {{ performanceHud.javascriptMs.toFixed(2) }}</span>
+        <span><b>CPU</b> {{ performanceHud.cpuMs.toFixed(2) }}</span>
+      </div>
+      <div class="performance-hud-summary">
+        P95 {{ performanceHud.p95Ms.toFixed(2) }} · MAX {{ performanceHud.peakFrameMs.toFixed(2) }} ms
+      </div>
+    </section>
+
     <div ref="threeContainer" class="three-container" />
     <audio
       ref="backgroundAudio"
@@ -312,7 +333,6 @@ import { inject, onMounted, onUnmounted, reactive, ref, watch, toRaw } from "vue
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import Settings from "./components/Settings.vue";
-import StatsGl from "stats-gl";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
 import { BoidInstancing } from "./rendering/BoidInstancing.js";
 import { FogPipeline } from "./rendering/FogPipeline.js";
@@ -323,6 +343,7 @@ import {
   BrowserBenchmark,
   readBrowserBenchmarkConfig,
 } from "./benchmark/BrowserBenchmark.js";
+import { LivePerformanceMonitor } from "./benchmark/LivePerformanceMonitor.js";
 
 // WASM 側の初期配置レンジ（posRange）。描画側の位置量子化レンジ決定にも使う。
 const DEFAULT_SIMULATION_POS_RANGE = 4;
@@ -332,6 +353,18 @@ const browserBenchmarkConfig = readBrowserBenchmarkConfig(
 const browserBenchmark = browserBenchmarkConfig
   ? new BrowserBenchmark(browserBenchmarkConfig)
   : null;
+const livePerformanceMonitor = new LivePerformanceMonitor();
+const performanceHudCanvas = ref(null);
+const performanceHud = reactive({
+  fps: 0,
+  frameMs: 0,
+  p95Ms: 0,
+  peakFrameMs: 0,
+  simulationMs: 0,
+  javascriptMs: 0,
+  cpuMs: 0,
+  gpuMs: null,
+});
 
 const wasmModule = inject("wasmModule");
 if (!wasmModule) {
@@ -485,7 +518,7 @@ const debugHelp = {
   enableEnhancedPostEffects: 'SSAOとブルームをまとめて有効にします。スマホや重い環境ではOFFを推奨。',
   enableShadows: '影描画を有効にします。見た目は良くなりますが負荷が上がりやすいです。',
   enableTailAnimation: '尾びれのアニメーションを有効にします。負荷が気になるなら OFF。',
-  enableStats: 'stats-gl の計測 HUD を有効にします。通常は OFF で十分です。',
+  showPerformanceHud: 'FPS/FrameはRAF間隔、SIMはWASM更新、JSはview準備+instance packing、CPUはanimate開始〜描画submit、GPUはtimer queryです。CPUとGPUは並行するため合計値ではありません。',
   showSpeciesEnvelopes: '各種族の分布（中心/半径）を可視化します。',
   showSpeciesClusters: 'クラスタ検出結果を可視化します。',
   showSpeciesSchoolClusters: '大クラスタ（大きな群れ）の結果を可視化します。',
@@ -734,7 +767,7 @@ const debugControls = reactive({
   enableEnhancedPostEffects: !useLowSpecPreset,
   enableShadows: !useLowSpecPreset,
   enableTailAnimation: true,
-  enableStats: false,
+  showPerformanceHud: false,
 });
 
 function clampBehaviorInspectorIndex(value) {
@@ -935,8 +968,6 @@ function applyWorldAxisGridState() {
 }
 
 let maxDepth = 1;
-let stats = null; // stats-gl パフォーマンス表示
-let statsInitPromise = null;
 let glContext = null;
 let frameCounter = 0;
 let flockReinitTimer = null; // 群れ再初期化の遅延タイマー
@@ -1032,126 +1063,6 @@ function applyRendererPixelRatio() {
   }
   const dpr = window.devicePixelRatio || 1;
   renderer.setPixelRatio(Math.min(dpr, getEffectivePixelRatioCap()));
-}
-
-function positionStatsOverlay(element) {
-  if (!element) return;
-  element.style.position = "fixed";
-  element.style.top = "0px";
-  element.style.right = "0px";
-  element.style.left = "auto";
-  element.style.bottom = "auto";
-  element.style.zIndex = "9999";
-  element.style.width = "270px";
-  element.style.height = "48px";
-  element.style.pointerEvents = "auto";
-  element.style.transform = "none";
-}
-
-function getStatsElement() {
-  return (
-    (typeof stats?.domElement !== "undefined" ? stats.domElement : null) ||
-    (typeof stats?.getDom === "function" ? stats.getDom() : null) ||
-    stats?.dom ||
-    stats?.container ||
-    stats?.wrapper ||
-    null
-  );
-}
-
-function setStatsOverlayVisibility(visible) {
-  const statsElement = getStatsElement();
-  if (!statsElement) {
-    return;
-  }
-  if (visible) {
-    if (!statsElement.parentElement) {
-      document.body.appendChild(statsElement);
-    }
-    positionStatsOverlay(statsElement);
-    statsElement.style.display = "";
-    return;
-  }
-  if (statsElement.parentElement) {
-    statsElement.parentElement.removeChild(statsElement);
-  }
-}
-
-function ensureStatsInitialized() {
-  if (stats) {
-    setStatsOverlayVisibility(true);
-    return Promise.resolve(stats);
-  }
-  if (statsInitPromise) {
-    return statsInitPromise;
-  }
-
-  stats = new StatsGl({
-    trackGPU: true,
-    trackHz: true,
-    trackCPT: true,
-    logsPerSecond: 4,
-    graphsPerSecond: 30,
-    samplesLog: 40,
-    samplesGraph: 10,
-    precision: 2,
-    horizontal: true,
-    minimal: false,
-    mode: 0,
-  });
-
-  const statsInitTarget = renderer?.domElement ?? document.body;
-  const initPromise =
-    stats && typeof stats.init === "function"
-      ? Promise.resolve(stats.init(statsInitTarget))
-      : Promise.resolve();
-
-  statsInitPromise = initPromise
-    .then(() => {
-      if (renderer && typeof stats?.patchThreeRenderer === "function" && !stats?.threeRendererPatched) {
-        stats.patchThreeRenderer(renderer);
-      }
-      setStatsOverlayVisibility(debugControls.enableStats);
-      return stats;
-    })
-    .catch((error) => {
-      console.error("Failed to initialize stats-gl:", error);
-      setStatsOverlayVisibility(debugControls.enableStats);
-      return stats;
-    })
-    .finally(() => {
-      statsInitPromise = null;
-    });
-
-  return statsInitPromise;
-}
-
-function applyStatsDebugState() {
-  if (debugControls.enableStats) {
-    void ensureStatsInitialized();
-    return;
-  }
-  setStatsOverlayVisibility(false);
-  if (!stats) {
-    return;
-  }
-  stats = null;
-  statsInitPromise = null;
-
-  if (!renderer) {
-    return;
-  }
-
-  snapshotCameraStateForRecovery();
-  const ok = initThreeJS();
-  if (!ok) {
-    scheduleWebglRecovery("stats-toggle");
-    return;
-  }
-  restoreCameraStateAfterRecovery();
-  if (boidAssetsReady) {
-    initInstancedBoids(cachedTotalBoidCount || totalBoids.value || 0);
-  }
 }
 
 /**
@@ -1433,11 +1344,6 @@ function scheduleWebglRecovery(reason) {
 
       // レンダラ作り直しでリセットされたカメラを復元。
       restoreCameraStateAfterRecovery();
-
-      // stats-gl は renderer を差し替えると参照が古くなるため、可能なら再パッチする。
-      if (stats && typeof stats.patchThreeRenderer === 'function') {
-        stats.patchThreeRenderer(renderer);
-      }
 
       // GPUは失われるので、boidsは次フレームの update() で再送される。
       // モデルロード済みならインスタンシングを作り直して描画を復帰する。
@@ -2960,15 +2866,23 @@ function scheduleNextFrame() {
   }
 }
 
+function finishLivePerformanceFrame() {
+  const snapshot = livePerformanceMonitor.endFrame(performanceHudCanvas.value);
+  if (snapshot) Object.assign(performanceHud, snapshot);
+}
+
 function animate(frameTimeMs) {
   if (webglContextLost || !renderer || !scene || !camera) {
     scheduleWebglRecovery('animate');
     return;
   }
-  stats?.begin();
   const benchmarkFrameIndex = browserBenchmark?.beginFrame();
   const currentTime =
     typeof frameTimeMs === "number" ? frameTimeMs : performance.now();
+  livePerformanceMonitor.setEnabled(
+    !browserBenchmark && debugControls.showPerformanceHud,
+  );
+  livePerformanceMonitor.beginFrame(currentTime);
   const deltaTime = (currentTime - lastTime) / 1000;
   lastTime = currentTime;
 
@@ -2992,7 +2906,9 @@ function animate(frameTimeMs) {
     ? browserBenchmark.measure('wasm_simulation', () =>
         stepSimulationAndUpdateState(simulationDelta),
       )
-    : stepSimulationAndUpdateState(paused.value ? 0 : deltaTime);
+    : livePerformanceMonitor.measureSimulation(() =>
+        stepSimulationAndUpdateState(paused.value ? 0 : deltaTime),
+      );
   if (sampleLocality) {
     wasmBridge?.endLocalitySample();
   }
@@ -3005,23 +2921,22 @@ function animate(frameTimeMs) {
   if (!instancedMeshHigh || !instancedMeshLow) {
     controls.update();
     updateParticleUniforms();
+    livePerformanceMonitor.beginGpu(renderer.getContext());
     if (pipelineReady) {
       fogPipeline.updateCameraUniforms(camera);
       fogPipeline.render(deltaTime);
     } else {
       renderer.render(scene, camera);
     }
-    stats?.end();
-    if ((frameCounter & 1) === 0) {
-      stats?.update();
-    }
+    livePerformanceMonitor.endGpu();
+    finishLivePerformanceFrame();
     scheduleNextFrame();
     return;
   }
 
   const { positions, orientations, velocities, stableIds } = browserBenchmark
     ? browserBenchmark.measure('wasm_to_js_views', () => getWasmViews(count))
-    : getWasmViews(count);
+    : livePerformanceMonitor.measureJavascript(() => getWasmViews(count));
   latestBoidPositions = positions;
   if ((frameCounter++ & 63) === 0) {
     wasmBridge?.getDiagnostics?.({ firstBoidX: true });
@@ -3042,7 +2957,7 @@ function animate(frameTimeMs) {
     });
   const updateInfo = browserBenchmark
     ? browserBenchmark.measure('js_instance_packing', updateInstancing)
-    : updateInstancing();
+    : livePerformanceMonitor.measureJavascript(updateInstancing);
   updateBehaviorInspector(positions, stableIds);
 
   const visibleCount =
@@ -3208,11 +3123,12 @@ function animate(frameTimeMs) {
     browserBenchmark.measure('render_submission_cpu', submitRender);
     browserBenchmark.endGpu();
   } else {
+    livePerformanceMonitor.beginGpu(renderer.getContext());
     submitRender();
+    livePerformanceMonitor.endGpu();
   }
 
-  stats?.end();
-  stats?.update();
+  finishLivePerformanceFrame();
 
   if (browserBenchmark?.endFrame()) {
     void browserBenchmark.finish({ bridge: wasmBridge, positions, renderer });
@@ -3278,8 +3194,6 @@ onMounted(() => {
         taskLimit: browserBenchmarkConfig.taskLimit,
         parallelTiming: true,
       });
-    } else {
-      applyStatsDebugState();
     }
 
     startSimulation();
@@ -3328,9 +3242,7 @@ onUnmounted(() => {
   clearWebglRecoveryTimer();
   wasmBridge?.setBehaviorInspectorIndex?.(-1);
   disposeBehaviorInspectorMarker();
-  setStatsOverlayVisibility(false);
-  stats = null;
-  statsInitPromise = null;
+  livePerformanceMonitor.dispose();
   disposeRendererAndPipeline();
 });
 
@@ -3366,9 +3278,9 @@ watch(
 );
 
 watch(
-  () => debugControls.enableStats,
-  () => {
-    applyStatsDebugState();
+  () => debugControls.showPerformanceHud,
+  (enabled) => {
+    livePerformanceMonitor.setEnabled(enabled && !browserBenchmark);
   }
 );
 
@@ -3581,6 +3493,68 @@ watch([showUnitSpheres, showUnitLines], ([newSpheres, newLines]) => {
 .behavior-debug-hud {
   left: auto;
   right: 12px;
+}
+
+.performance-hud {
+  position: fixed;
+  top: 10px;
+  right: 10px;
+  z-index: 3;
+  width: min(250px, calc(100vw - 16px));
+  box-sizing: border-box;
+  padding: 7px 9px 5px 30px;
+  pointer-events: none;
+  color: rgba(235, 250, 255, 0.9);
+  background: linear-gradient(
+    90deg,
+    rgba(3, 19, 39, 0),
+    rgba(3, 19, 39, 0.17) 24%,
+    rgba(3, 19, 39, 0.34)
+  );
+  text-shadow: 0 1px 3px rgba(0, 10, 24, 0.8);
+  font-variant-numeric: tabular-nums;
+}
+
+.performance-hud-primary {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 13px;
+  font-size: 11px;
+}
+
+.performance-hud-primary strong {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.performance-hud-graph {
+  display: block;
+  width: 100%;
+  height: 86px;
+  margin-top: 1px;
+}
+
+.performance-hud-values {
+  display: grid;
+  grid-template-columns: repeat(4, auto);
+  justify-content: end;
+  gap: 7px;
+  font-size: 9px;
+  color: rgba(218, 242, 250, 0.72);
+}
+
+.performance-hud-values b {
+  margin-right: 3px;
+  color: rgba(239, 251, 255, 0.9);
+  font-weight: 600;
+}
+
+.performance-hud-summary {
+  margin-top: 2px;
+  text-align: right;
+  color: rgba(208, 235, 246, 0.5);
+  font-size: 9px;
 }
 
 .behavior-inspector-controls {

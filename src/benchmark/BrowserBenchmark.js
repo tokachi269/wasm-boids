@@ -1,3 +1,5 @@
+import { GpuTimer } from './GpuTimer.js';
+
 const STAGE_NAMES = [
   'frame_total',
   'wasm_simulation',
@@ -67,9 +69,7 @@ export class BrowserBenchmark {
     this.frameStart = 0;
     this.samples = Object.fromEntries(STAGE_NAMES.map((name) => [name, []]));
     this.gpuSamples = [];
-    this.gpu = null;
-    this.activeGpuQuery = null;
-    this.pendingGpuQueries = [];
+    this.gpuTimer = new GpuTimer();
     this.finished = false;
   }
 
@@ -95,46 +95,19 @@ export class BrowserBenchmark {
     return result;
   }
 
-  initializeGpu(gl) {
-    if (this.gpu || !gl) return;
-    const extension = gl.getExtension('EXT_disjoint_timer_query_webgl2');
-    this.gpu = { gl, extension };
-  }
-
   beginGpu(gl) {
-    this.initializeGpu(gl);
-    if (!this.measuring || !this.gpu?.extension || this.activeGpuQuery) return;
-    const query = this.gpu.gl.createQuery();
-    if (!query) return;
-    this.gpu.gl.beginQuery(this.gpu.extension.TIME_ELAPSED_EXT, query);
-    this.activeGpuQuery = query;
+    if (!this.measuring) return;
+    this.gpuTimer.begin(gl, (milliseconds) => {
+      this.gpuSamples.push(milliseconds);
+    });
   }
 
   endGpu() {
-    if (!this.activeGpuQuery || !this.gpu?.extension) return;
-    this.gpu.gl.endQuery(this.gpu.extension.TIME_ELAPSED_EXT);
-    this.pendingGpuQueries.push(this.activeGpuQuery);
-    this.activeGpuQuery = null;
-    this.pollGpuQueries();
+    this.gpuTimer.end();
   }
 
   pollGpuQueries() {
-    if (!this.gpu?.extension) return;
-    const { gl, extension } = this.gpu;
-    const disjoint = gl.getParameter(extension.GPU_DISJOINT_EXT);
-    const remaining = [];
-    for (const query of this.pendingGpuQueries) {
-      const available = gl.getQueryParameter(query, gl.QUERY_RESULT_AVAILABLE);
-      if (!available) {
-        remaining.push(query);
-        continue;
-      }
-      if (!disjoint) {
-        this.gpuSamples.push(gl.getQueryParameter(query, gl.QUERY_RESULT) / 1e6);
-      }
-      gl.deleteQuery(query);
-    }
-    this.pendingGpuQueries = remaining;
+    this.gpuTimer.poll();
   }
 
   endFrame() {
@@ -149,7 +122,7 @@ export class BrowserBenchmark {
     if (this.finished) return window.__boidsBenchmarkResult;
     this.finished = true;
     const deadline = performance.now() + 5000;
-    while (this.pendingGpuQueries.length > 0 && performance.now() < deadline) {
+    while (this.gpuTimer.pendingCount > 0 && performance.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 16));
       this.pollGpuQueries();
     }
@@ -170,7 +143,7 @@ export class BrowserBenchmark {
       parallel: bridge.getParallelTimings(),
       locality: bridge.getLocalityStats(),
       gpu_ms: {
-        available: Boolean(this.gpu?.extension),
+        available: this.gpuTimer.available,
         samples: this.gpuSamples.length,
         ...summarize(this.gpuSamples),
       },
