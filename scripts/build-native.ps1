@@ -13,7 +13,7 @@ if (Test-Path $vswhere) {
     }
 }
 
-cmake --fresh -S . -B build-native -G Ninja -DCMAKE_BUILD_TYPE=Release '-DCMAKE_CXX_FLAGS=/utf-8 /EHsc'
+cmake -S . -B build-native -G 'NMake Makefiles' -DCMAKE_BUILD_TYPE=Release '-DCMAKE_CXX_FLAGS=/utf-8 /EHsc'
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 cmake --build build-native
 exit $LASTEXITCODE
