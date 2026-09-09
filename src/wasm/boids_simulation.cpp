@@ -1576,12 +1576,9 @@ bool BoidSimulation::validateReorderedState(const SoABuffers &before) const {
   };
 
   if (!samePermuted(before.positions, buf.positions) ||
-      !samePermuted(before.positionsWrite, buf.positionsWrite) ||
       !samePermuted(before.velocities, buf.velocities) ||
-      !samePermuted(before.velocitiesWrite, buf.velocitiesWrite) ||
       !samePermuted(before.accelerations, buf.accelerations) ||
       !samePermuted(before.orientations, buf.orientations) ||
-      !samePermuted(before.orientationsWrite, buf.orientationsWrite) ||
       !samePermuted(before.predatorInfluences, buf.predatorInfluences) ||
       !samePermuted(before.ids, buf.ids) ||
       !samePermuted(before.stresses, buf.stresses) ||
@@ -1713,14 +1710,20 @@ bool BoidSimulation::reorderStorageByLeafOrder() {
     }
     source.swap(scratch);
   };
+  const auto gatherInto = [&](const auto &source, auto &destination) {
+    for (int newIndex = 0; newIndex < count; ++newIndex) {
+      destination[newIndex] = source[reorderNewToOld_[newIndex]];
+    }
+  };
 
-  permute(buf.positions, reorderScratch_.positions);
-  permute(buf.positionsWrite, reorderScratch_.positionsWrite);
-  permute(buf.velocities, reorderScratch_.velocities);
-  permute(buf.velocitiesWrite, reorderScratch_.velocitiesWrite);
+  // kinematics正常完了後のWrite側はinactiveで、次のstepでは全要素が上書きされる。
+  // 現在のRead stateを直接gatherし、swapしてreorder後のRead側にする。
+  gatherInto(buf.positions, buf.positionsWrite);
+  gatherInto(buf.velocities, buf.velocitiesWrite);
+  gatherInto(buf.orientations, buf.orientationsWrite);
+  buf.swapReadWrite();
+
   permute(buf.accelerations, reorderScratch_.accelerations);
-  permute(buf.orientations, reorderScratch_.orientations);
-  permute(buf.orientationsWrite, reorderScratch_.orientationsWrite);
   permute(buf.predatorInfluences, reorderScratch_.predatorInfluences);
   permute(buf.ids, reorderScratch_.ids);
   permute(buf.stresses, reorderScratch_.stresses);
