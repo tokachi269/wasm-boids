@@ -2,7 +2,7 @@ import { GpuTimer } from './GpuTimer.js';
 
 const DEFAULT_SAMPLE_COUNT = 1800;
 const TEXT_UPDATE_MS = 250;
-const GRAPH_UPDATE_MS = 1000 / 30;
+const GRAPH_UPDATE_MS = 1000 / 20;
 
 function mean(values) {
   if (!values.length) return 0;
