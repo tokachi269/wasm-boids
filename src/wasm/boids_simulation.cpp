@@ -1809,6 +1809,7 @@ void BoidSimulation::setUnitSimpleDensity(int unitId, float value) {
 }
 
 uintptr_t BoidSimulation::getUnitSimpleDensityPtr() {
+  markDebugRequest(kDebugRequestUnitSimpleDensity);
   if (unitSimpleDensities.empty()) {
     return 0;
   }
@@ -1817,6 +1818,11 @@ uintptr_t BoidSimulation::getUnitSimpleDensityPtr() {
 
 int BoidSimulation::getUnitSimpleDensityCount() const {
   return static_cast<int>(unitSimpleDensities.size());
+}
+
+bool BoidSimulation::isUnitSimpleDensityRequested() const {
+  return (frameCount - debugLastRequestFrame_) <= kDebugRequestKeepAliveFrames &&
+         (debugRequestBits_ & kDebugRequestUnitSimpleDensity) != 0;
 }
 
 namespace {

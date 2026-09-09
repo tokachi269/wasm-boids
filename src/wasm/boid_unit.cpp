@@ -741,24 +741,26 @@ void BoidUnit::computeBoundingSphere() {
     }
     radius = (maxDistSq > 0.0f) ? glm::sqrt(maxDistSq) : 0.0f;
 
-    const SpeciesParams *densityParams = nullptr;
-    SpeciesParams fallbackParams{};
-    if (speciesId >= 0 &&
-        speciesId < static_cast<int>(globalSpeciesParams.size())) {
-      densityParams = &globalSpeciesParams[speciesId];
-    } else {
-      fallbackParams.separationRange =
-          glm::max(radius, kLeafDensityMinRadius);
-      densityParams = &fallbackParams;
-    }
+    if (simulation.isUnitSimpleDensityRequested()) {
+      const SpeciesParams *densityParams = nullptr;
+      SpeciesParams fallbackParams{};
+      if (speciesId >= 0 &&
+          speciesId < static_cast<int>(globalSpeciesParams.size())) {
+        densityParams = &globalSpeciesParams[speciesId];
+      } else {
+        fallbackParams.separationRange =
+            glm::max(radius, kLeafDensityMinRadius);
+        densityParams = &fallbackParams;
+      }
 
-    if (buf && densityParams) {
-      simpleDensity = computeLeafSimpleDensity(
-          indices.data(), indices.size(), *buf, *densityParams);
-    } else {
-      simpleDensity = 0.0f;
+      if (buf && densityParams) {
+        simpleDensity = computeLeafSimpleDensity(
+            indices.data(), indices.size(), *buf, *densityParams);
+      } else {
+        simpleDensity = 0.0f;
+      }
+      simulation.setUnitSimpleDensity(id, simpleDensity);
     }
-    simulation.setUnitSimpleDensity(id, simpleDensity);
   } else {
     if (children.empty())
       return; // 子ノードの中心を計算 - パフォーマンス最適化
@@ -1278,9 +1280,6 @@ void BoidUnit::computeBoidInteraction(float dt) {
   const int globalFrame = simulation.getFrameCount();
   const uint32_t worldSeed = simulation.getRandomSeed();
 
-  glm::vec3 separation;
-  glm::vec3 alignment;
-  glm::vec3 cohesion;
   int gIdx = 0;
   glm::vec3 pos;
   glm::vec3 vel;
@@ -1329,8 +1328,6 @@ void BoidUnit::computeBoidInteraction(float dt) {
   }
 
   const int leafSpeciesId = speciesId;
-  const float leafDensityValue = simpleDensity;
-
   // -----------------------------------------------
   // 種族ごとに一定な値は先に計算して使い回す
   // -----------------------------------------------
@@ -1338,10 +1335,30 @@ void BoidUnit::computeBoidInteraction(float dt) {
   // - computeBoidInteraction は N 個体ぶん繰り返すため、三角関数や sqrt を1回でも減らすと効く。
   // - leaf は同種族で構成される前提（異種 merge は禁止済み）なので、ここでホイストする。
   const SpeciesParams &leafParams = globalSpeciesParams[leafSpeciesId];
-  const float leafViewRange = glm::max(leafParams.cohesionRange, 0.0f);
+  const float leafCohesionRange = leafParams.cohesionRange;
+  const float leafViewRange = glm::max(leafCohesionRange, 0.0f);
   const float leafViewRangeSq = leafViewRange * leafViewRange;
   const float halfFovRad = glm::radians(leafParams.fieldOfViewDeg * 0.5f);
   const float leafCosHalfFovSq = std::cos(halfFovRad) * std::cos(halfFovRad);
+  const float leafHeadAbs = std::abs(leafParams.bodyHeadLength);
+  const float leafTailAbs = std::abs(leafParams.bodyTailLength);
+  const float leafRadiusAbs = std::max(leafParams.bodyRadius, 0.0f);
+  const float leafBodySpan = leafHeadAbs + leafTailAbs;
+  float leafCloseCheckRange =
+      0.5f * (leafBodySpan + leafBodySpan) +
+      (leafRadiusAbs + leafRadiusAbs);
+  leafCloseCheckRange =
+      glm::max(leafCloseCheckRange, leafRadiusAbs + leafRadiusAbs);
+  const float leafCloseCheckRangeSq =
+      leafCloseCheckRange * leafCloseCheckRange;
+  float leafSeparationRange = leafParams.separationRange;
+  if (leafSeparationRange <= 1e-4f) {
+    const float bodyDiameter = std::max(leafRadiusAbs * 2.0f, 0.0f);
+    leafSeparationRange = glm::max(bodyDiameter, leafBodySpan);
+  }
+  const float leafBaseCohesionStrength =
+      glm::max(leafParams.cohesion, 0.0f);
+  const float leafTau = leafParams.tau;
 
   // -----------------------------------------------
   // 各 Boid（leafノード内）ごとの反復
@@ -1349,12 +1366,8 @@ void BoidUnit::computeBoidInteraction(float dt) {
   for (size_t index = 0; index < indices.size(); ++index) {
     // -------------------------------------------------------
     // 1. 初期化フェーズ
-    //    - 加速度計算用に separation/alignment/cohesion をリセット
     //    - 対象 Boid のグローバルインデックスと位置・速度を取得
     // -------------------------------------------------------
-    separation = glm::vec3(0.00001f);
-    alignment = glm::vec3(0.00001f);
-    cohesion = glm::vec3(0.00001f);
     sid = speciesId;
     gIdx = indices[index];
     const int stableId = buf->ids[gIdx];
@@ -1365,11 +1378,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
       buf->predatorRestTimers[gIdx] = 0.0f;
       buf->predatorChaseTimers[gIdx] = 0.0f;
     }
-    // 外部近傍計算でも使うため、自己形状の絶対値/半径を先に確定しておく。
-    const float selfHeadAbs = std::abs(selfParams.bodyHeadLength);
-    const float selfTailAbs = std::abs(selfParams.bodyTailLength);
-    const float selfRadiusAbs = std::max(selfParams.bodyRadius, 0.0f);
-    const float baseCohesionStrength = glm::max(selfParams.cohesion, 0.0f);
+    const float baseCohesionStrength = leafBaseCohesionStrength;
     glm::vec3 longTermCohesion(0.0f);
     // 近接回避は距離ベースの軽量反発で扱う。
     // - 近傍ごとの高コスト計算や、相手状態の更新は避けて並列性を保つ。
@@ -1765,7 +1774,6 @@ void BoidUnit::computeBoidInteraction(float dt) {
                                          glm::max(selfParams.separationRange, 0.0f));
       if (queryRadius > 1e-4f) {
         // 近傍が足りない分だけ集めたいが、球内が多いケースに備えて上限を置く。
-        const int desired = glm::clamp(maxNeighbors - neighborCount, 0, 16);
         const int hardLimit = glm::clamp(maxNeighbors + 8, 8, 24);
         externalNeighbors.reserve(static_cast<std::size_t>(hardLimit));
 
@@ -1861,9 +1869,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
 
     // phi は「近傍がどれだけ充足しているか」を表す指標。
     // 近傍数が不足している状況を検出し、凝集の補助などに利用する。
-    const int phiDenom = std::max(
-        1, std::min(maxNeighbors,
-                    maxNeighbors + externalNeighborCount));
+    const int phiDenom = std::max(1, maxNeighbors);
     float phi = float(totalNeighborCount) / float(phiDenom);
 
     if (totalNeighborCount > 0) {
@@ -1875,11 +1881,14 @@ void BoidUnit::computeBoidInteraction(float dt) {
       glm::vec3 sumAlign = glm::vec3(0.0f);
       glm::vec3 sumCohDir = glm::vec3(0.0f); // 相対ベクトルで凝集を計算
       float wCohSum = 0.0f;                  // 凝集重みの総和
-      // 近傍から推定した「局所中心」方向。ミリング（回転）用に再利用する。
-      glm::vec3 localCenterDir = glm::vec3(0.0f);
-      bool hasLocalCenterDir = false;
-      const float cohesionRange = globalSpeciesParams[sid].cohesionRange;
+      const float cohesionRange = leafCohesionRange;
       const float cohesionRangeSq = cohesionRange * cohesionRange;
+      const float closeCheckRange = leafCloseCheckRange;
+      const float closeCheckRangeSq = leafCloseCheckRangeSq;
+      const float separationRange = leafSeparationRange;
+      const float calmFactor = 1.0f - selfThreat;
+      const float stressCohesionFactor =
+          1.0f + selfStress * 0.2f * calmFactor;
       int closeNeighborCount = 0;
       int aggregatedNeighborCount = 0;
       // wSep(近さ)の平均で「詰まり具合」を取る。近傍数(maxNeighbors)が飽和しても
@@ -1902,7 +1911,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
 
         // 近傍寄与を記憶年齢でフェードさせ、期限切れの瞬間の急変を抑える。
         // ※activeNeighborsはバイナリだが、力は連続的に落ちる。
-        const float baseTau = globalSpeciesParams[sid].tau;
+        const float baseTau = leafTau;
         const float tauJitter =
             baseTau * (0.85f + 0.30f * hash01(uint32_t(stableId) * 1664525u + uint32_t(slot) * 1013904223u));
         const float memoryAge = neighborEntry.age;
@@ -1923,29 +1932,14 @@ void BoidUnit::computeBoidInteraction(float dt) {
         if (cohesionRangeSq > 0.0f && distSq < cohesionRangeSq) {
           ++closeNeighborCount;
         }
-        int neighborSid = buf->speciesIds[gNeighbor];
-        const SpeciesParams &neighborParams = globalSpeciesParams[neighborSid];
-
-        // Blender 設定の符号そのまま受け取りつつ、実際の長さは絶対値で扱う。
-        float neighborHead = std::abs(neighborParams.bodyHeadLength);
-        float neighborTail = std::abs(neighborParams.bodyTailLength);
-        float selfHead = std::abs(selfParams.bodyHeadLength);
-        float selfTail = std::abs(selfParams.bodyTailLength);
-        float neighborRadius = std::max(neighborParams.bodyRadius, 0.0f);
-        float selfRadius = std::max(selfParams.bodyRadius, 0.0f);
-        float neighborSpan = neighborHead + neighborTail;
-        float selfSpan = selfHead + selfTail;
-        float closeCheckRange =
-            0.5f * (selfSpan + neighborSpan) + (selfRadius + neighborRadius);
-        closeCheckRange =
-            glm::max(closeCheckRange, selfRadius + neighborRadius);
-        float closeCheckRangeSq = closeCheckRange * closeCheckRange;
-
         // 近接反発（軽量版）
         // カプセル最近接は高コストかつ相手への書き込みで競合しやすいので、
         // ここでは距離ベースの反発に簡略化する（自分自身のみに適用）。
-        if (distSq <= closeCheckRangeSq + 1e-6f && distSq > 1e-12f) {
-          const float dist = glm::sqrt(distSq);
+        const bool penetrating =
+            distSq <= closeCheckRangeSq + 1e-6f && distSq > 1e-12f;
+        float dist = 0.0f;
+        if (penetrating) {
+          dist = glm::sqrt(distSq);
           const float penetration = glm::max(closeCheckRange - dist, 0.0f);
           const float penetrationRatio = penetration / glm::max(closeCheckRange, 1e-5f);
           maxPenetrationRatio = glm::max(maxPenetrationRatio, penetrationRatio);
@@ -1969,14 +1963,8 @@ void BoidUnit::computeBoidInteraction(float dt) {
         if (distSq <= 1e-4f)
           continue;
 
-        float dist = glm::sqrt(distSq);
-
-        float separationRange = globalSpeciesParams[sid].separationRange;
-        if (separationRange <= 1e-4f) {
-          // separationRange が0近辺の場合は体長・体幅から最低限の距離を構成。
-          float bodyDiameter = std::max(selfRadiusAbs * 2.0f, 0.0f);
-          float bodyLength = selfHeadAbs + selfTailAbs;
-          separationRange = glm::max(bodyDiameter, bodyLength);
+        if (!penetrating) {
+          dist = glm::sqrt(distSq);
         }
         float wSep = 0.0f;
         if (separationRange > 1e-4f) {
@@ -1991,15 +1979,12 @@ void BoidUnit::computeBoidInteraction(float dt) {
         sumSep += (diff * wSep) * (-1.0f);
 
         // 凝集の重み計算：近いほど強い（距離の正規化を反転）
-        float t = glm::clamp(dist / globalSpeciesParams[sid].cohesionRange,
-                             0.0f, 1.0f);
+        float t = glm::clamp(dist / cohesionRange, 0.0f, 1.0f);
         float wCoh = 1.0f - t; // 近いほど強い（0=遠い、1=近い）
         wCoh *= memoryFade;
         // stress に応じて凝集強度を増加（再結集フェーズ強化）
         // 逃避中(threatが高い)は「再結集」を弱め、中心へ吸われにくくする。
-        const float calmFactor = 1.0f - selfThreat;
-        float stressFactor = 1.0f + selfStress * 0.2f * calmFactor;
-        wCoh *= stressFactor;
+        wCoh *= stressCohesionFactor;
 
         // 相対ベクトル（diff）を重み付きで加算（世界座標を使わない）
         sumCohDir += diff * wCoh;
@@ -2030,19 +2015,8 @@ void BoidUnit::computeBoidInteraction(float dt) {
 
         // 近接反発（外部近傍版）
         // 近傍キャッシュ(leaf内)に入っていない相手でも、重なりだけは確実に排除する。
-        const int neighborSid = buf->speciesIds[gNeighbor];
-        const SpeciesParams &neighborParams = globalSpeciesParams[neighborSid];
-        const float neighborHeadAbs = std::abs(neighborParams.bodyHeadLength);
-        const float neighborTailAbs = std::abs(neighborParams.bodyTailLength);
-        const float neighborRadiusAbs = std::max(neighborParams.bodyRadius, 0.0f);
-        const float neighborSpan = neighborHeadAbs + neighborTailAbs;
-        const float selfSpan = selfHeadAbs + selfTailAbs;
-        float closeCheckRange =
-            0.5f * (selfSpan + neighborSpan) + (selfRadiusAbs + neighborRadiusAbs);
-        closeCheckRange = glm::max(closeCheckRange, selfRadiusAbs + neighborRadiusAbs);
-        const float closeCheckRangeSq = closeCheckRange * closeCheckRange;
+        const float dist = glm::sqrt(distSq);
         if (distSq <= closeCheckRangeSq + 1e-6f && distSq > 1e-12f) {
-          const float dist = glm::sqrt(distSq);
           const float penetration = glm::max(closeCheckRange - dist, 0.0f);
           const float penetrationRatio = penetration / glm::max(closeCheckRange, 1e-5f);
           maxPenetrationRatio = glm::max(maxPenetrationRatio, penetrationRatio);
@@ -2054,14 +2028,6 @@ void BoidUnit::computeBoidInteraction(float dt) {
           buf->accelerations[gIdx] += (diff * (1.0f / dist)) * (-impulse);
         }
 
-        float dist = glm::sqrt(distSq);
-
-        float separationRange = globalSpeciesParams[sid].separationRange;
-        if (separationRange <= 1e-4f) {
-          float bodyDiameter = std::max(selfRadiusAbs * 2.0f, 0.0f);
-          float bodyLength = selfHeadAbs + selfTailAbs;
-          separationRange = glm::max(bodyDiameter, bodyLength);
-        }
         float wSep = 0.0f;
         if (separationRange > 1e-4f) {
           wSep = 1.0f - (dist / separationRange);
@@ -2073,12 +2039,9 @@ void BoidUnit::computeBoidInteraction(float dt) {
         }
         sumSep += (diff * wSep) * (-1.0f);
 
-        float t = glm::clamp(dist / globalSpeciesParams[sid].cohesionRange,
-                             0.0f, 1.0f);
+        float t = glm::clamp(dist / cohesionRange, 0.0f, 1.0f);
         float wCoh = 1.0f - t;
-        const float calmFactor = 1.0f - selfThreat;
-        float stressFactor = 1.0f + selfStress * 0.2f * calmFactor;
-        wCoh *= stressFactor;
+        wCoh *= stressCohesionFactor;
 
         sumCohDir += diff * wCoh;
         wCohSum += wCoh;
@@ -2191,12 +2154,10 @@ void BoidUnit::computeBoidInteraction(float dt) {
         glm::vec3 cohDir = sumCohDir / wCohSum; // 重み付き平均方向
         float cohLen2 = glm::length2(cohDir);
         if (cohLen2 > EPS) {
-          localCenterDir = cohDir;
-          hasLocalCenterDir = true;
           const float edgeFactor =
               1.0f + glm::clamp(1.0f - phi, 0.0f, 1.0f); // 外縁ほど強化
           totalCohesion = (cohDir * (1.0f / glm::sqrt(cohLen2))) *
-                          (globalSpeciesParams[sid].cohesion * edgeFactor);
+                          (selfParams.cohesion * edgeFactor);
         }
       }
       // 混雑時は attraction を弱め、クラスタ内部の過凝集を抑える。

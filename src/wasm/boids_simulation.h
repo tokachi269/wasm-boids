@@ -192,6 +192,7 @@ public:
     void setUnitSimpleDensity(int unitId, float value);
     uintptr_t getUnitSimpleDensityPtr();
     int getUnitSimpleDensityCount() const;
+    bool isUnitSimpleDensityRequested() const;
     const std::vector<SpeciesSchoolCluster> *getSpeciesSchoolClusters(int speciesId) const;
     uintptr_t getSpeciesEnvelopePtr();
     int getSpeciesEnvelopeCount() const;
@@ -334,6 +335,7 @@ private:
         kDebugRequestSpeciesEnvelopes = 1 << 0,
         kDebugRequestSpeciesClusters = 1 << 1,
         kDebugRequestSpeciesSchoolClusters = 1 << 2,
+        kDebugRequestUnitSimpleDensity = 1 << 3,
     };
 
     // 可視化データの更新は「要求があった間だけ」有効化して、普段のコストを削る。
