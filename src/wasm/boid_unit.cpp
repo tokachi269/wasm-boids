@@ -514,63 +514,6 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
     }
 
     // -----------------------------------------------
-    // 散らばり抑制（固定ワールド原点を基準にした見えないソフト境界）
-    // - 一定距離を超えたらワールド中心へ「少しずつ」寄せる。
-    // - 反射/クランプではなく速度の舵取りで戻すため、境界で溜まりにくい。
-    // - 群れ全体と一緒に移動する root.center は使わず、長期的な流出を止める。
-    // - 追加コストは boid あたりベクトル演算のみ（近傍探索なし）。
-    // -----------------------------------------------
-    const float boundaryRadius = gSimulationTuning.softBoundaryRadius;
-    const float boundaryStart = gSimulationTuning.softBoundaryStart;
-    const float boundarySteer = gSimulationTuning.softBoundarySteer;
-    // 脅威中は「中心へ戻す」より回避を優先する（中心へ向かう見え方を防ぐ）。
-    const float boundaryThreat =
-      glm::clamp(unit->buf->predatorThreats[gIdx], 0.0f, 1.0f);
-    const float boundaryThreatAttenuation =
-      1.0f - glm::smoothstep(0.05f, 0.30f, boundaryThreat);
-    if (!isPredator && boundaryThreatAttenuation > 1e-4f &&
-      boundaryRadius > 0.0f && boundarySteer > 0.0f && boundaryRadius > boundaryStart) {
-      const glm::vec3 center(0.0f);
-      const glm::vec3 toCenter = center - position;
-      const float d2 = glm::length2(toCenter);
-      const float start2 = boundaryStart * boundaryStart;
-      if (d2 > start2) {
-        // sqrt は必要なときだけ。
-        const float invD = 1.0f / glm::sqrt(d2);
-        const float dist = d2 * invD;
-        const glm::vec3 dir = toCenter * invD;
-
-        // 距離に応じて 0→1 へ滑らかに増える係数。
-        const float t = glm::clamp((dist - boundaryStart) / (boundaryRadius - boundaryStart), 0.0f, 1.0f);
-        const float ramp = t * t * (3.0f - 2.0f * t); // smoothstep
-
-        // 外側ほど中心向き速度へ寄せる（境界で溜まりにくい）。
-        const float desiredSpeed = glm::max(maxSpeed, 0.0f);
-        const glm::vec3 desiredVel = dir * desiredSpeed;
-        acceleration += (desiredVel - velocity) *
-                        (boundarySteer * ramp * boundaryThreatAttenuation);
-      }
-    }
-
-    // -----------------------------------------------
-    // 全体ガガガ対策:
-    // 捕食者逃避 + 密集反発などが重なると、加速度が極端になって方向計算が暴れることがある。
-    // 「1ステップで速度変化が maxSpeed*2 を超えない」範囲に加速度をクリップする。
-    // length2 比較で弾き、必要なときだけ sqrt/inversesqrt を使う。
-    // -----------------------------------------------
-    if (dt > 0.0f && maxSpeed > 0.0f) {
-      const float a2 = glm::length2(acceleration);
-      // |dv| = |a|*dt <= maxSpeed*2
-      const float dvMax = maxSpeed * 2.0f;
-      const float a2Max = (dvMax * dvMax) / (dt * dt);
-      if (a2 > a2Max) {
-        const float invA = 1.0f / glm::sqrt(a2);
-        const float aMax = dvMax / dt;
-        acceleration *= (aMax * invA);
-      }
-    }
-
-    // -----------------------------------------------
     // 共通処理: 速度予測と回転角制限
     // -----------------------------------------------
     glm::vec3 desiredVelocity = velocity + acceleration * dt;
@@ -1886,23 +1829,11 @@ void BoidUnit::computeBoidInteraction(float dt) {
       const float closeCheckRange = leafCloseCheckRange;
       const float closeCheckRangeSq = leafCloseCheckRangeSq;
       const float separationRange = leafSeparationRange;
-      const float calmFactor = 1.0f - selfThreat;
-      const float stressCohesionFactor =
-          1.0f + selfStress * 0.2f * calmFactor;
       int closeNeighborCount = 0;
       int aggregatedNeighborCount = 0;
       // wSep(近さ)の平均で「詰まり具合」を取る。近傍数(maxNeighbors)が飽和しても
       // 密集/外縁の差が出るので、減速や凝集抑制のトリガとして使える。
       float crowdingWeightSum = 0.0f;
-      // 「分離が効くレベルに近い個体が複数いる」= 本当に詰まっている、を検出する。
-      // wSep は separationRange で正規化済みなので、閾値判定で個体数を数える。
-      int crowdCloseCount = 0;
-
-      // 近接反発（めり込み）を検出した場合だけ、速度を落として詰まり感を軽減する。
-      // NOTE:
-      // - 追加の重い計算は行わず、既に計算している penetrationRatio の最大値だけ保持する。
-      // - 近いが接触していない（=wSep だけ高い）ケースでは減速しない。
-      float maxPenetrationRatio = 0.0f;
 
       // ---- 近傍(leaf内) ----
       for (int entryIndex = 0; entryIndex < activeCount; ++entryIndex) {
@@ -1942,7 +1873,6 @@ void BoidUnit::computeBoidInteraction(float dt) {
           dist = glm::sqrt(distSq);
           const float penetration = glm::max(closeCheckRange - dist, 0.0f);
           const float penetrationRatio = penetration / glm::max(closeCheckRange, 1e-5f);
-          maxPenetrationRatio = glm::max(maxPenetrationRatio, penetrationRatio);
           // めり込みが深いほど急激に強くする（魚が重なるのを防ぐ定石）。
           // - 浅い接触では安定性を優先し、過剰反発を避ける
           // - 深いめり込みでは強制的に押し戻す（重なりを残さない）
@@ -1973,18 +1903,12 @@ void BoidUnit::computeBoidInteraction(float dt) {
         wSep = glm::clamp(wSep, 0.0f, 1.0f);
         wSep *= memoryFade;
         crowdingWeightSum += wSep;
-        if (wSep > 0.35f) {
-          ++crowdCloseCount;
-        }
         sumSep += (diff * wSep) * (-1.0f);
 
         // 凝集の重み計算：近いほど強い（距離の正規化を反転）
         float t = glm::clamp(dist / cohesionRange, 0.0f, 1.0f);
         float wCoh = 1.0f - t; // 近いほど強い（0=遠い、1=近い）
         wCoh *= memoryFade;
-        // stress に応じて凝集強度を増加（再結集フェーズ強化）
-        // 逃避中(threatが高い)は「再結集」を弱め、中心へ吸われにくくする。
-        wCoh *= stressCohesionFactor;
 
         // 相対ベクトル（diff）を重み付きで加算（世界座標を使わない）
         sumCohDir += diff * wCoh;
@@ -2019,7 +1943,6 @@ void BoidUnit::computeBoidInteraction(float dt) {
         if (distSq <= closeCheckRangeSq + 1e-6f && distSq > 1e-12f) {
           const float penetration = glm::max(closeCheckRange - dist, 0.0f);
           const float penetrationRatio = penetration / glm::max(closeCheckRange, 1e-5f);
-          maxPenetrationRatio = glm::max(maxPenetrationRatio, penetrationRatio);
           float response = penetrationRatio * penetrationRatio;
           response *= response; // 4乗
           const float overlapBoost = 1.0f + (penetrationRatio * penetrationRatio) * 3.0f;
@@ -2034,14 +1957,10 @@ void BoidUnit::computeBoidInteraction(float dt) {
         }
         wSep = glm::clamp(wSep, 0.0f, 1.0f);
         crowdingWeightSum += wSep;
-        if (wSep > 0.35f) {
-          ++crowdCloseCount;
-        }
         sumSep += (diff * wSep) * (-1.0f);
 
         float t = glm::clamp(dist / cohesionRange, 0.0f, 1.0f);
         float wCoh = 1.0f - t;
-        wCoh *= stressCohesionFactor;
 
         sumCohDir += diff * wCoh;
         wCohSum += wCoh;
@@ -2133,13 +2052,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
               ? glm::clamp(crowdingWeightSum / float(aggregatedNeighborCount), 0.0f, 1.0f)
               : 0.0f;
           const float crowdPackingSignal = glm::smoothstep(0.20f, 0.55f, crowdingAvg);
-            const float crowdCloseRatio =
-              aggregatedNeighborCount > 0
-                ? glm::clamp(float(crowdCloseCount) / float(aggregatedNeighborCount), 0.0f, 1.0f)
-                : 0.0f;
-            // 近い個体が一定割合を超えたら「密集」とみなす。
-            const float crowdCloseSignal = glm::smoothstep(0.10f, 0.35f, crowdCloseRatio);
-            const float crowded = glm::max(crowdPhiSignal, glm::max(crowdPackingSignal, crowdCloseSignal));
+          const float crowded = glm::max(crowdPhiSignal, crowdPackingSignal);
         constexpr float kAttractionMinScale = 0.42f;
         float autonomousAttractionScale =
           glm::mix(1.0f, kAttractionMinScale, crowded);
@@ -2294,14 +2207,6 @@ void BoidUnit::computeBoidInteraction(float dt) {
         }
       }
       // --- 最終的な加速度をバッファに書き込み ---
-      if (maxPenetrationRatio > 0.0f) {
-        // 密集して動けないときは、その分「速度を落として押し合い」を解消しやすくする。
-        // - 速度が高いほど詰まりが悪化しやすいので、速度に比例した抵抗（drag）を与える。
-        // - 深いめり込みほど強く、浅い接触ではほぼ効かない。
-        const float slowSignal = glm::smoothstep(0.10f, 0.55f, maxPenetrationRatio);
-        const float kCrowdingDrag = 10.0f;
-        buf->accelerations[gIdx] += (-vel) * (slowSignal * kCrowdingDrag);
-      }
       buf->accelerations[gIdx] +=
           totalSeparation + combinedAlignment + combinedCohesion;
     }

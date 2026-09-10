@@ -30,7 +30,7 @@
                   <input
                     type="range"
                     min="0"
-                    max="5"
+                    max="2"
                     step="0.05"
                     v-model.number="systemSettings.threatDecay"
                     :title="tuningHelp.threatDecay"
@@ -66,7 +66,7 @@
                   <input
                     type="range"
                     min="0"
-                    max="15"
+                    max="12"
                     step="0.1"
                     v-model.number="systemSettings.baseEscapeStrength"
                     :title="tuningHelp.baseEscapeStrength"
@@ -84,7 +84,7 @@
                   <input
                     type="range"
                     min="0"
-                    max="0.005"
+                    max="0.0005"
                     step="0.00001"
                     v-model.number="systemSettings.schoolPullCoefficient"
                     :title="tuningHelp.schoolPullCoefficient"
@@ -455,17 +455,17 @@ const DEFAULT_SETTINGS = [
     species: "Boids", // 種族名
     count: defaultBoidCount, // 群れの数（低スペックでは軽量化）
     // 画面ガワの初期値（画像の値）
-    cohesion: 5.0, // 凝集
+    cohesion: 4.5, // 凝集
     cohesionRange: 5, // 凝集範囲
-    separation: 0.75, // 分離
+    separation: 0.59, // 分離
     separationRange: 0.4, // 分離範囲
-    alignment: 8.0, // 整列
+    alignment: 6.0, // 整列
     alignmentRange: 1, // 整列範囲
     maxSpeed: 0.35, // 最大速度
-    maxTurnAngle: 0.75, // 最大曲がり（曲率）
+    maxTurnAngle: 0.42, // 最大曲がり（曲率）
     maxNeighbors: 4, // 最大近傍数
-    horizontalTorque: 0.03, // 水平化トルク
-    torqueStrength: 1.5, // 回転トルク強度
+    horizontalTorque: 0.02, // 水平化トルク
+    torqueStrength: 0.3, // 回転トルク強度
     lambda: 0.102, // 速度調整係数（減衰係数）
     tau: 0.5, // 記憶時間
     predatorAlertRadius: 2.5, // 捕食者を察知して逃避を始める距離
@@ -497,10 +497,10 @@ const DEFAULT_SETTINGS = [
   },
 ];
 const DEFAULT_TUNING_SETTINGS = {
-  threatDecay: 1.3, // 脅威減衰速度（1/sec）。少し長めに残して空隙を維持
+  threatDecay: 1.0, // 脅威減衰速度（1/sec）
   maxEscapeWeight: 0.6, // 逃避方向の最大割合（0〜1）
-  baseEscapeStrength: 8.0, // 逃避舵取り強度（目標速度へ寄せる強さ）
-  schoolPullCoefficient: 0.0002, // 大クラスタ引力係数
+  baseEscapeStrength: 6.0, // 逃避舵取り強度（目標速度へ寄せる強さ）
+  schoolPullCoefficient: 0.0001, // 大クラスタ引力係数
 };
   
 // 調整スライダーの説明（ユーザ目線）。ホバー時に title として表示する。
