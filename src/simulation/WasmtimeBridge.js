@@ -315,10 +315,13 @@ export class WasmtimeBridge {
       return Number.isFinite(num) ? num : fallback;
     };
     handle({
-      threatDecay: toNumber(params.threatDecay, 0.5),
-      maxEscapeWeight: toNumber(params.maxEscapeWeight, 1.0),
-      baseEscapeStrength: toNumber(params.baseEscapeStrength, 3.0),
-      schoolPullCoefficient: Math.max(0, toNumber(params.schoolPullCoefficient, 0.0008)),
+      threatDecay: toNumber(params.threatDecay, 1.0),
+      maxEscapeWeight: toNumber(params.maxEscapeWeight, 0.6),
+      baseEscapeStrength: toNumber(params.baseEscapeStrength, 6.0),
+      schoolPullCoefficient: Math.max(0, toNumber(params.schoolPullCoefficient, 0.0001)),
+      schoolPullStartDistance: Math.max(0, toNumber(params.schoolPullStartDistance, 0.0)),
+      schoolPullFullDistance: Math.max(0, toNumber(params.schoolPullFullDistance, 3.0)),
+      schoolPullDenseScale: Math.max(0, Math.min(1, toNumber(params.schoolPullDenseScale, 0.7))),
 
       // 散らばり過ぎ防止（固定ワールド原点を基準にした見えないソフト境界）。
       softBoundaryRadius: Math.max(0, toNumber(params.softBoundaryRadius, 100.0)),

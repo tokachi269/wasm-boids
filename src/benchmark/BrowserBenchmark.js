@@ -27,6 +27,7 @@ export function readBrowserBenchmarkConfig(search = '') {
     seed: integerParam(params, 'seed', 1, 0) >>> 0,
     boids: integerParam(params, 'boids', 5000, 3),
     taskLimit: integerParam(params, 'tasks', 1, 0),
+    quantizePositions: params.get('quantize') === '1',
   };
 }
 
@@ -136,6 +137,7 @@ export class BrowserBenchmark {
       seed: this.config.seed,
       boids: this.config.boids,
       task_limit: this.config.taskLimit,
+      quantize_positions: this.config.quantizePositions,
       timing_ms: Object.fromEntries(
         STAGE_NAMES.map((name) => [name, summarize(this.samples[name])]),
       ),

@@ -170,6 +170,7 @@ update({
   posRange,
   originPosition,
   preserveLod = false,
+  quantizePositions = false,
 }) {
   if (!this.instancedMeshHigh || !this.instancedMeshLow || !this.bufferSetHigh || !this.bufferSetLow) {
     return { visibleCount: 0, lodFlags: null };
@@ -381,7 +382,7 @@ update({
       const outQuat = writeIndex * 4;
       const outTail = writeIndex * 3;
 
-      // 16bit normalized: 0..1 に正規化して Uint16 へパック
+      // 診断用Float32: origin/extentによる正規化は維持し、16bit丸めだけ除外する。
       {
         const lx = Math.max(-extent, Math.min(extent, px - originX));
         const ly = Math.max(-extent, Math.min(extent, py - originY));
@@ -391,9 +392,9 @@ update({
         const ny = Math.max(0, Math.min(1, ly * 0.5 * invExtent + 0.5));
         const nz = Math.max(0, Math.min(1, lz * 0.5 * invExtent + 0.5));
 
-        highPosArray[outPos] = ((nx * 65535 + 0.5) | 0);
-        highPosArray[outPos + 1] = ((ny * 65535 + 0.5) | 0);
-        highPosArray[outPos + 2] = ((nz * 65535 + 0.5) | 0);
+        highPosArray[outPos] = quantizePositions ? Math.round(nx * 65535) / 65535 : nx;
+        highPosArray[outPos + 1] = quantizePositions ? Math.round(ny * 65535) / 65535 : ny;
+        highPosArray[outPos + 2] = quantizePositions ? Math.round(nz * 65535) / 65535 : nz;
       }
       highQuatArray[outQuat] = qx;
       highQuatArray[outQuat + 1] = qy;
@@ -420,7 +421,7 @@ update({
       const outQuat = writeIndex * 4;
       const outTail = writeIndex * 3;
 
-      // 16bit normalized: 0..1 に正規化して Uint16 へパック
+      // 診断用Float32: origin/extentによる正規化は維持し、16bit丸めだけ除外する。
       {
         const lx = Math.max(-extent, Math.min(extent, px - originX));
         const ly = Math.max(-extent, Math.min(extent, py - originY));
@@ -430,9 +431,9 @@ update({
         const ny = Math.max(0, Math.min(1, ly * 0.5 * invExtent + 0.5));
         const nz = Math.max(0, Math.min(1, lz * 0.5 * invExtent + 0.5));
 
-        lowPosArray[outPos] = ((nx * 65535 + 0.5) | 0);
-        lowPosArray[outPos + 1] = ((ny * 65535 + 0.5) | 0);
-        lowPosArray[outPos + 2] = ((nz * 65535 + 0.5) | 0);
+        lowPosArray[outPos] = quantizePositions ? Math.round(nx * 65535) / 65535 : nx;
+        lowPosArray[outPos + 1] = quantizePositions ? Math.round(ny * 65535) / 65535 : ny;
+        lowPosArray[outPos + 2] = quantizePositions ? Math.round(nz * 65535) / 65535 : nz;
       }
       lowQuatArray[outQuat] = qx;
       lowQuatArray[outQuat + 1] = qy;
@@ -649,8 +650,8 @@ update({
 
   createBufferSet(count) {
     return {
-      // instancePos は Uint16 normalized (0..1) として送る
-      pos: this.createNormalizedAttributeSet(count, 3, Uint16Array),
+      // 診断用にFloat32の0..1値を送り、動的extent上の16bit量子化だけ除外する。
+      pos: this.createAttributeSet(count, 3),
       quat: this.createAttributeSet(count, 4),
       tailPhase: this.createAttributeSet(count, 1),
       tailParams: this.createAttributeSet(count, 3),
@@ -661,7 +662,7 @@ update({
     // 初期状態では全インスタンスを画面外へ退避させておく
     for (const attr of bufferSet.pos) {
       const array = attr.array;
-      // Uint16 normalized の場合、描画しない（mesh.count=0）前提でゼロクリア
+      // 描画しない（mesh.count=0）前提でゼロクリア
       array.fill(0);
     }
     for (const attr of bufferSet.quat) {

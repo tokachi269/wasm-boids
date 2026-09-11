@@ -41,6 +41,13 @@ void setSimulationTuningParams(const SimulationTuningParams &params) {
     gSimulationTuning = params;
     gSimulationTuning.maxEscapeWeight = std::clamp(gSimulationTuning.maxEscapeWeight, 0.0f, 1.0f);
     gSimulationTuning.schoolPullCoefficient = std::max(gSimulationTuning.schoolPullCoefficient, 0.0f);
+    gSimulationTuning.schoolPullStartDistance =
+      std::max(gSimulationTuning.schoolPullStartDistance, 0.0f);
+    gSimulationTuning.schoolPullFullDistance = std::max(
+      gSimulationTuning.schoolPullFullDistance,
+      gSimulationTuning.schoolPullStartDistance + 1e-3f);
+    gSimulationTuning.schoolPullDenseScale =
+      std::clamp(gSimulationTuning.schoolPullDenseScale, 0.0f, 1.0f);
 
     // ソフト境界は「無効化しやすさ」と「破綻防止」を優先してクランプ。
     gSimulationTuning.softBoundaryRadius = std::max(gSimulationTuning.softBoundaryRadius, 0.0f);
@@ -95,6 +102,9 @@ value_object<SimulationTuningParams>("SimulationTuningParams")
     .field("maxEscapeWeight", &SimulationTuningParams::maxEscapeWeight)
     .field("baseEscapeStrength", &SimulationTuningParams::baseEscapeStrength)
     .field("schoolPullCoefficient", &SimulationTuningParams::schoolPullCoefficient)
+    .field("schoolPullStartDistance", &SimulationTuningParams::schoolPullStartDistance)
+    .field("schoolPullFullDistance", &SimulationTuningParams::schoolPullFullDistance)
+    .field("schoolPullDenseScale", &SimulationTuningParams::schoolPullDenseScale)
     .field("softBoundaryRadius", &SimulationTuningParams::softBoundaryRadius)
     .field("softBoundaryStart", &SimulationTuningParams::softBoundaryStart)
     .field("softBoundarySteer", &SimulationTuningParams::softBoundarySteer);

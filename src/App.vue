@@ -84,8 +84,8 @@
                   <input
                     type="range"
                     min="0"
-                    max="0.0005"
-                    step="0.00001"
+                    max="0.0002"
+                    step="0.000001"
                     v-model.number="systemSettings.schoolPullCoefficient"
                     :title="tuningHelp.schoolPullCoefficient"
                   />
@@ -93,10 +93,25 @@
                     class="value-input"
                     type="number"
                     min="0"
-                    step="0.00001"
+                    step="0.000001"
                     v-model.number="systemSettings.schoolPullCoefficient"
                     :title="tuningHelp.schoolPullCoefficient"
                   />
+                </div>
+                <div class="setting-row">
+                  <label :title="tuningHelp.schoolPullStartDistance">引力開始距離<br />(Pull Start):</label>
+                  <input type="range" min="0" max="60" step="0.5" v-model.number="systemSettings.schoolPullStartDistance" :title="tuningHelp.schoolPullStartDistance" />
+                  <input class="value-input" type="number" min="0" step="0.5" v-model.number="systemSettings.schoolPullStartDistance" :title="tuningHelp.schoolPullStartDistance" />
+                </div>
+                <div class="setting-row">
+                  <label :title="tuningHelp.schoolPullFullDistance">最大引力距離<br />(Pull Full):</label>
+                  <input type="range" min="1" max="100" step="0.5" v-model.number="systemSettings.schoolPullFullDistance" :title="tuningHelp.schoolPullFullDistance" />
+                  <input class="value-input" type="number" min="0" step="0.5" v-model.number="systemSettings.schoolPullFullDistance" :title="tuningHelp.schoolPullFullDistance" />
+                </div>
+                <div class="setting-row">
+                  <label :title="tuningHelp.schoolPullDenseScale">密集時引力倍率<br />(Dense Scale):</label>
+                  <input type="range" min="0" max="1" step="0.01" v-model.number="systemSettings.schoolPullDenseScale" :title="tuningHelp.schoolPullDenseScale" />
+                  <input class="value-input" type="number" min="0" max="1" step="0.01" v-model.number="systemSettings.schoolPullDenseScale" :title="tuningHelp.schoolPullDenseScale" />
                 </div>
               </div>
             </details>
@@ -108,6 +123,9 @@
                 <span class="species-title">Debug</span>
               </summary>
               <div class="species-content debug-content">
+                <div class="build-version">
+                  Build <code>{{ buildVersion }}</code>
+                </div>
                 <label class="debug-checkbox" :title="debugHelp.enableFogPipeline">
                   <input
                     type="checkbox"
@@ -345,6 +363,8 @@ import {
 } from "./benchmark/BrowserBenchmark.js";
 import { LivePerformanceMonitor } from "./benchmark/LivePerformanceMonitor.js";
 
+const buildVersion = process.env.VUE_APP_BUILD_VERSION || "unknown";
+
 // WASM 側の初期配置レンジ（posRange）。描画側の位置量子化レンジ決定にも使う。
 const DEFAULT_SIMULATION_POS_RANGE = 4;
 const browserBenchmarkConfig = readBrowserBenchmarkConfig(
@@ -455,17 +475,17 @@ const DEFAULT_SETTINGS = [
     species: "Boids", // 種族名
     count: defaultBoidCount, // 群れの数（低スペックでは軽量化）
     // 画面ガワの初期値（画像の値）
-    cohesion: 4.5, // 凝集
-    cohesionRange: 5, // 凝集範囲
-    separation: 0.59, // 分離
+    cohesion: 5.43, // 凝集
+    cohesionRange: 4, // 凝集範囲
+    separation: 0.4, // 分離
     separationRange: 0.4, // 分離範囲
     alignment: 6.0, // 整列
     alignmentRange: 1, // 整列範囲
     maxSpeed: 0.35, // 最大速度
     maxTurnAngle: 0.42, // 最大曲がり（曲率）
     maxNeighbors: 4, // 最大近傍数
-    horizontalTorque: 0.02, // 水平化トルク
-    torqueStrength: 0.3, // 回転トルク強度
+    horizontalTorque: 0.026, // 水平化トルク
+    torqueStrength: 0.1, // 回転トルク強度
     lambda: 0.102, // 速度調整係数（減衰係数）
     tau: 0.5, // 記憶時間
     predatorAlertRadius: 2.5, // 捕食者を察知して逃避を始める距離
@@ -501,6 +521,9 @@ const DEFAULT_TUNING_SETTINGS = {
   maxEscapeWeight: 0.6, // 逃避方向の最大割合（0〜1）
   baseEscapeStrength: 6.0, // 逃避舵取り強度（目標速度へ寄せる強さ）
   schoolPullCoefficient: 0.0001, // 大クラスタ引力係数
+  schoolPullStartDistance: 0.0,
+  schoolPullFullDistance: 3.0,
+  schoolPullDenseScale: 0.7,
 };
   
 // 調整スライダーの説明（ユーザ目線）。ホバー時に title として表示する。
@@ -510,6 +533,9 @@ const tuningHelp = {
   maxEscapeWeight: '逃避行動をどれだけ優先するか（0〜1）。1 に近いほど、危険時はほぼ逃げが優先されます。',
   baseEscapeStrength: '逃避の舵取り強度（目標速度へ寄せる強さ）。大きいほど素早く逃げ方向へ乗ります。',
   schoolPullCoefficient: '大きな群れ（大クラスタ）へ引き寄せる強さ。大きいほど大群にまとまりやすいです。',
+  schoolPullStartDistance: '大クラスタ中心からこの距離までは引力を掛けません。',
+  schoolPullFullDistance: 'この距離で設定した大クラスタ引力が最大になります。',
+  schoolPullDenseScale: '近傍が十分いる個体へ残す引力の倍率です。0なら密集時は無効、1なら密度を無視します。',
 };
 
 // デバッグ表示/負荷設定の説明（ユーザ目線）。
@@ -2954,6 +2980,7 @@ function animate(frameTimeMs) {
       predatorCount,
       posRange: DEFAULT_SIMULATION_POS_RANGE,
       preserveLod: paused.value,
+      quantizePositions: browserBenchmarkConfig?.quantizePositions ?? false,
     });
   const updateInfo = browserBenchmark
     ? browserBenchmark.measure('js_instance_packing', updateInstancing)
@@ -3676,6 +3703,16 @@ watch([showUnitSpheres, showUnitLines], ([newSpheres, newLines]) => {
 .debug-content > .debug-checkbox {
   display: block;
   margin-bottom: 6px;
+}
+
+.build-version {
+  margin-bottom: 8px;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 11px;
+}
+
+.build-version code {
+  color: rgba(255, 255, 255, 0.9);
 }
 
 .fog-tuning-section > summary {

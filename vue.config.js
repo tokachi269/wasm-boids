@@ -1,6 +1,55 @@
 const { defineConfig } = require('@vue/cli-service')
 const CopyWebpackPlugin = require('copy-webpack-plugin');
+const crypto = require('crypto');
+const fs = require('fs');
 const path = require('path');
+
+function readCommitHash() {
+    try {
+        const gitDir = path.resolve(__dirname, '.git');
+        const head = fs.readFileSync(path.join(gitDir, 'HEAD'), 'utf8').trim();
+        if (!head.startsWith('ref: ')) {
+            return head.slice(0, 8);
+        }
+        const refName = head.slice(5);
+        const looseRef = path.join(gitDir, ...refName.split('/'));
+        if (fs.existsSync(looseRef)) {
+            return fs.readFileSync(looseRef, 'utf8').trim().slice(0, 8);
+        }
+        const packedRefs = fs.readFileSync(
+            path.join(gitDir, 'packed-refs'),
+            'utf8',
+        );
+        const match = packedRefs
+            .split(/\r?\n/)
+            .find((line) => line.endsWith(` ${refName}`));
+        return match ? match.slice(0, 8) : 'unknown';
+    } catch {
+        return 'unknown';
+    }
+}
+
+function hashSourceTree(directory, hash) {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })
+        .sort((a, b) => a.name.localeCompare(b.name))) {
+        if (entry.name === 'build') {
+            continue;
+        }
+        const fullPath = path.join(directory, entry.name);
+        if (entry.isDirectory()) {
+            hashSourceTree(fullPath, hash);
+        } else if (entry.isFile()) {
+            hash.update(path.relative(__dirname, fullPath));
+            hash.update(fs.readFileSync(fullPath));
+        }
+    }
+}
+
+const sourceHash = crypto.createHash('sha256');
+hashSourceTree(path.resolve(__dirname, 'src'), sourceHash);
+process.env.VUE_APP_BUILD_VERSION =
+    `${readCommitHash()}/${sourceHash.digest('hex').slice(0, 8)}`;
+
 // 環境変数からWASMビルドディレクトリを取得（serve時はdev、build時はprod）
 const wasmBuildDir = process.env.WASM_BUILD_DIR || 'prod';
 const wasmOutputDir = path.resolve(__dirname, 'src/wasm/build', wasmBuildDir);

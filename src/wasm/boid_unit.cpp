@@ -55,6 +55,18 @@ constexpr float kTwoPi = 6.28318530718f;
 constexpr float kSchoolConfidencePullMin = 0.10f;
 constexpr float kSchoolConfidencePullFull = 0.50f;
 
+inline float schoolPullStateScale(float centerDistance, float phi) {
+  const float start = glm::max(gSimulationTuning.schoolPullStartDistance, 0.0f);
+  const float full = glm::max(gSimulationTuning.schoolPullFullDistance,
+                              start + 1e-3f);
+  const float distanceGate = glm::smoothstep(start, full, centerDistance);
+  const float sparse =
+      1.0f - glm::smoothstep(0.25f, 0.75f, glm::clamp(phi, 0.0f, 1.0f));
+  const float denseScale =
+      glm::clamp(gSimulationTuning.schoolPullDenseScale, 0.0f, 1.0f);
+  return distanceGate * glm::mix(denseScale, 1.0f, sparse);
+}
+
 // ------------------------------------------------------------
 // NaN/Inf を「作らない」ための最小限ガード
 // ------------------------------------------------------------
@@ -1796,7 +1808,8 @@ void BoidUnit::computeBoidInteraction(float dt) {
           const float threatScatter =
               glm::smoothstep(0.10f, 0.55f, threatLevel);
           clusterPull *= confidenceScale * (1.0f - threatScatter) *
-                         schoolInfluenceScale;
+                         schoolInfluenceScale *
+                         schoolPullStateScale(clusterDist, 0.0f);
           buf->accelerations[gIdx] += clusterDir * clusterPull;
           if (simulation.isBehaviorInspectorTarget(gIdx)) {
             simulation.recordBehaviorInteraction(
@@ -2130,7 +2143,8 @@ void BoidUnit::computeBoidInteraction(float dt) {
             const float confidenceScale = glm::smoothstep(
                 kSchoolConfidencePullMin, kSchoolConfidencePullFull,
                 schoolConfidence);
-            clusterPull *= confidenceScale * schoolInfluenceScale;
+            clusterPull *= confidenceScale * schoolInfluenceScale *
+                           schoolPullStateScale(clusterDist, phi);
             // 脅威中は「群れ中心へ戻す」より「回避/散開」を優先する。
             const float threatScatter = glm::smoothstep(0.10f, 0.55f, threatLevel);
             const float clusterThreatScale = 1.0f - threatScatter;
