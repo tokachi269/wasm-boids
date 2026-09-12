@@ -34,12 +34,14 @@ constexpr float kEnvelopeRadiusBlend = 0.18f; // 0..1。大きいほど半径が
 
 constexpr int kMaxClustersPerSpecies = 32;        // 種あたりの小クラスター上限（大きいほど追跡が細かいが重い）
 constexpr float kClusterHistorySeconds = 10.0f;   // 秒。EMAの時定数（大きいほど滑らかだが追従が遅い）
-constexpr int kClusterRetainFrames = 600;         // フレーム。ヒットしないクラスターの保持期間（大きいほど消えにくい）
+constexpr float kReferenceFrameSeconds = 1.0f / 60.0f;
+constexpr float kClusterUpdatePeriodSeconds = 3.0f * kReferenceFrameSeconds;
+constexpr float kClusterRetainSeconds = 600.0f * kReferenceFrameSeconds;
 constexpr float kClusterCaptureRadiusScale = 0.4f;// cohesionRange から捕捉半径を作る係数（大きいほど吸い込みやすい）
 constexpr float kClusterVelocityAlignBias = 0.35f;// 0..1目安。速度方向が近いものを優先する度合い（大きいほど方向一致重視）
 constexpr int kClusterMinLeafBoids = 6;           // これ未満の leaf はノイズ候補として原則無視する
 constexpr float kClusterDebugMinWeight = 18.0f;   // 可視化や school 入力に使う最小重み
-constexpr int kClusterDebugMaxStaleFrames = 45;   // これより古い cluster は可視対象から外す
+constexpr float kClusterDebugMaxStaleSeconds = 45.0f * kReferenceFrameSeconds;
 
 // dist <= linkScale * (r_i + r_j) で同一群れ候補とする（大きいほど群れが繋がりやすい）。
 constexpr float kSchoolLinkScale = 1.35f;
@@ -48,7 +50,7 @@ constexpr float kSchoolConfidenceRiseScale = 0.40f;
 constexpr float kSchoolConfidenceDecayScale = 0.50f;
 constexpr float kSchoolCenterMaxStepRadiusScale = 0.035f;
 constexpr float kSchoolCenterMaxStepSpeedScale = 3.0f;
-constexpr int kSchoolReplaceMinStaleFrames = 20;
+constexpr float kSchoolReplaceMinStaleSeconds = 20.0f * kReferenceFrameSeconds;
 
 constexpr int kEnvelopeUpdateStride = 8;          // フレーム。エンベロープ更新間引き（大きいほど軽いが表示遅延）
 constexpr int kTreeRebuildStride = 10;            // フレーム。ツリー全再構築間隔（大きいほど軽いが適応が遅い）
@@ -58,10 +60,36 @@ constexpr int kDebugRequestKeepAliveFrames = 120; // フレーム。デバッグ
 
 namespace {
 template <typename ClusterType>
-bool isFreshCluster(const ClusterType &cluster, int currentFrame,
-                    int maxStaleFrames, float minWeight) {
+bool isFreshCluster(const ClusterType &cluster, float currentTimeSeconds,
+                    float maxStaleSeconds, float minWeight) {
   return cluster.active && cluster.weight >= minWeight &&
-         (currentFrame - cluster.lastUpdateFrame) <= maxStaleFrames;
+         (currentTimeSeconds - cluster.lastUpdateTimeSeconds) <= maxStaleSeconds;
+}
+
+float alphaForElapsed(float referenceAlpha, float elapsedSeconds,
+                      float referenceSeconds = kClusterUpdatePeriodSeconds) {
+  const float alpha = glm::clamp(referenceAlpha, 0.0f, 1.0f);
+  if (!(elapsedSeconds > 0.0f) || alpha <= 0.0f) {
+    return 0.0f;
+  }
+  if (alpha >= 1.0f) {
+    return 1.0f;
+  }
+  return -std::expm1(std::log1p(-alpha) *
+                     (elapsedSeconds / referenceSeconds));
+}
+
+float retentionForElapsed(float referenceRetention, float elapsedSeconds,
+                          float referenceSeconds = kClusterUpdatePeriodSeconds) {
+  const float retention = glm::clamp(referenceRetention, 0.0f, 1.0f);
+  if (!(elapsedSeconds > 0.0f) || retention >= 1.0f) {
+    return 1.0f;
+  }
+  if (retention <= 0.0f) {
+    return 0.0f;
+  }
+  return std::exp(std::log(retention) *
+                  (elapsedSeconds / referenceSeconds));
 }
 } // namespace
 
@@ -412,7 +440,7 @@ void BoidSimulation::updateSpeciesClusters(float dt) {
         cluster.radius = glm::clamp(glm::max(params.separationRange * 2.0f, leafRadius * 1.25f),
                                     1.0f, 120.0f);
         cluster.weight = static_cast<float>(leafBoidCount);
-        cluster.lastUpdateFrame = frameCount;
+        cluster.lastUpdateTimeSeconds = simulationTimeSeconds_;
         cluster.active = true;
         clusters.push_back(cluster);
         bestIndex = static_cast<int>(clusters.size()) - 1;
@@ -420,9 +448,10 @@ void BoidSimulation::updateSpeciesClusters(float dt) {
         int weakest = 0;
         float weakestScore = std::numeric_limits<float>::max();
         for (int c = 0; c < static_cast<int>(clusters.size()); ++c) {
-          const int staleFrames = frameCount - clusters[c].lastUpdateFrame;
-          const float candidateScore = staleFrames > kClusterDebugMaxStaleFrames
-                                           ? -static_cast<float>(staleFrames)
+          const float staleSeconds =
+              simulationTimeSeconds_ - clusters[c].lastUpdateTimeSeconds;
+          const float candidateScore = staleSeconds > kClusterDebugMaxStaleSeconds
+                                           ? -staleSeconds
                                            : clusters[c].weight;
           if (candidateScore < weakestScore) {
             weakestScore = candidateScore;
@@ -435,7 +464,7 @@ void BoidSimulation::updateSpeciesClusters(float dt) {
         cluster.radius = glm::clamp(glm::max(params.separationRange * 2.0f, leafRadius * 1.25f),
                                     1.0f, 120.0f);
         cluster.weight = static_cast<float>(leafBoidCount);
-        cluster.lastUpdateFrame = frameCount;
+        cluster.lastUpdateTimeSeconds = simulationTimeSeconds_;
         cluster.active = true;
         cluster.frameContributionCount = 0;
         cluster.frameSumPosition = glm::vec3(0.0f);
@@ -457,8 +486,9 @@ void BoidSimulation::updateSpeciesClusters(float dt) {
     assigned.frameContributionCount += leafBoidCount;
   });
 
-  const float decayPerFrame = glm::clamp(safeDt / kClusterHistorySeconds, 0.002f,
-                                         0.25f);
+  const float referenceDecayAlpha =
+      1.0f - std::exp(-kClusterUpdatePeriodSeconds /
+                      kClusterHistorySeconds);
   for (std::size_t sid = 0; sid < speciesCount; ++sid) {
     const SpeciesParams &params = globalSpeciesParams[sid];
     auto &clusters = speciesClusters[sid];
@@ -481,20 +511,29 @@ void BoidSimulation::updateSpeciesClusters(float dt) {
         const float radiusTarget = glm::clamp(
             stdRadius * 2.5f + glm::max(params.separationRange * 0.5f, 0.25f),
             0.75f, 240.0f);
-        const float hitBlend = glm::clamp(
-            decayPerFrame * static_cast<float>(cluster.frameContributionCount),
-          0.04f, 0.35f);
+        const float referenceHitBlend = glm::clamp(
+            referenceDecayAlpha *
+                static_cast<float>(cluster.frameContributionCount),
+            0.04f, 0.35f);
+        const float hitBlend =
+            alphaForElapsed(referenceHitBlend, safeDt);
         cluster.center = glm::mix(cluster.center, samplePos, hitBlend);
         cluster.avgVelocity = glm::mix(cluster.avgVelocity, sampleVel, hitBlend);
-        cluster.radius = glm::mix(cluster.radius, radiusTarget, 0.12f);
+        cluster.radius = glm::mix(
+            cluster.radius, radiusTarget, alphaForElapsed(0.12f, safeDt));
         cluster.weight = glm::mix(
           cluster.weight,
-          static_cast<float>(cluster.frameContributionCount), 0.18f);
-        cluster.lastUpdateFrame = frameCount;
+          static_cast<float>(cluster.frameContributionCount),
+          alphaForElapsed(0.18f, safeDt));
+        cluster.lastUpdateTimeSeconds = simulationTimeSeconds_;
         cluster.active = true;
       } else {
-        cluster.weight *= glm::clamp(1.0f - decayPerFrame * 1.3f, 0.0f, 1.0f);
-        if ((frameCount - cluster.lastUpdateFrame) > kClusterRetainFrames ||
+        const float referenceRetention = glm::clamp(
+            1.0f - referenceDecayAlpha * 1.3f, 0.0f, 1.0f);
+        cluster.weight *=
+            retentionForElapsed(referenceRetention, safeDt);
+        if ((simulationTimeSeconds_ - cluster.lastUpdateTimeSeconds) >
+                kClusterRetainSeconds ||
             cluster.weight < 0.25f) {
           cluster.active = false;
         }
@@ -514,8 +553,8 @@ void BoidSimulation::updateSpeciesClusters(float dt) {
           if (a.active != b.active) {
             return a.active && !b.active;
           }
-          if (a.lastUpdateFrame != b.lastUpdateFrame) {
-            return a.lastUpdateFrame > b.lastUpdateFrame;
+          if (a.lastUpdateTimeSeconds != b.lastUpdateTimeSeconds) {
+            return a.lastUpdateTimeSeconds > b.lastUpdateTimeSeconds;
           }
           return a.weight > b.weight;
         });
@@ -573,7 +612,8 @@ void BoidSimulation::rebuildSpeciesClusterDebugBuffer() {
   for (std::size_t sid = 0; sid < speciesClusters.size(); ++sid) {
     const auto &clusters = speciesClusters[sid];
     for (const auto &cluster : clusters) {
-      if (!isFreshCluster(cluster, frameCount, kClusterDebugMaxStaleFrames,
+      if (!isFreshCluster(cluster, simulationTimeSeconds_,
+                          kClusterDebugMaxStaleSeconds,
                           kClusterDebugMinWeight)) {
         continue;
       }
@@ -608,7 +648,8 @@ void BoidSimulation::rebuildSpeciesSchoolClusterDebugBuffer() {
   for (std::size_t sid = 0; sid < speciesSchoolClusters.size(); ++sid) {
     const auto &schools = speciesSchoolClusters[sid];
     for (const auto &school : schools) {
-      if (!isFreshCluster(school, frameCount, kClusterDebugMaxStaleFrames,
+      if (!isFreshCluster(school, simulationTimeSeconds_,
+                          kClusterDebugMaxStaleSeconds,
                           kClusterDebugMinWeight)) {
         continue;
       }
@@ -994,6 +1035,8 @@ void BoidSimulation::update(float dt) {
   if (!std::isfinite(dt) || dt < 0.0f) {
     dt = 0.0f;
   }
+  const float safeDt = glm::clamp(dt, 0.0f, 0.1f);
+  simulationTimeSeconds_ += safeDt;
 
   if (behaviorInspectorIndex_ >= 0) {
     behaviorInspectorBuffer_.fill(0.0f);
@@ -1016,8 +1059,8 @@ void BoidSimulation::update(float dt) {
   if (root) {
     try {
       setRenderPointersToReadBuffers();
-      root->updateRecursive(glm::clamp(dt, 0.0f, 0.1f) * 5);
-      if (dt > 0.0f) {
+      root->updateRecursive(safeDt * 5.0f);
+      if (safeDt > 0.0f) {
         setRenderPointersToWriteBuffers();
         buf.swapReadWrite();
         setRenderPointersToReadBuffers();
@@ -1036,29 +1079,44 @@ void BoidSimulation::update(float dt) {
   // speciesClusters / speciesSchoolClusters は「デバッグ描画」だけでなく、
   // シミュレーション本体（例: 大クラスタ引力）でも参照される。
   // そのため計算自体は常時行い、JSへ渡すフラット配列の再パックだけを要求駆動にする。
-  // EMA の時間スケールを保つため、dt は蓄積してまとめて渡す。
-  // フレーム間引きでクラスター更新のコストを抑える（大きいほど軽いが追従が遅い）。
-  constexpr int kClusterUpdateStride = 3;
+  // クラスター更新は render frame 数ではなく経過時間で約20Hzに保つ。
   const auto clusterUpdateStart = PhaseClock::now();
-  clusterUpdateDtAccumulator_ += dt;
-  // 停止復帰などで dt が溜まりすぎると、一括更新が強すぎて不安定になり得る。
-  clusterUpdateDtAccumulator_ = glm::min(clusterUpdateDtAccumulator_, 0.5f);
-  if ((frameCount % kClusterUpdateStride) == 0) {
-    const float clusteredDt = clusterUpdateDtAccumulator_;
-    clusterUpdateDtAccumulator_ = 0.0f;
+  clusterUpdateDtAccumulator_ += safeDt;
+  const bool shouldUpdateClusters =
+      frameCount == 0 ||
+      clusterUpdateDtAccumulator_ + 1e-6f >= kClusterUpdatePeriodSeconds;
+  if (shouldUpdateClusters) {
+    const float clusteredDt =
+        simulationTimeSeconds_ - lastClusterUpdateTimeSeconds_;
+    lastClusterUpdateTimeSeconds_ = simulationTimeSeconds_;
+    clusterUpdateDtAccumulator_ = std::fmod(
+        clusterUpdateDtAccumulator_, kClusterUpdatePeriodSeconds);
 
     updateSpeciesClusters(clusteredDt);
     // 小クラスターを素材に、より大きい「群れ」中心を推定（10秒EMAで安定化）。
     updateSpeciesSchoolClusters(clusteredDt);
   }
   recordPhase(Phase::ClusterUpdate, clusterUpdateStart,
-              (frameCount % kClusterUpdateStride) == 0 ? 1 : 0);
+              shouldUpdateClusters ? 1 : 0);
   frameCount++;
 
-  // 一定フレームごとに葉ノードを再収集
+  leafCacheRecollectDtAccumulator_ += safeDt;
+  treeRebuildDtAccumulator_ += safeDt;
+  if (spatialReorderCadence_ > 0) {
+    spatialReorderDtAccumulator_ += safeDt;
+  } else {
+    spatialReorderDtAccumulator_ = 0.0f;
+  }
+
+  // 約0.25秒ごとに葉ノードを再収集する。
   // ツリーの split/merge は leafCache を前提にするため、定期的に収集し直す。
   constexpr int kLeafCacheRecollectStride = 15; // フレーム。大きいほど軽いが反応が遅い
-  if (frameCount % kLeafCacheRecollectStride == 0) {
+  constexpr float kLeafCacheRecollectPeriodSeconds =
+      kLeafCacheRecollectStride * kReferenceFrameSeconds;
+  if (leafCacheRecollectDtAccumulator_ + 1e-6f >=
+      kLeafCacheRecollectPeriodSeconds) {
+    leafCacheRecollectDtAccumulator_ = std::fmod(
+        leafCacheRecollectDtAccumulator_, kLeafCacheRecollectPeriodSeconds);
     leafCache.clear();
     if (root) {
       collectLeavesForCache(root, nullptr);
@@ -1067,9 +1125,15 @@ void BoidSimulation::update(float dt) {
     mergeIndex = 0;
   }
 
-  // 一定フレームごとに木構造を再構築（大幅に頻度を減らす）
+  // 約1/6秒ごとに木構造を再構築する。
   const auto buildStart = PhaseClock::now();
-  if ((frameCount % kTreeRebuildStride) == 0) {
+  constexpr float kTreeRebuildPeriodSeconds =
+      kTreeRebuildStride * kReferenceFrameSeconds;
+  const bool shouldRebuildTree =
+      treeRebuildDtAccumulator_ + 1e-6f >= kTreeRebuildPeriodSeconds;
+  if (shouldRebuildTree) {
+    treeRebuildDtAccumulator_ =
+        std::fmod(treeRebuildDtAccumulator_, kTreeRebuildPeriodSeconds);
     build();
     // printTree(root, 0); // ツリー構造をログに出力
 
@@ -1083,23 +1147,35 @@ void BoidSimulation::update(float dt) {
     mergeIndex = 0;
   }
   recordPhase(Phase::Build, buildStart,
-              (frameCount % kTreeRebuildStride) == 0 ? 1 : 0);
+              shouldRebuildTree ? 1 : 0);
 
   const auto reorderStart = PhaseClock::now();
+  const float reorderPeriodSeconds =
+      static_cast<float>(spatialReorderCadence_) * kReferenceFrameSeconds;
   const bool shouldReorder =
       spatialReorderCadence_ > 0 &&
-      (frameCount % kTreeRebuildStride) == 0 &&
-      (frameCount % spatialReorderCadence_) == 0;
+      shouldRebuildTree &&
+      spatialReorderDtAccumulator_ + 1e-6f >= reorderPeriodSeconds;
   const bool reordered = shouldReorder && reorderStorageByLeafOrder();
+  if (shouldReorder) {
+    spatialReorderDtAccumulator_ =
+        std::fmod(spatialReorderDtAccumulator_, reorderPeriodSeconds);
+  }
   recordPhase(Phase::Reorder, reorderStart, reordered ? 1 : 0);
 
   // 分割と結合の処理
   const auto splitMergeStart = PhaseClock::now();
   if (!leafCache.empty()) {
-    // 1フレームの作業量を抑えてスパイクを避ける。
-    constexpr int kSplitMergeWorkBudget = 12;
+    // 60Hzで12件/stepだった処理量を時間基準にしつつ、1回24件で上限を設ける。
+    constexpr float kSplitMergeWorkPerReferenceFrame = 12.0f;
+    splitMergeWorkAccumulator_ +=
+        kSplitMergeWorkPerReferenceFrame * (safeDt / kReferenceFrameSeconds);
+    const int splitMergeWorkBudget = glm::clamp(
+        static_cast<int>(std::floor(splitMergeWorkAccumulator_ + 1e-4f)),
+        0, 24);
+    splitMergeWorkAccumulator_ -= static_cast<float>(splitMergeWorkBudget);
     // 分割
-    for (int i = 0; i < kSplitMergeWorkBudget && splitIndex < (int)leafCache.size();
+    for (int i = 0; i < splitMergeWorkBudget && splitIndex < (int)leafCache.size();
          ++i, ++splitIndex) {
       BoidUnit *u = leafCache[splitIndex].node;
       // needsSplit(splitRadius, directionVarThresh, maxBoidsPerUnit)
@@ -1114,7 +1190,7 @@ void BoidSimulation::update(float dt) {
     }
 
     // 結合
-    for (int i = 0; i < kSplitMergeWorkBudget && mergeIndex < (int)leafCache.size();
+    for (int i = 0; i < splitMergeWorkBudget && mergeIndex < (int)leafCache.size();
          ++i, ++mergeIndex) {
       for (int j = mergeIndex + 1; j < (int)leafCache.size(); ++j) {
         BoidUnit *a = leafCache[mergeIndex].node;
@@ -1274,6 +1350,15 @@ void BoidSimulation::trySplitRecursive(BoidUnit *node) {
 void BoidSimulation::initializeBoids(
     const std::vector<SpeciesParams> &speciesParamsList, float posRange,
     float velRange) {
+  frameCount = 0;
+  simulationTimeSeconds_ = 0.0f;
+  clusterUpdateDtAccumulator_ = 0.0f;
+  lastClusterUpdateTimeSeconds_ = 0.0f;
+  treeRebuildDtAccumulator_ = 0.0f;
+  leafCacheRecollectDtAccumulator_ = 0.0f;
+  spatialReorderDtAccumulator_ = 0.0f;
+  splitMergeWorkAccumulator_ = 0.0f;
+  simulationDtAccumulator_ = 0.0f;
   auto &globalSpeciesParams = speciesParams_;
   // globalSpeciesParams を更新
   try {
@@ -1895,7 +1980,8 @@ void BoidSimulation::updateSpeciesSchoolClusters(float dt) {
   }
 
   const float safeDt = glm::clamp(dt, 1e-3f, 0.25f);
-  const float baseAlpha = glm::clamp(safeDt / kClusterHistorySeconds, 0.01f, 0.2f);
+  // 旧実装の 3 frame ごとの係数を基準に、経過時間へ変換する。
+  constexpr float kReferenceBaseAlpha = 0.01f;
 
   // species ごとに「小クラスター集合」をまとめて上位クラスタを推定
   for (std::size_t sid = 0; sid < speciesCount; ++sid) {
@@ -1916,7 +2002,8 @@ void BoidSimulation::updateSpeciesSchoolClusters(float dt) {
     int activeCount = 0;
     for (int i = 0; i < static_cast<int>(smallClusters.size()) && activeCount < 32; ++i) {
       const auto &c = smallClusters[i];
-      if (!isFreshCluster(c, frameCount, kClusterDebugMaxStaleFrames,
+      if (!isFreshCluster(c, simulationTimeSeconds_,
+                          kClusterDebugMaxStaleSeconds,
                           kClusterDebugMinWeight)) {
         continue;
       }
@@ -1929,8 +2016,12 @@ void BoidSimulation::updateSpeciesSchoolClusters(float dt) {
         if (!s.active) {
           continue;
         }
-        s.weight *= (1.0f - baseAlpha * 1.4f);
-        if ((frameCount - s.lastUpdateFrame) > kClusterRetainFrames || s.weight < 0.25f) {
+        const float referenceRetention =
+            glm::clamp(1.0f - kReferenceBaseAlpha * 1.4f, 0.0f, 1.0f);
+        s.weight *= retentionForElapsed(referenceRetention, safeDt);
+        if ((simulationTimeSeconds_ - s.lastUpdateTimeSeconds) >
+                kClusterRetainSeconds ||
+            s.weight < 0.25f) {
           s.active = false;
         }
       }
@@ -2051,8 +2142,11 @@ void BoidSimulation::updateSpeciesSchoolClusters(float dt) {
         }
       }
 
-      const float hitAlpha = glm::clamp(baseAlpha * (0.35f + 0.10f * static_cast<float>(glm::clamp(compMembers[c], 1, 8))), 0.03f, 0.35f);
-
+      const float referenceHitAlpha = glm::clamp(
+          kReferenceBaseAlpha *
+              (0.35f + 0.10f * static_cast<float>(
+                                   glm::clamp(compMembers[c], 1, 8))),
+          0.03f, 0.35f);
       if (best >= 0) {
         auto &school = schools[best];
         schoolUsed[best] = true;
@@ -2060,16 +2154,20 @@ void BoidSimulation::updateSpeciesSchoolClusters(float dt) {
           0.16f * static_cast<float>(glm::clamp(compMembers[c], 1, 6)) +
             0.0007f * compWeight[c],
           0.0f, 1.0f);
+        const float referenceConfidenceAlpha = glm::clamp(
+            kReferenceBaseAlpha * kSchoolConfidenceRiseScale, 0.03f, 0.10f);
         school.trackingConfidence = glm::mix(
           school.trackingConfidence, componentReliability,
-          glm::clamp(baseAlpha * kSchoolConfidenceRiseScale, 0.03f, 0.10f));
+          alphaForElapsed(referenceConfidenceAlpha, safeDt));
         const float centerAcceptance =
           glm::smoothstep(0.20f, 0.85f, school.trackingConfidence);
 
         const glm::vec3 previousCenter = school.center;
+        const float referenceCenterAlpha =
+            glm::max(referenceHitAlpha * centerAcceptance, 0.008f);
         glm::vec3 nextCenter = glm::mix(
           school.center, compCenter[c],
-          glm::max(hitAlpha * centerAcceptance, 0.008f));
+          alphaForElapsed(referenceCenterAlpha, safeDt));
         const glm::vec3 centerDelta = nextCenter - previousCenter;
         const float centerDeltaLen2 = glm::dot(centerDelta, centerDelta);
         const float maxCenterStep = glm::max(
@@ -2084,10 +2182,13 @@ void BoidSimulation::updateSpeciesSchoolClusters(float dt) {
         }
         school.center = nextCenter;
 
-        school.avgVelocity = glm::mix(school.avgVelocity, compVel[c], 0.10f);
-        school.radius = glm::mix(school.radius, compRadius[c], 0.14f);
-        school.weight = glm::mix(school.weight, compWeight[c], 0.12f);
-        school.lastUpdateFrame = frameCount;
+        school.avgVelocity = glm::mix(
+            school.avgVelocity, compVel[c], alphaForElapsed(0.10f, safeDt));
+        school.radius = glm::mix(
+            school.radius, compRadius[c], alphaForElapsed(0.14f, safeDt));
+        school.weight = glm::mix(
+            school.weight, compWeight[c], alphaForElapsed(0.12f, safeDt));
+        school.lastUpdateTimeSeconds = simulationTimeSeconds_;
         school.active = true;
       } else {
         // 新規 school 作成 or 弱いものと置換
@@ -2099,7 +2200,7 @@ void BoidSimulation::updateSpeciesSchoolClusters(float dt) {
         school.trackingConfidence = glm::clamp(
           0.08f + 0.12f * static_cast<float>(glm::clamp(compMembers[c], 1, 4)),
           0.0f, 0.45f);
-        school.lastUpdateFrame = frameCount;
+        school.lastUpdateTimeSeconds = simulationTimeSeconds_;
         school.active = true;
 
         if (schools.size() < static_cast<std::size_t>(kMaxSchoolsPerSpecies)) {
@@ -2108,18 +2209,20 @@ void BoidSimulation::updateSpeciesSchoolClusters(float dt) {
           int weakest = 0;
           float weakestScore = std::numeric_limits<float>::max();
           for (int s = 0; s < static_cast<int>(schools.size()); ++s) {
-            const int staleFrames = frameCount - schools[s].lastUpdateFrame;
-            const float candidateScore = staleFrames > kClusterDebugMaxStaleFrames
-                                             ? -static_cast<float>(staleFrames)
+            const float staleSeconds =
+                simulationTimeSeconds_ - schools[s].lastUpdateTimeSeconds;
+            const float candidateScore = staleSeconds > kClusterDebugMaxStaleSeconds
+                                             ? -staleSeconds
                                              : schools[s].weight;
             if (candidateScore < weakestScore) {
               weakestScore = candidateScore;
               weakest = s;
             }
           }
-          const int staleFrames = frameCount - schools[weakest].lastUpdateFrame;
+          const float staleSeconds =
+              simulationTimeSeconds_ - schools[weakest].lastUpdateTimeSeconds;
           const bool replaceAllowed =
-              staleFrames >= kSchoolReplaceMinStaleFrames ||
+              staleSeconds >= kSchoolReplaceMinStaleSeconds ||
               schools[weakest].weight < kClusterDebugMinWeight;
           if (replaceAllowed) {
             school.center = schools[weakest].center;
@@ -2138,16 +2241,23 @@ void BoidSimulation::updateSpeciesSchoolClusters(float dt) {
       if (!s.active) {
         continue;
       }
-      if ((frameCount - s.lastUpdateFrame) <= 0) {
+      const float staleSeconds =
+          simulationTimeSeconds_ - s.lastUpdateTimeSeconds;
+      if (staleSeconds <= 0.0f) {
         continue;
       }
       // 直近でヒットしていない場合は徐々に弱める
-      if ((frameCount - s.lastUpdateFrame) > 2) {
-        s.weight *= (1.0f - baseAlpha * 1.2f);
+      if (staleSeconds > 2.0f * kReferenceFrameSeconds) {
+        const float referenceWeightRetention =
+            glm::clamp(1.0f - kReferenceBaseAlpha * 1.2f, 0.0f, 1.0f);
+        const float referenceConfidenceRetention = glm::clamp(
+            1.0f - kReferenceBaseAlpha * kSchoolConfidenceDecayScale,
+            0.92f, 0.995f);
+        s.weight *= retentionForElapsed(referenceWeightRetention, safeDt);
         s.trackingConfidence *=
-            glm::clamp(1.0f - baseAlpha * kSchoolConfidenceDecayScale, 0.92f, 0.995f);
+            retentionForElapsed(referenceConfidenceRetention, safeDt);
       }
-      if ((frameCount - s.lastUpdateFrame) > kClusterRetainFrames || s.weight < 0.25f) {
+      if (staleSeconds > kClusterRetainSeconds || s.weight < 0.25f) {
         s.active = false;
         s.trackingConfidence = 0.0f;
       }
@@ -2161,8 +2271,8 @@ void BoidSimulation::updateSpeciesSchoolClusters(float dt) {
           if (a.active != b.active) {
             return a.active && !b.active;
           }
-          if (a.lastUpdateFrame != b.lastUpdateFrame) {
-            return a.lastUpdateFrame > b.lastUpdateFrame;
+          if (a.lastUpdateTimeSeconds != b.lastUpdateTimeSeconds) {
+            return a.lastUpdateTimeSeconds > b.lastUpdateTimeSeconds;
           }
           return a.weight > b.weight;
         });

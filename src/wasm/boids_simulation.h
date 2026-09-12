@@ -80,7 +80,7 @@ public:
         float radius = 1.0f;
         float weight = 0.0f;
         int frameContributionCount = 0;
-        int lastUpdateFrame = -1024;
+        float lastUpdateTimeSeconds = -1024.0f;
         bool active = false;
     };
 
@@ -94,7 +94,7 @@ public:
         float radius = 1.0f;
         float weight = 0.0f;
         float trackingConfidence = 0.0f;
-        int lastUpdateFrame = -1024;
+        float lastUpdateTimeSeconds = -1024.0f;
         bool active = false;
     };
     
@@ -104,6 +104,7 @@ public:
     // ---- 参照専用の軽量アクセサ（外部からの直アクセスを減らす） ----
     BoidUnit *getRoot() const { return root; }
     int getFrameCount() const { return frameCount; }
+    float getSimulationTimeSeconds() const { return simulationTimeSeconds_; }
     int getMaxBoidsPerUnit() const { return maxBoidsPerUnit; }
     void setMaxBoidsPerUnit(int value) { maxBoidsPerUnit = value; }
     const SoABuffers& getBuffers() const { return buf; }
@@ -307,8 +308,14 @@ private:
     BoidTreeSpatialIndex treeSpatialIndex_;
     const SpatialIndex *activeSpatialIndex_ = &treeSpatialIndex_;
 
-    // クラスター更新を間引く際の dt 蓄積（時間スケールのEMAを保つ）
+    // 更新頻度と寿命を render frame 数ではなく simulation time で管理する。
+    float simulationTimeSeconds_ = 0.0f;
     float clusterUpdateDtAccumulator_ = 0.0f;
+    float lastClusterUpdateTimeSeconds_ = 0.0f;
+    float treeRebuildDtAccumulator_ = 0.0f;
+    float leafCacheRecollectDtAccumulator_ = 0.0f;
+    float spatialReorderDtAccumulator_ = 0.0f;
+    float splitMergeWorkAccumulator_ = 0.0f;
     // render フレームと独立した固定ステップ更新用の dt 蓄積。
     float simulationDtAccumulator_ = 0.0f;
 

@@ -2192,6 +2192,21 @@ function stepSimulationAndUpdateState(deltaTime) {
   return wasmBridge.stepSimulation(deltaTime);
 }
 
+const MAX_SIMULATION_DELTA_SECONDS = 1 / 30;
+
+function advanceSimulation(deltaTime) {
+  if (paused.value) {
+    return stepSimulationAndUpdateState(0);
+  }
+
+  const finiteDelta = Number.isFinite(deltaTime) ? Math.max(deltaTime, 0) : 0;
+  // 1描画につきsimulation更新は常に1回。通常の可変dtは使い、
+  // 大きな停止時間だけを破棄してcatch-upによる負荷増加を防ぐ。
+  return stepSimulationAndUpdateState(
+    Math.min(finiteDelta, MAX_SIMULATION_DELTA_SECONDS),
+  );
+}
+
 function getWasmViews(count) {
   if (!wasmBridge) {
     return {
@@ -2927,13 +2942,12 @@ function animate(frameTimeMs) {
   if (sampleLocality) {
     wasmBridge?.beginLocalitySample();
   }
-  const simulationDelta = browserBenchmarkConfig ? 1 / 60 : deltaTime;
   const count = browserBenchmark
     ? browserBenchmark.measure('wasm_simulation', () =>
-        stepSimulationAndUpdateState(simulationDelta),
+        stepSimulationAndUpdateState(1 / 60),
       )
     : livePerformanceMonitor.measureSimulation(() =>
-        stepSimulationAndUpdateState(paused.value ? 0 : deltaTime),
+        advanceSimulation(deltaTime),
       );
   if (sampleLocality) {
     wasmBridge?.endLocalitySample();

@@ -54,6 +54,38 @@ constexpr float kPredatorRestSpeedScale = 0.45f; // 休憩時に維持する速�
 constexpr float kTwoPi = 6.28318530718f;
 constexpr float kSchoolConfidencePullMin = 0.10f;
 constexpr float kSchoolConfidencePullFull = 0.50f;
+constexpr float kReferenceSimulationStepSeconds = 5.0f / 60.0f;
+
+inline float alphaForSimulationStep(float referenceAlpha, float dt) {
+  const float alpha = glm::clamp(referenceAlpha, 0.0f, 1.0f);
+  if (!(dt > 0.0f) || alpha <= 0.0f) {
+    return 0.0f;
+  }
+  if (alpha >= 1.0f) {
+    return 1.0f;
+  }
+  return -std::expm1(std::log1p(-alpha) *
+                     (dt / kReferenceSimulationStepSeconds));
+}
+
+inline float retentionForSimulationStep(float referenceRetention, float dt) {
+  const float retention = glm::clamp(referenceRetention, 0.0f, 1.0f);
+  if (!(dt > 0.0f) || retention >= 1.0f) {
+    return 1.0f;
+  }
+  if (retention <= 0.0f) {
+    return 0.0f;
+  }
+  return std::exp(std::log(retention) *
+                  (dt / kReferenceSimulationStepSeconds));
+}
+
+struct TimeStepResponse {
+  float predatorRestBlend = 0.0f;
+  float predatorInfluenceRetention = 1.0f;
+  float stressRiseBlend = 0.0f;
+  float stressDecayAmount = 0.0f;
+};
 
 inline float schoolPullStateScale(float centerDistance, float phi) {
   const float start = glm::max(gSimulationTuning.schoolPullStartDistance, 0.0f);
@@ -319,11 +351,12 @@ static inline glm::vec3 buildFallbackTurnAxis(const glm::vec3 &oldDir) {
   return axis * (1.0f / glm::sqrt(axisLen2));
 }
 
-static void updateLeafKinematics(BoidUnit *unit, float dt) {
+static void updateLeafKinematics(BoidUnit *unit, float dt,
+                                 const TimeStepResponse &response) {
   BoidSimulation &simulation = simulationFor(unit);
   const auto &globalSpeciesParams = simulation.getSpeciesParamsList();
   const float framePhaseBase =
-      static_cast<float>(simulation.getFrameCount());
+      simulation.getSimulationTimeSeconds() * 60.0f;
   for (size_t i = 0; i < unit->indices.size(); ++i) {
     int gIdx = unit->indices[i];
     int sid = unit->buf->speciesIds[gIdx];
@@ -406,7 +439,8 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
       const float restSpeed =
           globalSpeciesParams[sid].maxSpeed * kPredatorRestSpeedScale * 0.6f;
       const glm::vec3 desiredVel = restDir * restSpeed;
-      acceleration = glm::mix(acceleration, desiredVel - velocity, 0.45f);
+      acceleration = glm::mix(
+          acceleration, desiredVel - velocity, response.predatorRestBlend);
     } else if (globalSpeciesParams[sid].isPredator &&
                unit->buf->predatorTargetIndices[gIdx] < 0) {
       // ターゲット未確定: 群れ（獲物密集）へ突っ込むフェーズ
@@ -645,11 +679,11 @@ static void updateLeafKinematics(BoidUnit *unit, float dt) {
     obstacle_field::resolvePenetration(unit->buf->positionsWrite[gIdx],
                        unit->buf->velocitiesWrite[gIdx]);
     unit->buf->accelerations[gIdx] = glm::vec3(0.0f);
-    unit->buf->predatorInfluences[gIdx] *= 0.7f; // 適度に保持して逃走を継続（保持しすぎると過剰反応になる）
+    unit->buf->predatorInfluences[gIdx] *=
+        response.predatorInfluenceRetention;
     unit->buf->orientationsWrite[gIdx] = BoidUnit::dirToQuatRollZero(newDir);
     if (unit->buf->stresses[gIdx] > 0.0f) {
-      float decayRate = 1.0f;
-      unit->buf->stresses[gIdx] -= BoidUnit::easeOut(dt * decayRate);
+      unit->buf->stresses[gIdx] -= response.stressDecayAmount;
       if (unit->buf->stresses[gIdx] < 0.0f) {
         unit->buf->stresses[gIdx] = 0.0f;
       }
@@ -993,6 +1027,13 @@ void BoidUnit::updateRecursive(float dt) {
   BoidSimulation &simulation = simulationFor(this);
   const auto &globalSpeciesParams =
       simulation.getSpeciesParamsList();
+  const float referenceStressDecay = BoidUnit::easeOut(
+      kReferenceSimulationStepSeconds);
+  const TimeStepResponse timeStepResponse{
+      alphaForSimulationStep(0.45f, dt),
+      retentionForSimulationStep(0.7f, dt),
+      alphaForSimulationStep(0.25f, dt),
+      referenceStressDecay * (dt / kReferenceSimulationStepSeconds)};
   frameCount++;
 
   // 無限再帰防止: 簡単なカウンター方式
@@ -1148,7 +1189,7 @@ void BoidUnit::updateRecursive(float dt) {
     for (std::size_t i = begin; i < end; ++i) {
       BoidUnit *unit = leafUnits[i];
       if (unit) {
-        unit->computeBoidInteraction(dt);
+        unit->computeBoidInteraction(dt, timeStepResponse.stressRiseBlend);
       }
     }
   });
@@ -1184,7 +1225,7 @@ void BoidUnit::updateRecursive(float dt) {
     for (std::size_t i = begin; i < end; ++i) {
       BoidUnit *unit = leafUnits[i];
       if (unit) {
-        updateLeafKinematics(unit, dt);
+        updateLeafKinematics(unit, dt, timeStepResponse);
       }
     }
   });
@@ -1225,7 +1266,7 @@ inline glm::quat BoidUnit::dirToQuatRollZero(const glm::vec3 &forward) {
  * - Fast-start吸引制御による群れの縁での強制凝集
  * - 捕食者の追跡ターゲット選択と更新
  */
-void BoidUnit::computeBoidInteraction(float dt) {
+void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend) {
   BoidSimulation &simulation = simulationFor(this);
   const bool sampleLocality = simulation.isLocalitySamplingEnabled();
   const auto &globalSpeciesParams = simulation.getSpeciesParamsList();
@@ -1360,7 +1401,8 @@ void BoidUnit::computeBoidInteraction(float dt) {
         float bestDistSq = std::numeric_limits<float>::max();
         for (const auto &school : *schools) {
           if (!school.active || school.weight < 0.25f ||
-              (simulation.getFrameCount() - school.lastUpdateFrame) > 45) {
+              (simulation.getSimulationTimeSeconds() -
+               school.lastUpdateTimeSeconds) > 0.75f) {
             continue;
           }
           const glm::vec3 diff = school.center - pos;
@@ -1368,9 +1410,7 @@ void BoidUnit::computeBoidInteraction(float dt) {
           const float candidateSchoolRadius = glm::max(school.radius, 1.0f);
           const float influenceRadius =
               candidateSchoolRadius + glm::max(selfParams.cohesionRange, 0.0f);
-          if (distSq > influenceRadius * influenceRadius) {
-            continue;
-          }
+
           if (distSq < bestDistSq) {
             bestDistSq = distSq;
             schoolCenterDir = diff;
@@ -1844,9 +1884,6 @@ void BoidUnit::computeBoidInteraction(float dt) {
       const float separationRange = leafSeparationRange;
       int closeNeighborCount = 0;
       int aggregatedNeighborCount = 0;
-      // wSep(近さ)の平均で「詰まり具合」を取る。近傍数(maxNeighbors)が飽和しても
-      // 密集/外縁の差が出るので、減速や凝集抑制のトリガとして使える。
-      float crowdingWeightSum = 0.0f;
 
       // ---- 近傍(leaf内) ----
       for (int entryIndex = 0; entryIndex < activeCount; ++entryIndex) {
@@ -1915,7 +1952,6 @@ void BoidUnit::computeBoidInteraction(float dt) {
         }
         wSep = glm::clamp(wSep, 0.0f, 1.0f);
         wSep *= memoryFade;
-        crowdingWeightSum += wSep;
         sumSep += (diff * wSep) * (-1.0f);
 
         // 凝集の重み計算：近いほど強い（距離の正規化を反転）
@@ -1969,7 +2005,6 @@ void BoidUnit::computeBoidInteraction(float dt) {
           wSep = 1.0f - (dist / separationRange);
         }
         wSep = glm::clamp(wSep, 0.0f, 1.0f);
-        crowdingWeightSum += wSep;
         sumSep += (diff * wSep) * (-1.0f);
 
         float t = glm::clamp(dist / cohesionRange, 0.0f, 1.0f);
@@ -1988,39 +2023,6 @@ void BoidUnit::computeBoidInteraction(float dt) {
         phi = 1.0f;
       }
 
-      // -------------------------------------------------------
-      // 葉ユニット重心による局所的な結合補助
-      // -------------------------------------------------------
-      // 近傍メモリの制限で neighborCount が少なくても、同じ葉に属する
-      // 個体の中心方向を弱く加算し、原点ではなく局所クラスタへ戻す。
-      const int leafPopulation = static_cast<int>(indices.size());
-      if (leafPopulation > 1) {
-        float scatterFactor = glm::clamp(1.0f - phi, 0.0f, 1.0f);
-        if (scatterFactor > 1e-4f) {
-          glm::vec3 sumAll = center * static_cast<float>(leafPopulation);
-          glm::vec3 avgOthers =
-              (sumAll - pos) / static_cast<float>(leafPopulation - 1);
-          glm::vec3 toLeafCenter = avgOthers - pos;
-          float centerVecLen2 = glm::length2(toLeafCenter);
-          if (centerVecLen2 > EPS) {
-            float normalizedDist = 0.0f;
-            if (radius > 1e-4f) {
-              normalizedDist =
-                  glm::clamp(glm::sqrt(centerVecLen2) / glm::max(radius, 1e-3f),
-                             0.0f, 1.5f);
-            }
-            float centerWeight =
-                scatterFactor * glm::mix(0.08f, 0.35f, normalizedDist);
-            // 脅威中は「中心へ戻す」よりも回避/散開を優先する。
-            // これが残ると、逃避しつつ局所中心へ吸われる見え方になりやすい。
-            const float threatScatter = glm::smoothstep(0.10f, 0.50f, selfThreat);
-            centerWeight *= (1.0f - 0.85f * threatScatter);
-            sumCohDir += toLeafCenter * centerWeight;
-            wCohSum += centerWeight;
-          }
-        }
-      }
-
       // 近傍数は leaf 内 + 外部を合算したもので正規化する。
       float invN = 1.0f / float(std::max(aggregatedNeighborCount, 1));
 
@@ -2032,8 +2034,8 @@ void BoidUnit::computeBoidInteraction(float dt) {
       const float threatDrivenStress =
           glm::clamp(0.4f * selfThreat + 0.6f * selfThreat * selfThreat, 0.0f, 1.0f);
       if (threatDrivenStress > selfStress) {
-        const float blend = glm::clamp(3.0f * dt, 0.0f, 0.8f);
-        const float updatedStress = glm::mix(selfStress, threatDrivenStress, blend);
+        const float updatedStress = glm::mix(
+            selfStress, threatDrivenStress, stressRiseBlend);
         buf->stresses[gIdx] = updatedStress;
         selfStress = updatedStress;
       }
@@ -2045,34 +2047,6 @@ void BoidUnit::computeBoidInteraction(float dt) {
             (sumSep * (1.0f / glm::sqrt(sepLen2))) *
           globalSpeciesParams[sid].separation;
       }
-
-        // -------------------------------------------------------
-        // Autonomous control of attraction（混雑時に凝集を弱める）
-        // -------------------------------------------------------
-        // 近傍が十分に充足している（= 密）ほど、凝集=attraction を自動的に弱める。
-        // 目的:
-        // - クラスタ内部での「詰まり」を抑え、過剰な中心吸い込みを減らす
-        // - ローカル相互作用だけでの回転（ミリング）や分裂/合流を起こしやすくする
-        // 注意:
-        // - 脅威(threat)が高い局面では群れ維持を優先し、抑制を緩める
-        // - 薄い領域(phiが低い)では抑制がほぼ掛からない（外縁は集まりやすい）
-          // 近傍数(phi)だけだと maxNeighbors が小さい/飽和している場合に
-          // 内側と外縁の差が出ない。そこで wSep 平均（近さ）も混雑度に含める。
-          const float crowdPhi = glm::clamp(phi, 0.0f, 1.0f);
-          const float crowdPhiSignal = glm::smoothstep(0.75f, 0.98f, crowdPhi);
-          const float crowdingAvg =
-            aggregatedNeighborCount > 0
-              ? glm::clamp(crowdingWeightSum / float(aggregatedNeighborCount), 0.0f, 1.0f)
-              : 0.0f;
-          const float crowdPackingSignal = glm::smoothstep(0.20f, 0.55f, crowdingAvg);
-          const float crowded = glm::max(crowdPhiSignal, crowdPackingSignal);
-        constexpr float kAttractionMinScale = 0.42f;
-        float autonomousAttractionScale =
-          glm::mix(1.0f, kAttractionMinScale, crowded);
-        // 脅威中は密集抑制を完全には解除しない（中心吸い込みを避ける）。
-        constexpr float kThreatAttractionRelief = 0.40f;
-        autonomousAttractionScale =
-          glm::mix(autonomousAttractionScale, 1.0f, threatLevel * kThreatAttractionRelief);
 
       // 凝集の最終ベクトル（重みの総和で正規化、原点依存なし）
       glm::vec3 totalCohesion = glm::vec3(0.0f);
@@ -2086,9 +2060,6 @@ void BoidUnit::computeBoidInteraction(float dt) {
                           (selfParams.cohesion * edgeFactor);
         }
       }
-      // 混雑時は attraction を弱め、クラスタ内部の過凝集を抑える。
-      totalCohesion *= autonomousAttractionScale;
-
       // 整列の最終ベクトル
       glm::vec3 avgAlignVel = sumAlign * invN;
       glm::vec3 totalAlignment = glm::vec3(0.0f);
