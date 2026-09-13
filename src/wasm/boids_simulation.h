@@ -308,14 +308,10 @@ private:
     BoidTreeSpatialIndex treeSpatialIndex_;
     const SpatialIndex *activeSpatialIndex_ = &treeSpatialIndex_;
 
-    // 更新頻度と寿命を render frame 数ではなく simulation time で管理する。
+    // 群れ状態の追従と寿命は simulation time で管理する。
+    // tree 等の保守処理頻度は負荷に追従できるよう render frame 基準のままにする。
     float simulationTimeSeconds_ = 0.0f;
     float clusterUpdateDtAccumulator_ = 0.0f;
-    float lastClusterUpdateTimeSeconds_ = 0.0f;
-    float treeRebuildDtAccumulator_ = 0.0f;
-    float leafCacheRecollectDtAccumulator_ = 0.0f;
-    float spatialReorderDtAccumulator_ = 0.0f;
-    float splitMergeWorkAccumulator_ = 0.0f;
     // render フレームと独立した固定ステップ更新用の dt 蓄積。
     float simulationDtAccumulator_ = 0.0f;
 

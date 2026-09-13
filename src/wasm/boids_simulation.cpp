@@ -1079,18 +1079,15 @@ void BoidSimulation::update(float dt) {
   // speciesClusters / speciesSchoolClusters は「デバッグ描画」だけでなく、
   // シミュレーション本体（例: 大クラスタ引力）でも参照される。
   // そのため計算自体は常時行い、JSへ渡すフラット配列の再パックだけを要求駆動にする。
-  // クラスター更新は render frame 数ではなく経過時間で約20Hzに保つ。
+  // 計算頻度は負荷に追従する従来の3 frame周期とし、追従量には
+  // その間に実際に経過した simulation time を使う。
   const auto clusterUpdateStart = PhaseClock::now();
+  constexpr int kClusterUpdateStride = 3;
   clusterUpdateDtAccumulator_ += safeDt;
-  const bool shouldUpdateClusters =
-      frameCount == 0 ||
-      clusterUpdateDtAccumulator_ + 1e-6f >= kClusterUpdatePeriodSeconds;
+  const bool shouldUpdateClusters = (frameCount % kClusterUpdateStride) == 0;
   if (shouldUpdateClusters) {
-    const float clusteredDt =
-        simulationTimeSeconds_ - lastClusterUpdateTimeSeconds_;
-    lastClusterUpdateTimeSeconds_ = simulationTimeSeconds_;
-    clusterUpdateDtAccumulator_ = std::fmod(
-        clusterUpdateDtAccumulator_, kClusterUpdatePeriodSeconds);
+    const float clusteredDt = clusterUpdateDtAccumulator_;
+    clusterUpdateDtAccumulator_ = 0.0f;
 
     updateSpeciesClusters(clusteredDt);
     // 小クラスターを素材に、より大きい「群れ」中心を推定（10秒EMAで安定化）。
@@ -1100,23 +1097,10 @@ void BoidSimulation::update(float dt) {
               shouldUpdateClusters ? 1 : 0);
   frameCount++;
 
-  leafCacheRecollectDtAccumulator_ += safeDt;
-  treeRebuildDtAccumulator_ += safeDt;
-  if (spatialReorderCadence_ > 0) {
-    spatialReorderDtAccumulator_ += safeDt;
-  } else {
-    spatialReorderDtAccumulator_ = 0.0f;
-  }
-
-  // 約0.25秒ごとに葉ノードを再収集する。
+  // 15 frameごとに葉ノードを再収集する。
   // ツリーの split/merge は leafCache を前提にするため、定期的に収集し直す。
   constexpr int kLeafCacheRecollectStride = 15; // フレーム。大きいほど軽いが反応が遅い
-  constexpr float kLeafCacheRecollectPeriodSeconds =
-      kLeafCacheRecollectStride * kReferenceFrameSeconds;
-  if (leafCacheRecollectDtAccumulator_ + 1e-6f >=
-      kLeafCacheRecollectPeriodSeconds) {
-    leafCacheRecollectDtAccumulator_ = std::fmod(
-        leafCacheRecollectDtAccumulator_, kLeafCacheRecollectPeriodSeconds);
+  if (frameCount % kLeafCacheRecollectStride == 0) {
     leafCache.clear();
     if (root) {
       collectLeavesForCache(root, nullptr);
@@ -1125,15 +1109,11 @@ void BoidSimulation::update(float dt) {
     mergeIndex = 0;
   }
 
-  // 約1/6秒ごとに木構造を再構築する。
+  // 10 frameごとに木構造を再構築する。
   const auto buildStart = PhaseClock::now();
-  constexpr float kTreeRebuildPeriodSeconds =
-      kTreeRebuildStride * kReferenceFrameSeconds;
   const bool shouldRebuildTree =
-      treeRebuildDtAccumulator_ + 1e-6f >= kTreeRebuildPeriodSeconds;
+      (frameCount % kTreeRebuildStride) == 0;
   if (shouldRebuildTree) {
-    treeRebuildDtAccumulator_ =
-        std::fmod(treeRebuildDtAccumulator_, kTreeRebuildPeriodSeconds);
     build();
     // printTree(root, 0); // ツリー構造をログに出力
 
@@ -1150,32 +1130,19 @@ void BoidSimulation::update(float dt) {
               shouldRebuildTree ? 1 : 0);
 
   const auto reorderStart = PhaseClock::now();
-  const float reorderPeriodSeconds =
-      static_cast<float>(spatialReorderCadence_) * kReferenceFrameSeconds;
   const bool shouldReorder =
       spatialReorderCadence_ > 0 &&
       shouldRebuildTree &&
-      spatialReorderDtAccumulator_ + 1e-6f >= reorderPeriodSeconds;
+      (frameCount % spatialReorderCadence_) == 0;
   const bool reordered = shouldReorder && reorderStorageByLeafOrder();
-  if (shouldReorder) {
-    spatialReorderDtAccumulator_ =
-        std::fmod(spatialReorderDtAccumulator_, reorderPeriodSeconds);
-  }
   recordPhase(Phase::Reorder, reorderStart, reordered ? 1 : 0);
 
   // 分割と結合の処理
   const auto splitMergeStart = PhaseClock::now();
   if (!leafCache.empty()) {
-    // 60Hzで12件/stepだった処理量を時間基準にしつつ、1回24件で上限を設ける。
-    constexpr float kSplitMergeWorkPerReferenceFrame = 12.0f;
-    splitMergeWorkAccumulator_ +=
-        kSplitMergeWorkPerReferenceFrame * (safeDt / kReferenceFrameSeconds);
-    const int splitMergeWorkBudget = glm::clamp(
-        static_cast<int>(std::floor(splitMergeWorkAccumulator_ + 1e-4f)),
-        0, 24);
-    splitMergeWorkAccumulator_ -= static_cast<float>(splitMergeWorkBudget);
+    constexpr int kSplitMergeWorkBudget = 12;
     // 分割
-    for (int i = 0; i < splitMergeWorkBudget && splitIndex < (int)leafCache.size();
+    for (int i = 0; i < kSplitMergeWorkBudget && splitIndex < (int)leafCache.size();
          ++i, ++splitIndex) {
       BoidUnit *u = leafCache[splitIndex].node;
       // needsSplit(splitRadius, directionVarThresh, maxBoidsPerUnit)
@@ -1190,7 +1157,7 @@ void BoidSimulation::update(float dt) {
     }
 
     // 結合
-    for (int i = 0; i < splitMergeWorkBudget && mergeIndex < (int)leafCache.size();
+    for (int i = 0; i < kSplitMergeWorkBudget && mergeIndex < (int)leafCache.size();
          ++i, ++mergeIndex) {
       for (int j = mergeIndex + 1; j < (int)leafCache.size(); ++j) {
         BoidUnit *a = leafCache[mergeIndex].node;
@@ -1353,11 +1320,6 @@ void BoidSimulation::initializeBoids(
   frameCount = 0;
   simulationTimeSeconds_ = 0.0f;
   clusterUpdateDtAccumulator_ = 0.0f;
-  lastClusterUpdateTimeSeconds_ = 0.0f;
-  treeRebuildDtAccumulator_ = 0.0f;
-  leafCacheRecollectDtAccumulator_ = 0.0f;
-  spatialReorderDtAccumulator_ = 0.0f;
-  splitMergeWorkAccumulator_ = 0.0f;
   simulationDtAccumulator_ = 0.0f;
   auto &globalSpeciesParams = speciesParams_;
   // globalSpeciesParams を更新
