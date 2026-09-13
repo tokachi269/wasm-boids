@@ -475,7 +475,7 @@ const DEFAULT_SETTINGS = [
     species: "Boids", // 種族名
     count: defaultBoidCount, // 群れの数（低スペックでは軽量化）
     // 画面ガワの初期値（画像の値）
-    cohesion: 5.43, // 凝集
+    cohesion: 3.5, // 凝集
     cohesionRange: 4, // 凝集範囲
     separation: 0.4, // 分離
     separationRange: 0.4, // 分離範囲
@@ -520,10 +520,10 @@ const DEFAULT_TUNING_SETTINGS = {
   threatDecay: 1.0, // 脅威減衰速度（1/sec）
   maxEscapeWeight: 0.6, // 逃避方向の最大割合（0〜1）
   baseEscapeStrength: 6.0, // 逃避舵取り強度（目標速度へ寄せる強さ）
-  schoolPullCoefficient: 0.0001, // 大クラスタ引力係数
-  schoolPullStartDistance: 0.0,
+  schoolPullCoefficient: 0.0002, // 大クラスタ引力係数
+  schoolPullStartDistance: 2.5,
   schoolPullFullDistance: 3.0,
-  schoolPullDenseScale: 0.7,
+  schoolPullDenseScale: 0.16,
 };
   
 // 調整スライダーの説明（ユーザ目線）。ホバー時に title として表示する。
