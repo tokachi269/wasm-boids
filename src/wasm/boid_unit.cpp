@@ -1699,19 +1699,18 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
     //    - 距離判定: distSq < viewRangeSq
     //    - 視界判定: normalized(diff)·normalized(vel) >= cosHalfFov
     // -------------------------------------------------------
-    // 速度方向は近傍(FOV)判定や、ユニット外近傍の取得でも参照する。
-    // スコープを揃えて、無駄な再計算も避ける。
+    // 速度方向は候補探索が必要な個体だけで計算する。
     const float velLen2 = glm::length2(vel);
     const bool hasVel = (velLen2 > EPS);
     glm::vec3 forward(0.0f);
-    if (hasVel) {
-#ifdef BOIDS_INTERACTION_DIAGNOSTICS
-      BOIDS_DIAG_INCREMENT(forwardNormalizations);
-#endif
-      forward = vel * (1.0f / glm::sqrt(velLen2));
-    }
 
     if (activeCount < maxNeighbors) {
+      if (hasVel) {
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+        BOIDS_DIAG_INCREMENT(forwardNormalizations);
+#endif
+        forward = vel * (1.0f / glm::sqrt(velLen2));
+      }
 #ifdef BOIDS_INTERACTION_DIAGNOSTICS
       if (diagnostics) {
         ++diagnostics->leafCandidateSearchBoids;
