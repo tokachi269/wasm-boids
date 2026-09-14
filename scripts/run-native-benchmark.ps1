@@ -1,5 +1,6 @@
 param(
     [int]$Frames = 2000,
+    [int]$Warmup = 1000,
     [uint32]$Seed = 1,
     [int]$Boids = 5000,
     [int]$Tasks = 1
@@ -11,5 +12,5 @@ if (-not (Test-Path $executable)) {
     throw "Native benchmark executable not found. Run npm run build-native first."
 }
 
-& $executable --bench $Frames --seed $Seed --boids $Boids --tasks $Tasks
+& $executable --bench $Frames --warmup $Warmup --seed $Seed --boids $Boids --tasks $Tasks
 exit $LASTEXITCODE

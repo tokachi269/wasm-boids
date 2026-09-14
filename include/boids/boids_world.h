@@ -9,6 +9,9 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include "species_params.h"
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+#include "interaction_diagnostics.h"
+#endif
 
 class BoidSimulation;
 
@@ -80,6 +83,9 @@ public:
   void beginLocalitySample();
   void endLocalitySample();
   LocalityStats localityStats() const;
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+  InteractionDiagnostics interactionDiagnostics() const;
+#endif
 
 private:
   BoidsWorldConfig config_;

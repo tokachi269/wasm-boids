@@ -16,6 +16,21 @@ npm run build-native
 npm run benchmark
 ```
 
+Release最適化を維持したままWindows CPU sampling用PDBを生成する場合:
+
+```powershell
+npm run build-native:profile
+```
+
+相互作用経路の回数を集計する診断専用native build:
+
+```powershell
+npm run build-native:diagnostics
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-native-benchmark.ps1 -Frames 1300 -Warmup 300 -Seed 1 -Boids 50000 -Tasks 1
+```
+
+診断counterは通常のnative/WASM buildには含まれない。
+
 個体数などを指定する場合:
 
 ```powershell

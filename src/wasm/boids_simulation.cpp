@@ -1185,7 +1185,24 @@ void BoidSimulation::update(float dt) {
 void BoidSimulation::resetPhaseTimings() {
   phaseTimings_ = {};
   parallelTimings_ = {};
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+  std::lock_guard<std::mutex> lock(interactionDiagnosticsMutex_);
+  interactionDiagnostics_ = {};
+#endif
 }
+
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+InteractionDiagnostics BoidSimulation::getInteractionDiagnostics() const {
+  std::lock_guard<std::mutex> lock(interactionDiagnosticsMutex_);
+  return interactionDiagnostics_;
+}
+
+void BoidSimulation::mergeInteractionDiagnostics(
+    const InteractionDiagnostics &diagnostics) {
+  std::lock_guard<std::mutex> lock(interactionDiagnosticsMutex_);
+  interactionDiagnostics_.merge(diagnostics);
+}
+#endif
 
 void BoidSimulation::recordPhaseTiming(Phase phase, double milliseconds,
                                        long calls) {

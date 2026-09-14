@@ -146,4 +146,10 @@ BoidsWorld::LocalityStats BoidsWorld::localityStats() const {
   return result;
 }
 
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+InteractionDiagnostics BoidsWorld::interactionDiagnostics() const {
+  return simulation_->getInteractionDiagnostics();
+}
+#endif
+
 } // namespace boids

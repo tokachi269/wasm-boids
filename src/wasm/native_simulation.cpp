@@ -536,6 +536,39 @@ void NativeSimulation::runBenchmark() {
     }
     output << "}}";
   }
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+  const auto diagnostics = world_.interactionDiagnostics();
+  output << "},\"interaction_diagnostics\":{"
+         << "\"boids_processed\":" << diagnostics.boidsProcessed
+         << ",\"school_candidates_visited\":" << diagnostics.schoolCandidatesVisited
+         << ",\"school_candidates_eligible\":" << diagnostics.schoolCandidatesEligible
+         << ",\"school_associations\":" << diagnostics.schoolAssociations
+         << ",\"school_influence_positive\":" << diagnostics.schoolInfluencePositive
+         << ",\"cached_entries_validated\":" << diagnostics.cachedEntriesValidated
+         << ",\"cached_entries_removed\":" << diagnostics.cachedEntriesRemoved
+         << ",\"leaf_candidates_checked\":" << diagnostics.leafCandidatesChecked
+         << ",\"leaf_candidates_already_cached\":" << diagnostics.leafCandidatesAlreadyCached
+         << ",\"leaf_candidates_in_range\":" << diagnostics.leafCandidatesInRange
+         << ",\"leaf_candidates_in_fov\":" << diagnostics.leafCandidatesInFov
+         << ",\"cache_inserts\":" << diagnostics.cacheInserts
+         << ",\"external_queries\":" << diagnostics.externalQueries
+         << ",\"external_candidates_visited\":" << diagnostics.externalCandidatesVisited
+         << ",\"external_candidates_accepted\":" << diagnostics.externalCandidatesAccepted
+         << ",\"cached_neighbors_aggregated\":" << diagnostics.cachedNeighborsAggregated
+         << ",\"external_neighbors_aggregated\":" << diagnostics.externalNeighborsAggregated
+         << ",\"penetration_tests\":" << diagnostics.penetrationTests
+         << ",\"penetrations\":" << diagnostics.penetrations
+         << ",\"forward_normalizations\":" << diagnostics.forwardNormalizations
+         << ",\"school_distance_square_roots\":" << diagnostics.schoolDistanceSquareRoots
+         << ",\"neighbor_distance_square_roots\":" << diagnostics.neighborDistanceSquareRoots
+         << ",\"force_normalizations\":" << diagnostics.forceNormalizations
+         << ",\"neighbor_count_histogram\":[";
+  for (std::size_t i = 0; i < diagnostics.neighborCountHistogram.size(); ++i) {
+    if (i != 0) output << ',';
+    output << diagnostics.neighborCountHistogram[i];
+  }
+  output << ']';
+#endif
   output << "},\"reorder\":" << options_.reorderCadence
          << ",\"reorder_validation_failures\":"
          << world_.reorderValidationFailures()

@@ -11,6 +11,10 @@
 #include "boids_buffers.h"
 #include "spatial_index.h"
 #include "boid_tree_spatial_index.h"
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+#include "interaction_diagnostics.h"
+#include <mutex>
+#endif
 
 // 群れシミュレーションの世界状態（更新ループ・SoAバッファ・デバッグ集計）を保持する。
 // かつては BoidUnit ツリー実装まで抱えていたため BoidTree と呼んでいたが、
@@ -139,6 +143,10 @@ public:
     LocalityStats getLocalityStats() const;
     void recordNeighborIndexDistance(bool external, int selfIndex,
                                      int neighborIndex);
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+    InteractionDiagnostics getInteractionDiagnostics() const;
+    void mergeInteractionDiagnostics(const InteractionDiagnostics &diagnostics);
+#endif
 
     // 選択した1個体だけを対象にする読み取り専用の挙動診断。
     // -1 で無効。通常実行時は記録処理を行わない。
@@ -271,6 +279,10 @@ private:
     std::vector<int> reorderSpeciesCount_;
     std::mt19937 randomEngine_;
     PhaseTimings phaseTimings_{};
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+    InteractionDiagnostics interactionDiagnostics_{};
+    mutable std::mutex interactionDiagnosticsMutex_;
+#endif
     ParallelTimings parallelTimings_{};
     bool parallelTimingEnabled_ = false;
     std::atomic<bool> localitySamplingEnabled_{false};

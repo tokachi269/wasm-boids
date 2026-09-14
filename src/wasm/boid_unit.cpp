@@ -1186,12 +1186,22 @@ void BoidUnit::updateRecursive(float dt) {
   // leaf の相互作用（高コスト）をチャンク並列で実行
   const auto interactionStart = PhaseClock::now();
   runParallelRanges(leafUnits.size(), 0, [&](std::size_t begin, std::size_t end) {
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+    InteractionDiagnostics diagnostics;
+#endif
     for (std::size_t i = begin; i < end; ++i) {
       BoidUnit *unit = leafUnits[i];
       if (unit) {
-        unit->computeBoidInteraction(dt, timeStepResponse.stressRiseBlend);
+        unit->computeBoidInteraction(dt, timeStepResponse.stressRiseBlend
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+                                     , &diagnostics
+#endif
+        );
       }
     }
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+    simulation.mergeInteractionDiagnostics(diagnostics);
+#endif
   });
   simulation.recordPhaseTiming(
       BoidSimulation::Phase::ComputeBoidInteraction,
@@ -1266,10 +1276,17 @@ inline glm::quat BoidUnit::dirToQuatRollZero(const glm::vec3 &forward) {
  * - Fast-start吸引制御による群れの縁での強制凝集
  * - 捕食者の追跡ターゲット選択と更新
  */
-void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend) {
+void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+                                      , InteractionDiagnostics *diagnostics
+#endif
+) {
   BoidSimulation &simulation = simulationFor(this);
   const bool sampleLocality = simulation.isLocalitySamplingEnabled();
   const auto &globalSpeciesParams = simulation.getSpeciesParamsList();
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+#define BOIDS_DIAG_INCREMENT(field) do { if (diagnostics) { ++diagnostics->field; } } while (false)
+#endif
   // 空間インデックス向けの境界情報を毎フレーム更新
   computeBoundingSphere();
 
@@ -1400,11 +1417,17 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend) {
         // 無関係な遠方の群れへ直線的に引かれ続けるのを防ぐ。
         float bestDistSq = std::numeric_limits<float>::max();
         for (const auto &school : *schools) {
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+          BOIDS_DIAG_INCREMENT(schoolCandidatesVisited);
+#endif
           if (!school.active || school.weight < 0.25f ||
               (simulation.getSimulationTimeSeconds() -
                school.lastUpdateTimeSeconds) > 0.75f) {
             continue;
           }
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+          BOIDS_DIAG_INCREMENT(schoolCandidatesEligible);
+#endif
           const glm::vec3 diff = school.center - pos;
           const float distSq = glm::dot(diff, diff);
           const float candidateSchoolRadius = glm::max(school.radius, 1.0f);
@@ -1421,12 +1444,21 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend) {
           }
         }
         if (hasSchoolCenterDir) {
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+          BOIDS_DIAG_INCREMENT(schoolAssociations);
+          BOIDS_DIAG_INCREMENT(schoolDistanceSquareRoots);
+#endif
           const float distance = glm::sqrt(bestDistSq);
           const float fadeWidth = glm::max(selfParams.cohesionRange, 0.0f);
           schoolInfluenceScale = fadeWidth > EPS
               ? 1.0f - glm::smoothstep(
                   schoolRadius, schoolRadius + fadeWidth, distance)
               : (distance <= schoolRadius ? 1.0f : 0.0f);
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+          if (schoolInfluenceScale > 0.0f) {
+            BOIDS_DIAG_INCREMENT(schoolInfluencePositive);
+          }
+#endif
         }
       }
     }
@@ -1610,6 +1642,9 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend) {
     uint8_t &neighborCountRef = buf->neighborCounts[gIdx];
     int activeCount = std::min<int>(neighborCountRef, maxNeighbors);
     auto *neighborEntries = buf->neighborEntries.data() + neighborBegin;
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+    BOIDS_DIAG_INCREMENT(boidsProcessed);
+#endif
 
     auto eraseNeighborAt = [&](int entryIndex) {
       for (int move = entryIndex + 1; move < activeCount; ++move) {
@@ -1619,11 +1654,17 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend) {
     };
 
     for (int entryIndex = 0; entryIndex < activeCount;) {
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+      BOIDS_DIAG_INCREMENT(cachedEntriesValidated);
+#endif
       auto &entry = neighborEntries[entryIndex];
       const int cachedNeighbor = entry.index;
       if (cachedNeighbor < 0 ||
           cachedNeighbor >= static_cast<int>(buf->positions.size()) ||
           cachedNeighbor == gIdx || buf->speciesIds[cachedNeighbor] != sid) {
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+        BOIDS_DIAG_INCREMENT(cachedEntriesRemoved);
+#endif
         eraseNeighborAt(entryIndex);
         continue;
       }
@@ -1636,6 +1677,9 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend) {
       const float tauJitter =
           baseTau * (0.85f + 0.30f * hash01(uint32_t(stableId) * 1664525u + uint32_t(entry.slot) * 1013904223u));
       if (entry.age > tauJitter) {
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+        BOIDS_DIAG_INCREMENT(cachedEntriesRemoved);
+#endif
         eraseNeighborAt(entryIndex);
         continue;
       }
@@ -1653,6 +1697,9 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend) {
     const bool hasVel = (velLen2 > EPS);
     glm::vec3 forward(0.0f);
     if (hasVel) {
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+      BOIDS_DIAG_INCREMENT(forwardNormalizations);
+#endif
       forward = vel * (1.0f / glm::sqrt(velLen2));
     }
 
@@ -1662,6 +1709,9 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend) {
         if (i == index)
           continue;
 
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+        BOIDS_DIAG_INCREMENT(leafCandidatesChecked);
+#endif
         int gNeighbor = indices[i];
         bool alreadyCached = false;
         for (int entryIndex = 0; entryIndex < activeCount; ++entryIndex) {
@@ -1671,12 +1721,22 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend) {
           }
         }
         if (alreadyCached)
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+        {
+          BOIDS_DIAG_INCREMENT(leafCandidatesAlreadyCached);
           continue;
+        }
+#else
+          continue;
+#endif
 
         glm::vec3 diff = buf->positions[gNeighbor] - pos;
         float distSq = glm::dot(diff, diff);
         if (distSq >= viewRangeSq)
           continue; // 速度ゼロでなければ視界内かどうかを確認（sqrt を避ける版）
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+        BOIDS_DIAG_INCREMENT(leafCandidatesInRange);
+#endif
         if (hasVel) {
           // FOV判定: diffDot >= cosHalfFov * |diff|
           // sqrt を避けるために二乗比較へ変形する。
@@ -1688,6 +1748,9 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend) {
             continue;
           }
         }
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+        BOIDS_DIAG_INCREMENT(leafCandidatesInFov);
+#endif
         candidates.emplace_back(distSq, gNeighbor);
       }
     } // -------------------------------------------------------
@@ -1720,6 +1783,9 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend) {
       neighborEntries[insertAt] =
           SoABuffers::NeighborEntry{globalNeighbor, dt, freeSlot};
       ++activeCount;
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+      BOIDS_DIAG_INCREMENT(cacheInserts);
+#endif
       neighborCountRef = static_cast<uint8_t>(activeCount);
     };
 
@@ -1768,6 +1834,9 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend) {
       const float queryRadius = glm::max(selfParams.cohesionRange,
                                          glm::max(selfParams.separationRange, 0.0f));
       if (queryRadius > 1e-4f) {
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+        BOIDS_DIAG_INCREMENT(externalQueries);
+#endif
         // 近傍が足りない分だけ集めたいが、球内が多いケースに備えて上限を置く。
         const int hardLimit = glm::clamp(maxNeighbors + 8, 8, 24);
         externalNeighbors.reserve(static_cast<std::size_t>(hardLimit));
@@ -1776,6 +1845,9 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend) {
           simulation, pos, queryRadius,
             static_cast<std::size_t>(hardLimit),
             [&](int candidateIdx, const BoidUnit *leafNode) {
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+              BOIDS_DIAG_INCREMENT(externalCandidatesVisited);
+#endif
               // leaf 内候補は既存の activeNeighbors で扱うので除外。
               if (!leafNode || leafNode == this) {
                 return;
@@ -1819,12 +1891,21 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend) {
               }
 
               externalNeighbors.push_back(candidateIdx);
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+              BOIDS_DIAG_INCREMENT(externalCandidatesAccepted);
+#endif
             });
       }
     }
 
     const int externalNeighborCount = static_cast<int>(externalNeighbors.size());
     const int totalNeighborCount = neighborCount + externalNeighborCount;
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+    if (diagnostics) {
+      const int histogramIndex = glm::clamp(totalNeighborCount, 0, 32);
+      ++diagnostics->neighborCountHistogram[static_cast<std::size_t>(histogramIndex)];
+    }
+#endif
 
     if (totalNeighborCount == 0) {
       // 近傍が完全に途切れた場合は、余計な補助機構で加速させずに保守的に振る舞う。
@@ -1832,6 +1913,9 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend) {
       if (hasSchoolCenterDir) {
         float clusterLen2 = glm::length2(schoolCenterDir);
         if (clusterLen2 > EPS) {
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+          BOIDS_DIAG_INCREMENT(schoolDistanceSquareRoots);
+#endif
           const float clusterDist = glm::sqrt(clusterLen2);
           glm::vec3 clusterDir = schoolCenterDir *
                                  (1.0f / clusterDist);
@@ -1908,6 +1992,10 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend) {
           simulation.recordNeighborIndexDistance(false, gIdx, gNeighbor);
         }
         ++aggregatedNeighborCount;
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+        BOIDS_DIAG_INCREMENT(cachedNeighborsAggregated);
+        BOIDS_DIAG_INCREMENT(penetrationTests);
+#endif
         glm::vec3 diff = buf->positions[gNeighbor] - pos;
         float distSq = glm::dot(diff, diff);
         if (cohesionRangeSq > 0.0f && distSq < cohesionRangeSq) {
@@ -1920,6 +2008,10 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend) {
             distSq <= closeCheckRangeSq + 1e-6f && distSq > 1e-12f;
         float dist = 0.0f;
         if (penetrating) {
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+          BOIDS_DIAG_INCREMENT(penetrations);
+          BOIDS_DIAG_INCREMENT(neighborDistanceSquareRoots);
+#endif
           dist = glm::sqrt(distSq);
           const float penetration = glm::max(closeCheckRange - dist, 0.0f);
           const float penetrationRatio = penetration / glm::max(closeCheckRange, 1e-5f);
@@ -1944,6 +2036,9 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend) {
           continue;
 
         if (!penetrating) {
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+          BOIDS_DIAG_INCREMENT(neighborDistanceSquareRoots);
+#endif
           dist = glm::sqrt(distSq);
         }
         float wSep = 0.0f;
@@ -1977,6 +2072,11 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend) {
           simulation.recordNeighborIndexDistance(true, gIdx, gNeighbor);
         }
         ++aggregatedNeighborCount;
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+        BOIDS_DIAG_INCREMENT(externalNeighborsAggregated);
+        BOIDS_DIAG_INCREMENT(penetrationTests);
+        BOIDS_DIAG_INCREMENT(neighborDistanceSquareRoots);
+#endif
         glm::vec3 diff = buf->positions[gNeighbor] - pos;
         float distSq = glm::dot(diff, diff);
         if (!(distSq > EPS && distSq < viewRangeSq)) {
@@ -1990,6 +2090,9 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend) {
         // 近傍キャッシュ(leaf内)に入っていない相手でも、重なりだけは確実に排除する。
         const float dist = glm::sqrt(distSq);
         if (distSq <= closeCheckRangeSq + 1e-6f && distSq > 1e-12f) {
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+          BOIDS_DIAG_INCREMENT(penetrations);
+#endif
           const float penetration = glm::max(closeCheckRange - dist, 0.0f);
           const float penetrationRatio = penetration / glm::max(closeCheckRange, 1e-5f);
           float response = penetrationRatio * penetrationRatio;
@@ -2043,6 +2146,9 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend) {
       glm::vec3 totalSeparation = glm::vec3(0.0f);
       float sepLen2 = glm::length2(sumSep);
       if (sepLen2 > EPS) {
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+        BOIDS_DIAG_INCREMENT(forceNormalizations);
+#endif
         totalSeparation =
             (sumSep * (1.0f / glm::sqrt(sepLen2))) *
           globalSpeciesParams[sid].separation;
@@ -2054,6 +2160,9 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend) {
         glm::vec3 cohDir = sumCohDir / wCohSum; // 重み付き平均方向
         float cohLen2 = glm::length2(cohDir);
         if (cohLen2 > EPS) {
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+          BOIDS_DIAG_INCREMENT(forceNormalizations);
+#endif
           const float edgeFactor =
               1.0f + glm::clamp(1.0f - phi, 0.0f, 1.0f); // 外縁ほど強化
           totalCohesion = (cohDir * (1.0f / glm::sqrt(cohLen2))) *
@@ -2066,6 +2175,9 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend) {
       glm::vec3 aliDir = avgAlignVel - vel;
       float aliLen2 = glm::length2(aliDir);
       if (aliLen2 > EPS) {
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+        BOIDS_DIAG_INCREMENT(forceNormalizations);
+#endif
         totalAlignment =
             (aliDir * (1.0f / glm::sqrt(aliLen2))) *
           globalSpeciesParams[sid].alignment;
@@ -2078,6 +2190,9 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend) {
         }
         float clusterLen2 = glm::length2(schoolCenterDir);
         if (clusterLen2 > EPS) {
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+          BOIDS_DIAG_INCREMENT(schoolDistanceSquareRoots);
+#endif
           const float clusterDist = glm::sqrt(clusterLen2);
           glm::vec3 globalDir =
               schoolCenterDir * (1.0f / glm::max(clusterDist, 1e-4f));
@@ -2208,6 +2323,9 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend) {
     std::vector<int>().swap(predatorTargetCandidates);
     predatorTargetCandidates.reserve(kPredatorCacheLimit);
   }
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+#undef BOIDS_DIAG_INCREMENT
+#endif
 }
 
 /**

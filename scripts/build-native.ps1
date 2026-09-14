@@ -1,3 +1,8 @@
+param(
+    [switch]$Profile,
+    [switch]$InteractionDiagnostics
+)
+
 $ErrorActionPreference = 'Stop'
 
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
@@ -13,7 +18,9 @@ if (Test-Path $vswhere) {
     }
 }
 
-cmake -S . -B build-native -G 'NMake Makefiles' -DCMAKE_BUILD_TYPE=Release '-DCMAKE_CXX_FLAGS=/utf-8 /EHsc'
+$profileOption = if ($Profile) { 'ON' } else { 'OFF' }
+$diagnosticsOption = if ($InteractionDiagnostics) { 'ON' } else { 'OFF' }
+cmake -S . -B build-native -G 'NMake Makefiles' -DCMAKE_BUILD_TYPE=Release '-DCMAKE_CXX_FLAGS=/utf-8 /EHsc' "-DBOIDS_NATIVE_PROFILE=$profileOption" "-DBOIDS_INTERACTION_DIAGNOSTICS=$diagnosticsOption"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 cmake --build build-native
 exit $LASTEXITCODE

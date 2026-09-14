@@ -4,6 +4,9 @@ cmake_minimum_required(VERSION 3.20)
 # プロジェクト名と使用する言語を指定
 project(wasm_boids LANGUAGES CXX)
 
+option(BOIDS_NATIVE_PROFILE "Emit native profiling symbols without disabling Release optimizations" OFF)
+option(BOIDS_INTERACTION_DIAGNOSTICS "Count interaction paths in native diagnostic builds" OFF)
+
 # Emscriptenを使用するための設定
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -119,6 +122,10 @@ add_library(boids_core STATIC
     ${BOIDS_CORE_SOURCES}
 )
 
+if(BOIDS_INTERACTION_DIAGNOSTICS AND NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    target_compile_definitions(boids_core PUBLIC BOIDS_INTERACTION_DIAGNOSTICS=1)
+endif()
+
 target_compile_features(boids_core PUBLIC cxx_std_20)
 
 target_include_directories(boids_core
@@ -170,6 +177,10 @@ else()
         $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -Wpedantic>
     )
 
+    if(BOIDS_NATIVE_PROFILE AND MSVC)
+        target_compile_options(boids_core PRIVATE /Zi)
+    endif()
+
     add_executable(wasm_boids_native
         src/wasm/entry.cpp
         src/wasm/main.cpp
@@ -186,6 +197,11 @@ else()
         $<$<CXX_COMPILER_ID:MSVC>:/W4 /permissive->
         $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -Wpedantic>
     )
+
+    if(BOIDS_NATIVE_PROFILE AND MSVC)
+        target_compile_options(wasm_boids_native PRIVATE /Zi)
+        target_link_options(wasm_boids_native PRIVATE /DEBUG:FULL)
+    endif()
 
     set_target_properties(wasm_boids_native PROPERTIES
         OUTPUT_NAME "wasm_boids_native"

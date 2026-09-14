@@ -11,6 +11,9 @@
 
 #include "boid.h"
 #include "species_params.h"
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+#include "interaction_diagnostics.h"
+#endif
 
 struct SoABuffers;
 class BoidSimulation;
@@ -48,7 +51,11 @@ public:
     int getMaxID() const;
     bool isBoidUnit() const;
     void computeBoundingSphere();
-    void computeBoidInteraction(float dt, float stressRiseBlend);
+    void computeBoidInteraction(float dt, float stressRiseBlend
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+                                , InteractionDiagnostics *diagnostics
+#endif
+    );
     void applyInterUnitInfluence(BoidUnit *other, float dt = 1.0f);
     void updateRecursive(float dt = 1.0f);
     bool needsSplit(float splitRadius = 40.0f, float directionVarThresh = 0.5f, int maxBoids = 64) const;
