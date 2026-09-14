@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="500" viewBox="0 0 900 500" role="img" aria-labelledby="title desc">
+  <title id="title">Native benchmark scaling</title>
+  <desc id="desc">Single-task native Release benchmark from 10,000 to 200,000 boids.</desc>
+  <rect width="900" height="500" fill="#fff"/>
+  <style>
+    text { font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #24292f; }
+    .muted { fill: #57606a; }
+    .axis { stroke: #8c959f; stroke-width: 1; }
+    .grid { stroke: #d0d7de; stroke-width: 1; stroke-dasharray: 3 4; }
+    .measured { fill: none; stroke: #0969da; stroke-width: 3; }
+    .linear { fill: none; stroke: #1a7f37; stroke-width: 2; stroke-dasharray: 6 5; }
+    .nlog { fill: none; stroke: #bf8700; stroke-width: 2; stroke-dasharray: 6 5; }
+    .quadratic { fill: none; stroke: #cf222e; stroke-width: 2; stroke-dasharray: 6 5; }
+    .point { fill: #0969da; stroke: #fff; stroke-width: 2; }
+  </style>
+
+  <text x="55" y="28" font-size="16" font-weight="600">Native Release benchmark: frame mean</text>
+  <text x="55" y="47" class="muted">1 task / seed 1 / fixed dt 1/60 / warmup 300 / measured 1000 frames</text>
+
+  <line x1="75" y1="80" x2="75" y2="310" class="axis"/>
+  <line x1="75" y1="310" x2="840" y2="310" class="axis"/>
+  <line x1="75" y1="195" x2="840" y2="195" class="grid"/>
+  <line x1="75" y1="80" x2="840" y2="80" class="grid"/>
+  <text x="66" y="314" text-anchor="end" class="muted">0</text>
+  <text x="66" y="199" text-anchor="end" class="muted">80 ms</text>
+  <text x="66" y="84" text-anchor="end" class="muted">160 ms</text>
+  <text x="455" y="345" text-anchor="middle" class="muted">個体数</text>
+  <text x="20" y="195" text-anchor="middle" transform="rotate(-90 20 195)" class="muted">frame mean (ms)</text>
+
+  <polyline points="90,300.43 270,291.44 450,260.02 630,208.82 810,89.77" class="measured"/>
+  <circle cx="90" cy="300.43" r="4.5" class="point"/><circle cx="270" cy="291.44" r="4.5" class="point"/>
+  <circle cx="450" cy="260.02" r="4.5" class="point"/><circle cx="630" cy="208.82" r="4.5" class="point"/>
+  <circle cx="810" cy="89.77" r="4.5" class="point"/>
+  <text x="90" y="330" text-anchor="middle" class="muted">10k</text><text x="270" y="330" text-anchor="middle" class="muted">20k</text>
+  <text x="450" y="330" text-anchor="middle" class="muted">50k</text><text x="630" y="330" text-anchor="middle" class="muted">100k</text>
+  <text x="810" y="330" text-anchor="middle" class="muted">200k</text>
+  <text x="90" y="292" text-anchor="middle">6.65</text><text x="270" y="283" text-anchor="middle">12.91</text>
+  <text x="450" y="252" text-anchor="middle">34.77</text><text x="630" y="201" text-anchor="middle">70.40</text>
+  <text x="810" y="82" text-anchor="middle">152.93</text>
+
+  <text x="55" y="360" font-size="16" font-weight="600">Growth relative to 10k (log scale)</text>
+  <line x1="75" y1="450" x2="75" y2="395" class="axis"/>
+  <line x1="75" y1="450" x2="840" y2="450" class="axis"/>
+  <line x1="75" y1="423" x2="840" y2="423" class="grid"/>
+  <line x1="75" y1="395" x2="840" y2="395" class="grid"/>
+  <text x="66" y="454" text-anchor="end" class="muted">1×</text>
+  <text x="66" y="427" text-anchor="end" class="muted">10×</text>
+  <text x="66" y="399" text-anchor="end" class="muted">100×</text>
+  <polyline points="90,450 270,441.93 450,430.44 630,423.13 810,417.66" class="measured"/>
+  <polyline points="90,450 270,441.45 450,430.22 630,422.86 810,417.14" class="linear"/>
+  <polyline points="90,450 270,440.02 450,428.23 630,420.29 810,414.91" class="nlog"/>
+  <polyline points="90,450 270,433.28 450,411.21 630,395 810,379" class="quadratic"/>
+  <circle cx="90" cy="450" r="4.5" class="point"/><circle cx="270" cy="441.93" r="4.5" class="point"/>
+  <circle cx="450" cy="430.44" r="4.5" class="point"/><circle cx="630" cy="423.13" r="4.5" class="point"/>
+  <circle cx="810" cy="417.66" r="4.5" class="point"/>
+  <text x="90" y="470" text-anchor="middle" class="muted">10k</text><text x="270" y="470" text-anchor="middle" class="muted">20k</text>
+  <text x="450" y="470" text-anchor="middle" class="muted">50k</text><text x="630" y="470" text-anchor="middle" class="muted">100k</text>
+  <text x="810" y="470" text-anchor="middle" class="muted">200k</text>
+  <line x1="550" y1="365" x2="570" y2="365" class="measured"/><text x="577" y="369">実測</text>
+  <line x1="625" y1="365" x2="645" y2="365" class="linear"/><text x="652" y="369">O(N)</text>
+  <line x1="705" y1="365" x2="725" y2="365" class="nlog"/><text x="732" y="369">O(N log N)</text>
+  <line x1="805" y1="365" x2="825" y2="365" class="quadratic"/>
+  <text x="832" y="369">O(N²)</text>
+</svg>
