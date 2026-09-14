@@ -681,7 +681,18 @@ static void updateLeafKinematics(BoidUnit *unit, float dt,
     unit->buf->accelerations[gIdx] = glm::vec3(0.0f);
     unit->buf->predatorInfluences[gIdx] *=
         response.predatorInfluenceRetention;
-    unit->buf->orientationsWrite[gIdx] = BoidUnit::dirToQuatRollZero(newDir);
+    glm::vec3 orientationForward =
+        safeNormalizeOr(newDir, glm::vec3(0.0f, 0.0f, 1.0f));
+    glm::vec3 orientationUp(0.0f, 1.0f, 0.0f);
+    if (fabsf(glm::dot(orientationForward, orientationUp)) > 0.99f) {
+      orientationUp = glm::vec3(1.0f, 0.0f, 0.0f);
+    }
+    glm::vec3 orientationRight =
+        safeNormalizeOr(glm::cross(orientationUp, orientationForward),
+                        glm::vec3(1.0f, 0.0f, 0.0f));
+    orientationUp = glm::cross(orientationForward, orientationRight);
+    unit->buf->orientationsWrite[gIdx] = glm::quat_cast(
+        glm::mat3(orientationRight, orientationUp, orientationForward));
     if (unit->buf->stresses[gIdx] > 0.0f) {
       unit->buf->stresses[gIdx] -= response.stressDecayAmount;
       if (unit->buf->stresses[gIdx] < 0.0f) {
@@ -1252,21 +1263,6 @@ inline float BoidUnit::easeOut(float t) {
   // イージング関数 (ease-out)
   return t * t * (3.0f - 2.0f * t);
 }
-inline glm::quat BoidUnit::dirToQuatRollZero(const glm::vec3 &forward) {
-  // forward がゼロ長だと normalize が NaN を返し、以降の姿勢が破綻する。
-  // kinematics 側で極力防いでいるが、保険としてここでもゼロ長を避ける。
-  glm::vec3 f = safeNormalizeOr(forward, glm::vec3(0.0f, 0.0f, 1.0f));
-  glm::vec3 up(0.0f, 1.0f, 0.0f);
-  if (fabsf(glm::dot(f, up)) > 0.99f) { // 平行回避
-    up = glm::vec3(1.0f, 0.0f, 0.0f);   // フォールバック
-  }
-  glm::vec3 right = glm::cross(up, f);
-  right = safeNormalizeOr(right, glm::vec3(1.0f, 0.0f, 0.0f));
-  up = glm::cross(f, right); // 直交基底
-  glm::mat3 R(right, up, f); // 列順：X,Y,Z
-  return glm::quat_cast(R);  // 正規化済 quat
-}
-
 /**
  * ユニット内の各Boidについて近傍Boidとの相互作用を計算し、加速度を更新する。
  *

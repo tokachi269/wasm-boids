@@ -67,7 +67,6 @@ public:
     void mergeWith(BoidUnit *other);
     void addRepulsionToAllBoids(BoidUnit *unit, const glm::vec3 &repulsion);
     glm::vec3 fixRoll(const glm::vec3 &direction);
-    static glm::quat dirToQuatRollZero(const glm::vec3 &forward);
     void applyPredatorInfluence(int gIdx, glm::vec3 &acceleration, const glm::vec3 &position);
     static float easeOut(float t);
 };
