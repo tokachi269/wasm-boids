@@ -1,306 +1,102 @@
 # wasm-boids
 
-ブラウザ上で動く魚群シミュレーションです。
+C++ / WebAssemblyで群れを計算し、Three.jsで描画するブラウザ向け魚群シミュレーション。
+数万匹規模での実行を対象とし、近傍探索、データ配置、インスタンシングに重点を置く。
 
-群れの計算は C++ / WebAssembly、描画は Three.js で行っています。
-数万匹を動かすことを前提に、近傍探索やデータ配置、描画方法を調整しています。
+[デモ](https://tokachi269.github.io/wasm-boids/)
 
-[デモを開く](https://tokachi269.github.io/wasm-boids/)
+## 概要
 
-## 仕組み
-
-シミュレーション側では、Boidsの分離・整列・凝集に加えて、捕食者からの逃避や群れのクラスタ推定を行います。
-個体の状態はSoAで保持し、空間階層、近傍キャッシュ、空間順への並べ替えを使って近傍計算の負荷を抑えています。
-
-描画側では、WASMのバッファをJavaScriptから参照し、Three.jsの `InstancedMesh` へ渡します。
-魚のLOD、水中のフォグ、Bloom、SSAOなどは描画側で処理します。
-
-## 性能について
-
-性能調整には、固定seedで再実行できるnative benchmarkとbrowser benchmarkを使っています。
-benchmarkの値は変更前後の比較用であり、ブラウザ上のフレームレートと同じものではありません。
-
-測定条件と手順は [`scripts/bench.md`](scripts/bench.md) にまとめています。
-
----
+- 分離・整列・凝集によるBoidsモデル
+- 捕食者からの逃避とストレス応答
+- 小クラスターと大クラスターの推定
+- C++側のSoA形式データとダブルバッファ
+- 空間階層、近傍キャッシュ、空間順への並べ替え
+- Three.js `InstancedMesh`による描画とLOD
+- 水中フォグ、SSAO、Bloom
+- 固定seedによるnative / browser benchmark
 
 ## 構成
 
-### フロントエンド（Vue + Three.js）
+| 領域 | 主な責務 |
+| --- | --- |
+| `src/wasm` | Boids、近傍探索、tree、cluster、WASM bindings |
+| `src/simulation` | WASMの初期化、buffer view、simulation step |
+| `src/rendering` | InstancedMesh、LOD、水中表現、post-process |
+| `src/components` | 設定UI |
+| `src/benchmark` | browser benchmark |
+| `scripts` | ビルド、ネイティブベンチマーク、配信サーバー |
 
-- `src/App.vue`: UI/レンダリング/デバッグ表示の統合
-- `src/components/Settings.vue`: 種族パラメータの編集UI
-- `src/rendering/*`: InstancedMesh・フォグ・粒子
-- `src/simulation/WasmtimeBridge.js`: WASMバッファのビュー取得と step 呼び出し
-
-
-### シミュレーション（C++ / WASM）
-
-- `src/wasm/boids_simulation.cpp`: 空間階層（BoidSimulation）、種族エンベロープ、クラスター推定
-- `src/wasm/boid_unit.cpp`: 個体更新（近傍相互作用、捕食者、旋回制限など）
-- `src/wasm/species_params.h`: 種族パラメータ
-- `src/wasm/simulation_tuning.*`: システム調整値（逃避など）
-
----
-
-## データ設計（性能前提）
-
-### SoA（Structure of Arrays）
-
-位置・速度・姿勢・speciesId などは配列として保持し、キャッシュ効率とバッファ転送の単純さを優先します。
-
-### 読み/書きバッファの分離
-
-フレーム内で「読んだ値を即座に上書きしない」ために read/write を分け、ステップ完了後に swap します。
-これにより、近傍参照がフレーム途中で破綻しにくくなります。
-
----
-
-## アルゴリズム概要（深掘り）
-
-この章は、主に `src/wasm/boids_simulation.cpp` と `src/wasm/boid_unit.cpp` の現行実装に合わせて説明します。
-Boidsの基本3規則（分離・整列・凝集）自体の説明は最小限にし、「大規模化のために何をどう近似/分割しているか」を中心に書きます。
-
-### 1) 空間階層（BoidTree / BoidUnit）
-
-Boids を直接全探索すると $O(N^2)$ になるため、個体群を「空間的な塊（unit）」として扱い、木構造で管理します。
-
-- 木は再帰的に分割して構築します。
-- 葉（BoidUnit）はインデックス集合を持ち、葉の中で詳細計算を行います。
-- 内部ノードは「子の包絡球（中心/半径）」などの代表量を持ち、探索や近似のために使います。
-
-更新中は、木を辿りながら候補を集め、葉での詳細計算に落とし込みます。
-
-#### BoidUnitが持つ代表量（近似の核）
-
-葉/内部ノード（どちらも `BoidUnit`）は、少なくとも次の代表量を持ちます。
-
-- `center` / `radius`: バウンディング球。空間探索の枝刈りに使います。
-- `averageVelocity`: 速度の代表値。遠方ユニットの影響の粗い評価に使えます。
-- `indices`: 葉の場合は「含まれる個体インデックス配列」。ここをSoAバッファへ引き当てて詳細計算します。
-
-ポイントは「空間クエリの単位」を個体ではなくユニットにすることで、探索回数とメモリアクセスの局所性を改善することです。
-
-### 2) フレームパイプライン（概略）
-
-概ね次の処理順で 1 ステップを進めます。
-
-1. `dt` の決定と取り扱い
-2. 個体更新（`updateRecursive`）
-   - 近傍相互作用（分離・整列・凝集）
-   - 捕食者の影響、ストレス/逃避などの補助項
-   - 旋回制限、水平化トルク、速度クランプ
-   - 書き込みバッファへ反映
-3. 読み/書きバッファの swap
-4. デバッグ用集計（間引き）
-   - 種族エンベロープ（中心/半径/個体数）
-   - 小クラスター推定、さらに「群れクラスター」推定
-5. 木構造の再構築/調整
-   - 定期的に `build()` で再構築
-   - さらに葉キャッシュを使って、分割/結合を少量ずつ進める
-
-処理の対応関係が追えるように、概念的な擬似コードにすると次のイメージです（厳密な実装の全分岐は省略）。
+実行時のデータ経路:
 
 ```text
-BoidTree::update(dt):
-  (定期) 種族エンベロープ更新
-
-  if root:
-    個体更新（木を辿って葉で詳細計算）
-    dt > 0 なら read/write を swap
-
-  (定期) 小クラスター更新
-  (定期) 群れクラスター更新
-
-  (定期) 葉一覧（キャッシュ）を再収集
-  (定期) 木を再構築
-
-  (毎フレーム少量) split/merge を進める
+C++ simulation
+  -> WASM buffers
+  -> JavaScript typed-array views
+  -> Three.js InstancedMesh
+  -> post-process
 ```
 
-重い集計（エンベロープ/クラスター/再構築）を毎フレーム行うとスパイクになりやすいため、
-「毎フレーム必須なもの（個体更新）」と「多少遅れても見た目が破綻しにくいもの（集計/再構築）」を分離して間引きます。
+## 性能計測
 
-#### split/merge を“少量ずつ”進める理由
+性能評価には、同一seed・個体数・task数で再実行できるネイティブベンチマークを使用する。
+ブラウザベンチマークでは、simulation、instance packing、render submission、GPU時間を個別に計測する。
 
-木を頻繁に完全再構築すると安定しますが重いので、完全再構築は間引きつつ、合間に局所調整として split/merge を少量ずつ進めます。
+ベンチマーク値は変更前後の比較用であり、実画面のフレームレートとは直接対応しない。
+測定条件と結果の読み方は [`scripts/bench.md`](scripts/bench.md) を参照。
 
-- 定期的に葉一覧（leafCache）を収集し、そこから分割/結合候補を順に処理します
-- 1フレームで処理する候補数に上限を付け、スパイク（瞬間的な重さ）を避けます
+## セットアップ
 
-#### 分割判定/結合判定の目安
-
-分割/結合は `BoidUnit::needsSplit()` / `BoidUnit::canMergeWith()` が基準です。
-概ね次を見ています。
-
-- split: ユニット半径が大きい、または向き/密度のばらつきが大きい、かつユニット内個体数が多い
-- merge: ユニット同士が近い、速度が十分揃っている、半径が過大でない、かつ合算個体数が上限以内
-
-（直近の修正として、異なる `speciesId` のユニットが結合しないように制限しています。）
-
-### 3) 近傍探索（球交差クエリ + 葉内詳細）
-
-葉の中では `indices` を使って個体同士の詳細相互作用を計算します。
-一方で「影響範囲に入る別の葉」を拾う時は、木のバウンディング球で枝刈りしながら走査します。
-
-`BoidTree` は球交差クエリを提供しており、用途によっては「必要数が揃ったら探索を止める」こともできます。
-
-- `forEachLeafIntersectingSphere(...)`: 交差する葉を列挙
-- `forEachLeafIntersectingSphereCancelable(...)`: 途中で打ち切れる版（必要数が集まれば十分な用途向け）
-
-Cancelable版は「必要数が揃えば探索を止める」ためのものです。
-
-#### 葉内の個体更新（BoidUnit側の概要）
-
-葉では、`indices` で参照できる個体群について、分離・整列・凝集のステアリングを合成して加速度（または目標速度）を作ります。
-探索コストが挙動に直結するため、近傍として参照する上限は `maxNeighbors` で明示的に制限します。
-
-代表的には次のような項目を順に適用します。
-
-- 近傍相互作用（分離・整列・凝集）: 各レンジ（`*Range`）内の近傍を集計し、強度（`cohesion/alignment/separation`）で重み付け
-- 捕食者影響: 非捕食者は捕食者を検知すると回避方向を加算（警戒距離は種族ごと）
-- 姿勢の追従: `torqueStrength` による方向合わせ、`horizontalTorque` による水平化
-- 旋回と速度の上限: `maxTurnAngle`（曲率）による旋回クランプ、`minSpeed/maxSpeed` による速度クランプ
-
-捕食者の影響（警戒距離）についても、毎フレームの全走査を避けるため、
-種族パラメータ更新時に探索に必要な値を前計算してキャッシュします。
-
-### 4) クラスター推定（species clusters / school clusters）
-
-クラスターは「個体全数」ではなく「leaf（BoidUnit）単位」の近似集計を行います。
-
-- 小クラスター: leaf を素材に中心・半径・速度整列などを推定
-- 大クラスター（群れ）: 小クラスター同士のリンク（距離閾値）を辿り、群れ中心を推定
-- 時間方向はEMA（指数移動平均）で平滑化し、表示/注視点が揺れないようにします
-
-これらの推定結果は、大クラスターへの復帰力、デバッグ表示、起動直後のカメラ注視点に利用しています。
-
-#### 小クラスターの半径推定が“中心のズレ”に強い理由
-
-小クラスターは leaf を寄せ集めた近似なので、単純に「中心からの最大距離」だけで半径を作ると、
-中心が少しズレただけで半径が暴れやすくなります。
-
-そこで実装では、位置の二乗和（`E[x^2]`）も保持し、
-
-$$\mathrm{Var}(x) = E[x^2] - (E[x])^2$$
-
-の形でRMS半径を作ることで、中心が多少揺れても“広がり”が安定しやすいようにしています。
-さらに leaf 自体の半径も加算し、leaf単位近似による過小評価を抑えます。
-
-#### 群れ（大クラスター）の作り方
-
-群れは「小クラスター同士をリンクし、連結成分としてまとめる」方式です。
-リンク判定は
-
-```
-dist <= linkScale * (r_i + r_j)
-```
-
-のように、半径の和を基準にして密集を判定します。
-中心はEMAで追跡し、フレームごとの対応付けが多少ズレても“注視点が飛ぶ”のを避けます。
-
-### 5) 旋回制限（maxTurnAngle の意味）
-
-`maxTurnAngle` は「角速度（/sec）」ではなく「最大曲率（移動距離あたりの回転量）」として扱います。
-角速度上限だと速度を変えたときに曲率が変わり、同じ設定値でも曲がり方が変わってしまうためです。
-
-1ステップの旋回上限角は概ね次で決まります。
-
-```
-maxTurnStep ≈ clamp(maxTurnAngle * speed * dt, 0, stepLimit)
-```
-
-これにより、速度を上げても「曲がりやすさ」が維持されます。
-
-補足:
-この設計は「視覚的な旋回の滑らかさ/安定性」を優先したもので、
-厳密な運動モデルというより“パラメータが直感通りに効く”ことを狙っています。
-
----
-
-## パラメータ（主要項目）
-
-UIで編集できる代表パラメータ（`SpeciesParams`）の意味をまとめます。
-
-| 名前 | 役割 |
-| --- | --- |
-| `cohesion`, `cohesionRange` | 群れ中心へ寄る強さと、その参照距離 |
-| `separation`, `separationRange` | 近すぎる個体から離れる強さと、開始距離 |
-| `alignment`, `alignmentRange` | 近傍の速度方向へ揃える強さと、参照距離 |
-| `maxSpeed`, `minSpeed` | 速度の上下限 |
-| `maxNeighbors` | 近傍として参照する最大数（探索コストと挙動が変わる） |
-| `maxTurnAngle` | 最大曲率（移動距離あたりの回転量）。速度を変えても曲がり方が崩れにくい |
-| `torqueStrength` | 方向合わせ（トルク）による回転の反応量 |
-| `horizontalTorque` | 上下の傾きを水平へ戻す補正 |
-| `lambda` | 減衰（速度の落ちやすさ） |
-| `tau` | 記憶時間（過去状態の残りやすさ） |
-| `predatorAlertRadius` | 捕食者を検知して逃避を始める距離 |
-| `isPredator` | 捕食者フラグ |
-
----
-
-## 実行時の挙動メモ
-
-- 起動直後、ユーザーがカメラ操作する前は「クラスタ中心」へ注視点を滑らかに合わせます。
-- タブが非アクティブ（非表示/非フォーカス）の間、背景音は自動でミュートします。
-
----
-
-## セットアップ / ビルド
-
-### 必要環境
+必要環境:
 
 - Node.js / npm
-- Emscripten SDK（WASMビルド）
-- CMake（WASM/ネイティブどちらにも使用）
+- Emscripten SDK
+- CMake
 
-### 依存関係
+依存パッケージ:
 
-```bash
+```sh
 npm ci
 ```
 
-### WASMビルド
+開発用WASMビルド:
 
-```bash
+```sh
 npm run build-wasm:dev
 ```
 
-本リポジトリ内の CMake ビルドは `build-dev/` を使います。
+開発サーバー:
 
-### 開発起動
-
-```bash
+```sh
 npm run serve
 ```
 
-`serve` は WASM の再ビルド（監視）と Vue dev server を並列起動します。
+本番ビルド:
 
-### 本番ビルド
-
-```bash
+```sh
 npm run build
 ```
 
----
+ネイティブベンチマーク:
+
+```sh
+npm run benchmark
+```
+
+利用可能なコマンドと前提条件は [`docs/command_cheatsheet.md`](docs/command_cheatsheet.md) を参照。
 
 ## 開発資料
 
-- [`docs/architecture.md`](docs/architecture.md): 実装の責務分担
-- [`docs/testing.md`](docs/testing.md): 変更内容ごとの確認方法
-- [`docs/command_cheatsheet.md`](docs/command_cheatsheet.md): build、benchmark、deployのコマンド
-- [`scripts/bench.md`](scripts/bench.md): benchmarkの条件と読み方
+- [`docs/architecture.md`](docs/architecture.md): 実装の責務境界
+- [`docs/testing.md`](docs/testing.md): 変更内容ごとの検証方針
+- [`docs/engineering/agent_harness.md`](docs/engineering/agent_harness.md): バグ修正と画面確認の手順
+- [`scripts/bench.md`](scripts/bench.md): benchmarkの条件と計測項目
 
----
-
-## ライセンス
-
-MIT License
-
----
-
-## 参考
+## 参考文献
 
 - 石橋ら「大規模な魚群シミュレーションのための階層的Boidアルゴリズム」情報処理学会 CG-133 (2008)
 - Ito & Uchida, J. Phys. Soc. Jpn., 91, 064806 (2022)
 
+## ライセンス
+
+[MIT License](LICENSE)
