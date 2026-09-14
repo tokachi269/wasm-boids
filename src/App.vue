@@ -3768,4 +3768,73 @@ watch([showUnitSpheres, showUnitLines], ([newSpheres, newLines]) => {
   width: 100%;
   box-sizing: border-box;
 }
+
+@media (max-width: 560px) {
+  .ui-overlay {
+    padding: 8px;
+  }
+
+  .ui-panel,
+  .settings,
+  .ui-panel .settings > .species-section,
+  .tuning-settings,
+  .tuning-settings .species-section {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+
+  .ui-panel .species-content {
+    padding: 8px;
+  }
+
+  .ui-panel .species-section .setting-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 76px;
+    gap: 6px 8px;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+
+  .ui-panel .species-section .setting-row label {
+    grid-column: 1 / -1;
+    width: auto;
+    margin-right: 0;
+  }
+
+  .ui-panel .species-section .setting-row input[type="range"] {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+    margin: 0;
+  }
+
+  .ui-panel .species-section .value-input,
+  .ui-panel .species-section .editable-value,
+  .color-value-input {
+    width: 100%;
+    margin-left: 0;
+    box-sizing: border-box;
+  }
+
+  .fog-vector-group {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .fog-vector-group > span {
+    grid-column: 1 / -1;
+  }
+
+  .debug-hud {
+    left: 8px;
+    right: 8px;
+    max-width: none;
+  }
+
+  .behavior-debug-hud {
+    left: 8px;
+    right: 8px;
+  }
+}
 </style>
