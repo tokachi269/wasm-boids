@@ -19,6 +19,7 @@ struct InteractionDiagnostics {
   uint64_t leafCandidateSearchBoids = 0;
   uint64_t leafCandidateSearchStartingActiveSum = 0;
   uint64_t leafCandidateSearchLeafMembersSum = 0;
+  uint64_t leafCandidateSearchStillUnderfull = 0;
   uint64_t cacheInserts = 0;
   uint64_t externalQueries = 0;
   uint64_t externalCandidatesVisited = 0;
@@ -33,6 +34,8 @@ struct InteractionDiagnostics {
   uint64_t forceNormalizations = 0;
   std::array<uint64_t, 33> neighborCountHistogram{};
   std::array<uint64_t, 33> candidateSearchStartingActiveHistogram{};
+  std::array<uint64_t, 33> candidateSearchResultingActiveHistogram{};
+  std::array<uint64_t, 65> candidateSearchLeafSizeHistogram{};
   std::array<uint64_t, 5> penetrationRatioHistogram{};
   double penetrationRatioSum = 0.0;
   double penetrationImpulseSum = 0.0;
@@ -68,6 +71,7 @@ struct InteractionDiagnostics {
     leafCandidateSearchStartingActiveSum +=
         other.leafCandidateSearchStartingActiveSum;
     leafCandidateSearchLeafMembersSum += other.leafCandidateSearchLeafMembersSum;
+    leafCandidateSearchStillUnderfull += other.leafCandidateSearchStillUnderfull;
     cacheInserts += other.cacheInserts;
     externalQueries += other.externalQueries;
     externalCandidatesVisited += other.externalCandidatesVisited;
@@ -92,6 +96,12 @@ struct InteractionDiagnostics {
       neighborCountHistogram[i] += other.neighborCountHistogram[i];
       candidateSearchStartingActiveHistogram[i] +=
           other.candidateSearchStartingActiveHistogram[i];
+      candidateSearchResultingActiveHistogram[i] +=
+          other.candidateSearchResultingActiveHistogram[i];
+    }
+    for (std::size_t i = 0; i < candidateSearchLeafSizeHistogram.size(); ++i) {
+      candidateSearchLeafSizeHistogram[i] +=
+          other.candidateSearchLeafSizeHistogram[i];
     }
     for (std::size_t i = 0; i < penetrationRatioHistogram.size(); ++i) {
       penetrationRatioHistogram[i] += other.penetrationRatioHistogram[i];

@@ -1721,6 +1721,8 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
             static_cast<uint64_t>(indices.size());
         ++diagnostics->candidateSearchStartingActiveHistogram[
             static_cast<std::size_t>(glm::clamp(activeCount, 0, 32))];
+        ++diagnostics->candidateSearchLeafSizeHistogram[
+            std::min<std::size_t>(indices.size(), 64)];
       }
 #endif
 
@@ -1830,7 +1832,17 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
           cacheNeighbor(pr.second);
         }
       }
-    } // -------------------------------------------------------
+    }
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+    if (diagnostics && toAdd > 0) {
+      ++diagnostics->candidateSearchResultingActiveHistogram[
+          static_cast<std::size_t>(glm::clamp(activeCount, 0, 32))];
+      if (activeCount < maxNeighbors) {
+        ++diagnostics->leafCandidateSearchStillUnderfull;
+      }
+    }
+#endif
+    // -------------------------------------------------------
     // 5. 有効なBoidだけで最終的な加速度を計算
     //    - 使用中slotの近傍のみ
     //    - 分離・凝集・整列の力を合算
