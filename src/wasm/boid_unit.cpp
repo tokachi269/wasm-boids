@@ -1406,6 +1406,8 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
     float schoolWeight = 0.0f;
     float schoolConfidence = 0.0f;
     float schoolInfluenceScale = 0.0f;
+    float schoolDistanceSq = 0.0f;
+    float schoolDistance = 0.0f;
     bool hasSchoolCenterDir = false;
 
     if (sid >= 0) {
@@ -1440,6 +1442,7 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
             schoolRadius = candidateSchoolRadius;
             schoolWeight = school.weight;
             schoolConfidence = school.trackingConfidence;
+            schoolDistanceSq = distSq;
             hasSchoolCenterDir = true;
           }
         }
@@ -1448,12 +1451,12 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
           BOIDS_DIAG_INCREMENT(schoolAssociations);
           BOIDS_DIAG_INCREMENT(schoolDistanceSquareRoots);
 #endif
-          const float distance = glm::sqrt(bestDistSq);
+          schoolDistance = glm::sqrt(bestDistSq);
           const float fadeWidth = glm::max(selfParams.cohesionRange, 0.0f);
           schoolInfluenceScale = fadeWidth > EPS
               ? 1.0f - glm::smoothstep(
-                  schoolRadius, schoolRadius + fadeWidth, distance)
-              : (distance <= schoolRadius ? 1.0f : 0.0f);
+                  schoolRadius, schoolRadius + fadeWidth, schoolDistance)
+              : (schoolDistance <= schoolRadius ? 1.0f : 0.0f);
 #ifdef BOIDS_INTERACTION_DIAGNOSTICS
           if (schoolInfluenceScale > 0.0f) {
             BOIDS_DIAG_INCREMENT(schoolInfluencePositive);
@@ -1642,6 +1645,7 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
     uint8_t &neighborCountRef = buf->neighborCounts[gIdx];
     int activeCount = std::min<int>(neighborCountRef, maxNeighbors);
     auto *neighborEntries = buf->neighborEntries.data() + neighborBegin;
+    std::array<float, 32> memoryFades;
 #ifdef BOIDS_INTERACTION_DIAGNOSTICS
     BOIDS_DIAG_INCREMENT(boidsProcessed);
 #endif
@@ -1683,6 +1687,10 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
         eraseNeighborAt(entryIndex);
         continue;
       }
+      memoryFades[entryIndex] =
+          tauJitter > 1e-6f
+              ? glm::clamp(1.0f - (entry.age / tauJitter), 0.0f, 1.0f)
+              : 0.0f;
       ++entryIndex;
     } // -------------------------------------------------------
     neighborCountRef = static_cast<uint8_t>(activeCount);
@@ -1789,10 +1797,19 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
       int insertAt = activeCount;
       while (insertAt > 0 && neighborEntries[insertAt - 1].slot > freeSlot) {
         neighborEntries[insertAt] = neighborEntries[insertAt - 1];
+        memoryFades[insertAt] = memoryFades[insertAt - 1];
         --insertAt;
       }
       neighborEntries[insertAt] =
           SoABuffers::NeighborEntry{globalNeighbor, dt, freeSlot};
+      const float tauJitter =
+          leafTau * (0.85f + 0.30f * hash01(
+              uint32_t(stableId) * 1664525u +
+              uint32_t(freeSlot) * 1013904223u));
+      memoryFades[insertAt] =
+          tauJitter > 1e-6f
+              ? glm::clamp(1.0f - (dt / tauJitter), 0.0f, 1.0f)
+              : 0.0f;
       ++activeCount;
 #ifdef BOIDS_INTERACTION_DIAGNOSTICS
       BOIDS_DIAG_INCREMENT(cacheInserts);
@@ -1922,12 +1939,8 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
       // 近傍が完全に途切れた場合は、余計な補助機構で加速させずに保守的に振る舞う。
       // ただし大クラスター中心が取れている場合のみ、弱い誘導で群れへ復帰させる。
       if (hasSchoolCenterDir) {
-        float clusterLen2 = glm::length2(schoolCenterDir);
-        if (clusterLen2 > EPS) {
-#ifdef BOIDS_INTERACTION_DIAGNOSTICS
-          BOIDS_DIAG_INCREMENT(schoolDistanceSquareRoots);
-#endif
-          const float clusterDist = glm::sqrt(clusterLen2);
+        if (schoolDistanceSq > EPS) {
+          const float clusterDist = schoolDistance;
           glm::vec3 clusterDir = schoolCenterDir *
                                  (1.0f / clusterDist);
           const float nearAttenuation =
@@ -1983,16 +1996,10 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
       // ---- 近傍(leaf内) ----
       for (int entryIndex = 0; entryIndex < activeCount; ++entryIndex) {
         const auto &neighborEntry = neighborEntries[entryIndex];
-        const uint8_t slot = neighborEntry.slot;
 
         // 近傍寄与を記憶年齢でフェードさせ、期限切れの瞬間の急変を抑える。
         // ※activeNeighborsはバイナリだが、力は連続的に落ちる。
-        const float baseTau = leafTau;
-        const float tauJitter =
-            baseTau * (0.85f + 0.30f * hash01(uint32_t(stableId) * 1664525u + uint32_t(slot) * 1013904223u));
-        const float memoryAge = neighborEntry.age;
-        const float memoryFade =
-            tauJitter > 1e-6f ? glm::clamp(1.0f - (memoryAge / tauJitter), 0.0f, 1.0f) : 0.0f;
+        const float memoryFade = memoryFades[entryIndex];
 
         const int gNeighbor = neighborEntry.index;
         if (gNeighbor < 0 ||
@@ -2209,12 +2216,8 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
           // 捕食者は大クラスタ引力に左右されない。修正ループを防ぐため即スキップ。
           continue;
         }
-        float clusterLen2 = glm::length2(schoolCenterDir);
-        if (clusterLen2 > EPS) {
-#ifdef BOIDS_INTERACTION_DIAGNOSTICS
-          BOIDS_DIAG_INCREMENT(schoolDistanceSquareRoots);
-#endif
-          const float clusterDist = glm::sqrt(clusterLen2);
+        if (schoolDistanceSq > EPS) {
+          const float clusterDist = schoolDistance;
           glm::vec3 globalDir =
               schoolCenterDir * (1.0f / glm::max(clusterDist, 1e-4f));
           // 大クラスタ引力: 基本は中心へ向かう（3D）
@@ -2278,7 +2281,7 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
 
       if (simulation.isBehaviorInspectorTarget(gIdx)) {
         const float selectedSchoolDistance = hasSchoolCenterDir
-            ? glm::sqrt(glm::length2(schoolCenterDir))
+            ? schoolDistance
             : 0.0f;
         simulation.recordBehaviorInteraction(
             gIdx, totalSeparation, combinedAlignment,
