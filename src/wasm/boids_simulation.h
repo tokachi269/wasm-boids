@@ -202,6 +202,7 @@ public:
     uintptr_t getUnitSimpleDensityPtr();
     int getUnitSimpleDensityCount() const;
     bool isUnitSimpleDensityRequested() const;
+    const std::vector<SpeciesCluster> *getSpeciesClusters(int speciesId) const;
     const std::vector<SpeciesSchoolCluster> *getSpeciesSchoolClusters(int speciesId) const;
     uintptr_t getSpeciesEnvelopePtr();
     int getSpeciesEnvelopeCount() const;
@@ -344,7 +345,6 @@ private:
     void updateSpeciesClusters(float dt);
     void updateSpeciesSchoolClusters(float dt);
     const SpeciesEnvelope *getSpeciesEnvelope(int speciesId) const;
-    const std::vector<SpeciesCluster> *getSpeciesClusters(int speciesId) const;
 
     enum DebugRequestBits : uint8_t {
         kDebugRequestSpeciesEnvelopes = 1 << 0,

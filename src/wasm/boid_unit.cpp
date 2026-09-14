@@ -51,6 +51,11 @@ constexpr float kPredatorChaseMax = 10.0f;    // 追跡時間の上限（秒）
 constexpr float kPredatorRestMin = 2.0f;      // 休憩時間の下限（秒）
 constexpr float kPredatorRestMax = 7.0f;      // 休憩時間の上限（秒）
 constexpr float kPredatorRestSpeedScale = 0.45f; // 休憩時に維持する速度スケール
+constexpr float kPredatorTargetClusterMinWeight = 0.25f;
+constexpr float kPredatorTargetClusterMaxAge = 0.75f;
+constexpr float kPredatorTargetSearchAlertScale = 2.0f;
+constexpr float kPredatorTargetKeepScale = 2.0f;
+constexpr float kPredatorCaptureDistance = 2.0f;
 constexpr float kTwoPi = 6.28318530718f;
 constexpr float kSchoolConfidencePullMin = 0.10f;
 constexpr float kSchoolConfidencePullFull = 0.50f;
@@ -1485,6 +1490,12 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
         // スレッドごとにバッファを共有して動的確保コストを抑える
         // 毎フレームクールダウンを減算（ターゲット消失時も進行）
         tgtTime -= dt;
+        const float targetSearchRadius = glm::max(
+            simulation.getMaxPredatorAlertRadius() *
+                kPredatorTargetSearchAlertScale,
+            kPredatorCaptureDistance * 2.0f);
+        const float maxChaseDistance =
+            targetSearchRadius * kPredatorTargetKeepScale;
         // ターゲットは「時間切れ」だけでなく「範囲外」「不正インデックス」でも再選択する。
         // これが無いと、獲物が遠方へ逃げた後も tau が切れるまで延々追い続け、
         // “追う対象が固定されているように見える”挙動になりやすい。
@@ -1501,11 +1512,7 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
         if (!targetInvalid) {
           const glm::vec3 diff = buf->positions[tgtIdx] - pos;
           const float distSq = glm::dot(diff, diff);
-          // 旧来ロジックの探索半径をそのまま「追跡維持の上限」としても使う。
-          // 逃げ切られたら素直に別ターゲットへ切り替える。
-          const float targetSearchRadius = 100.0f;
-          const float maxChaseDistSq = targetSearchRadius * targetSearchRadius;
-          if (distSq > maxChaseDistSq) {
+          if (distSq > maxChaseDistance * maxChaseDistance) {
             targetInvalid = true;
           }
         }
@@ -1515,55 +1522,79 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
           if (predatorTargetCandidates.capacity() < kPredatorCacheLimit) {
             predatorTargetCandidates.reserve(kPredatorCacheLimit);
           }
-          const float targetSearchRadius = 100.0f; // 旧来ロジックの探索半径を維持
+          const BoidSimulation::SpeciesCluster *targetCluster = nullptr;
+          int targetClusterSpecies = -1;
+          float bestClusterDistanceSq = std::numeric_limits<float>::max();
+          const float simulationTime = simulation.getSimulationTimeSeconds();
 
-            // SpatialIndex を通じて周辺の非捕食者を直接収集し、
-            // ついでに「獲物密集の中心（簡易）」を作って接近方向に使う。
-          constexpr std::size_t kPredatorCandidateLimit = 256;
-            glm::vec3 preyCenterSum(0.0f);
-            int preyCenterCount = 0;
+          // 捕食者に最も近い、追跡中の小クラスターへ接近する。
+          // 個体候補の平均ではなく既存のクラスター中心を使うため、
+          // 遠方の外れ個体に接近方向を引っ張られない。
+          for (int preySid = 0;
+               preySid < static_cast<int>(globalSpeciesParams.size());
+               ++preySid) {
+            if (globalSpeciesParams[preySid].isPredator) {
+              continue;
+            }
+            const auto *clusters = simulation.getSpeciesClusters(preySid);
+            if (!clusters) {
+              continue;
+            }
+            for (const auto &cluster : *clusters) {
+              if (!cluster.active ||
+                  cluster.weight < kPredatorTargetClusterMinWeight ||
+                  simulationTime - cluster.lastUpdateTimeSeconds >
+                      kPredatorTargetClusterMaxAge) {
+                continue;
+              }
+              const glm::vec3 diff = cluster.center - pos;
+              const float distSq = glm::dot(diff, diff);
+              if (distSq < bestClusterDistanceSq) {
+                bestClusterDistanceSq = distSq;
+                targetCluster = &cluster;
+                targetClusterSpecies = preySid;
+              }
+            }
+          }
+
+          if (targetCluster) {
+            buf->predatorApproachDirs[gIdx] = targetCluster->center - pos;
+
+            // 小クラスターへ近づいた捕食者だけが、周囲の魚を個体追跡する。
+            // 探索半径は獲物の警戒距離から作り、固定の100m探索を避ける。
+            constexpr std::size_t kPredatorCandidateLimit = 256;
+            const float clusterMembershipRadius =
+                glm::max(targetCluster->radius, 1.0f) +
+                glm::max(globalSpeciesParams[targetClusterSpecies].cohesionRange,
+                         0.0f);
+            const float clusterMembershipRadiusSq =
+                clusterMembershipRadius * clusterMembershipRadius;
             spatial_query::forEachBoidInSphereLimited(
-              simulation, pos, targetSearchRadius,
-              kPredatorCandidateLimit,
-              [&](int candidateIdx, const BoidUnit *leafNode) {
-                if (leafNode == this || candidateIdx == gIdx) {
-                  return;
-                }
-                const int candidateSpecies = buf->speciesIds[candidateIdx];
-                if (globalSpeciesParams[candidateSpecies].isPredator) {
-                  return;
-                }
-                predatorTargetCandidates.push_back(candidateIdx);
-                preyCenterSum += buf->positions[candidateIdx];
-                ++preyCenterCount;
-              });
-
-          if (preyCenterCount > 0) {
-            const glm::vec3 preyCenter =
-                preyCenterSum * (1.0f / static_cast<float>(preyCenterCount));
-            buf->predatorApproachDirs[gIdx] = preyCenter - pos;
+                simulation, pos, targetSearchRadius, kPredatorCandidateLimit,
+                [&](int candidateIdx, const BoidUnit *leafNode) {
+                  if (leafNode == this || candidateIdx == gIdx ||
+                      buf->speciesIds[candidateIdx] != targetClusterSpecies) {
+                    return;
+                  }
+                  const glm::vec3 clusterDiff =
+                      buf->positions[candidateIdx] - targetCluster->center;
+                  if (glm::dot(clusterDiff, clusterDiff) >
+                      clusterMembershipRadiusSq) {
+                    return;
+                  }
+                  predatorTargetCandidates.push_back(candidateIdx);
+                });
           }
 
           if (!predatorTargetCandidates.empty()) {
-            // 「群れへ突っ込む」→「個体追跡」に見せるため、
-            // いきなり追跡を開始せず、ある程度中心に近づいてからターゲットを確定する。
-            constexpr float kEngageRadius = 60.0f;
-            const glm::vec3 approach = buf->predatorApproachDirs[gIdx];
-            const float approachDistSq = glm::dot(approach, approach);
-            if (approachDistSq <= kEngageRadius * kEngageRadius) {
-                const int pick = rand_range(
-                  static_cast<int>(predatorTargetCandidates.size()),
-                  uint32_t(stableId) * 747796405u +
+            const int pick = rand_range(
+                static_cast<int>(predatorTargetCandidates.size()),
+                uint32_t(stableId) * 747796405u +
                     uint32_t(globalFrame) * 2891336453u);
-              tgtIdx = predatorTargetCandidates[pick];
-              tgtTime = globalSpeciesParams[sid].tau;
-            } else {
-              // まだ遠いので接近フェーズを継続。次フレームも候補取得するために 0 にしておく。
-              tgtIdx = -1;
-              tgtTime = 0.0f;
-            }
+            tgtIdx = predatorTargetCandidates[pick];
+            tgtTime = globalSpeciesParams[sid].tau;
           } else {
-            // ターゲット候補がいない場合は即再試行できるようリセット
+            // クラスターへ接近中、または局所範囲に対象がいない場合は次フレームに再試行する。
             tgtTime = 0.0f;
           }
         }
@@ -1576,8 +1607,8 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
           {
             const glm::vec3 diff = buf->positions[tgtIdx] - pos;
             const float distSq = glm::dot(diff, diff);
-            constexpr float kCaptureDist = 2.0f;
-            if (distSq <= kCaptureDist * kCaptureDist) {
+            if (distSq <=
+                kPredatorCaptureDistance * kPredatorCaptureDistance) {
               const float restBase = glm::clamp(
                   globalSpeciesParams[sid].tau * kPredatorRestScale,
                   kPredatorRestMin, kPredatorRestMax);
