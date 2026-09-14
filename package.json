@@ -1,7 +1,7 @@
 {
     "name": "wasm-boids",
     "version": "1.0.0",
-    "description": "Boids simulation using WebAssembly and Vue.js",
+    "description": "Browser-based Boids simulation using C++/WebAssembly and Three.js",
     "main": "index.js",
     "scripts": {
         "build-native": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-native.ps1",

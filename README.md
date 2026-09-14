@@ -1,9 +1,26 @@
 # wasm-boids
 
-[Demo](https://tokachi269.github.io/wasm-boids/)
+ブラウザ上で動く魚群シミュレーションです。
 
-本リポジトリは、ブラウザ上で動作する大規模Boids（群れ行動）シミュレーションです。
-計算は C++（WebAssembly）で行い、描画は Three.js（InstancedMesh）に寄せています。
+群れの計算は C++ / WebAssembly、描画は Three.js で行っています。
+数万匹を動かすことを前提に、近傍探索やデータ配置、描画方法を調整しています。
+
+[デモを開く](https://tokachi269.github.io/wasm-boids/)
+
+## 仕組み
+
+シミュレーション側では、Boidsの分離・整列・凝集に加えて、捕食者からの逃避や群れのクラスタ推定を行います。
+個体の状態はSoAで保持し、空間階層、近傍キャッシュ、空間順への並べ替えを使って近傍計算の負荷を抑えています。
+
+描画側では、WASMのバッファをJavaScriptから参照し、Three.jsの `InstancedMesh` へ渡します。
+魚のLOD、水中のフォグ、Bloom、SSAOなどは描画側で処理します。
+
+## 性能について
+
+性能調整には、固定seedで再実行できるnative benchmarkとbrowser benchmarkを使っています。
+benchmarkの値は変更前後の比較用であり、ブラウザ上のフレームレートと同じものではありません。
+
+測定条件と手順は [`scripts/bench.md`](scripts/bench.md) にまとめています。
 
 ---
 
@@ -156,7 +173,7 @@ Cancelable版は「必要数が揃えば探索を止める」ためのもので�
 - 大クラスター（群れ）: 小クラスター同士のリンク（距離閾値）を辿り、群れ中心を推定
 - 時間方向はEMA（指数移動平均）で平滑化し、表示/注視点が揺れないようにします
 
-この推定結果はデバッグ表示（球）と、起動直後のカメラ注視点に利用しています。
+これらの推定結果は、大クラスターへの復帰力、デバッグ表示、起動直後のカメラ注視点に利用しています。
 
 #### 小クラスターの半径推定が“中心のズレ”に強い理由
 
@@ -240,7 +257,7 @@ UIで編集できる代表パラメータ（`SpeciesParams`）の意味をまと
 ### 依存関係
 
 ```bash
-npm install
+npm ci
 ```
 
 ### WASMビルド
@@ -250,11 +267,6 @@ npm run build-wasm:dev
 ```
 
 本リポジトリ内の CMake ビルドは `build-dev/` を使います。
-Windows/PowerShell で手元のビルドをやり直す場合は次のコマンドも使用できます。
-
-```powershell
-cmake --build build-dev --clean-first
-```
 
 ### 開発起動
 
@@ -269,6 +281,15 @@ npm run serve
 ```bash
 npm run build
 ```
+
+---
+
+## 開発資料
+
+- [`docs/architecture.md`](docs/architecture.md): 実装の責務分担
+- [`docs/testing.md`](docs/testing.md): 変更内容ごとの確認方法
+- [`docs/command_cheatsheet.md`](docs/command_cheatsheet.md): build、benchmark、deployのコマンド
+- [`scripts/bench.md`](scripts/bench.md): benchmarkの条件と読み方
 
 ---
 
