@@ -1,6 +1,6 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/tokachi269/wasm-boids)
 
-<img width="1471" height="1193" alt="Image" src="https://github.com/user-attachments/assets/7d597a84-e659-4b84-bad3-bd4237db115f" />
+<img width="1988" height="1256" alt="image" src="https://github.com/user-attachments/assets/6c54ca49-f834-404c-9ab2-c8d31f99154e" />
 
 # wasm-boids 🐟
 
