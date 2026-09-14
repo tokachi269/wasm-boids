@@ -1,6 +1,6 @@
 # Architecture
 
-この文書は、変更時に越えてはいけない責務境界だけを定める。Boidsの詳細はC++実装、性能基準は `scripts/bench.md` を参照する。
+この文書は、変更時に越えてはいけない責務境界だけを定める。Boidsの詳細はREADMEとC++実装、性能基準は `scripts/bench.md` を参照する。
 
 ## Runtime flow
 
