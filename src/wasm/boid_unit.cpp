@@ -1158,9 +1158,7 @@ void BoidUnit::updateRecursive(float dt) {
   std::stack<BoidUnit *, std::vector<BoidUnit *>> stack;
   stack.push(this);
 
-  int firstStageOperations = 0;
-  while (!stack.empty() && firstStageOperations < 10000) {
-    firstStageOperations++;
+  while (!stack.empty()) {
     BoidUnit *current = stack.top();
     stack.pop();
     if (!current) {
