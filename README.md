@@ -1,10 +1,10 @@
 # wasm-boids
 
-本プロジェクトは、階層的Boidアルゴリズムと、局所相互作用から三次元の回転魚群が生じる研究を参考にしたリアルタイムシミュレーションである。
+本プロジェクトは、階層的Boidアルゴリズムと、局所相互作用から三次元の回転魚群が生じる研究を参考にしたリアルタイムシミュレーションです。
 
-Boidsの分離・整列・凝集を基礎に、視野、少数近傍、近傍記憶、捕食者応答、旋回・姿勢制御を組み合わせる。論文実装の忠実な再現ではなく、魚群らしい集団運動、数万匹規模での実行、変更後の再現性を同時に扱うための独自実装である。
+Boidsの分離・整列・凝集を基礎に、視野、少数近傍、近傍記憶、捕食者応答、旋回・姿勢制御を組み合わせています。論文実装の忠実な再現ではなく、魚群らしい集団運動、数万匹規模での実行、変更後の再現性を同時に扱うための独自実装です。
 
-C++でシミュレーションを計算し、WebAssemblyの線形メモリに保持した位置・速度・姿勢をJavaScriptのtyped array viewから参照する。描画はThree.jsの `InstancedMesh` / LODが担当する。
+C++でシミュレーションを計算し、WebAssemblyの線形メモリに保持した位置・速度・姿勢をJavaScriptのtyped array viewから参照します。描画はThree.jsの `InstancedMesh` / LODが担当します。
 
 [デモ](https://tokachi269.github.io/wasm-boids/)
 
@@ -19,9 +19,9 @@ C++でシミュレーションを計算し、WebAssemblyの線形メモリに保
 
 ### 基本モデル
 
-各個体は、視野と距離の条件を満たす少数の近傍から分離・整列・凝集の影響を受ける。通常の群泳に全個体の重心や平均方向は使用しない。
+各個体は、視野と距離の条件を満たす少数の近傍から分離・整列・凝集の影響を受けます。通常の群泳に全個体の重心や平均方向は使用しません。
 
-1個体の操舵は、概ね次の要素から構成される。
+1個体の操舵は、概ね次の要素から構成されます。
 
 | 要素 | 役割 |
 | --- | --- |
@@ -32,19 +32,19 @@ C++でシミュレーションを計算し、WebAssemblyの線形メモリに保
 | 捕食者応答 | 捕食者から逃避し、脅威状態を更新する |
 | 群れへの復帰補助 | 群れから離れた個体や過度な広がりを戻す |
 
-群れ内部の形状と回転は主に局所相互作用から生じる。大クラスターへの復帰力は通常の群れ形状を生成する主規則ではなく、離脱個体や過度に広がった状態を戻すための補助として扱う。
+群れ内部の形状と回転は主に局所相互作用から生じます。大クラスターへの復帰力は通常の群れ形状を生成する主規則ではなく、離脱個体や過度に広がった状態を戻すための補助として扱います。
 
 ### 近傍選択と近傍記憶
 
-各個体が参照する近傍数は `maxNeighbors` で制限する。近傍は毎フレーム完全に選び直すのではなく、個体IDと経過時間を持つキャッシュとして保持する。
+各個体が参照する近傍数は `maxNeighbors` で制限します。近傍は毎フレーム完全に選び直すのではなく、個体IDと経過時間を持つキャッシュとして保持します。
 
-保持中の近傍は各stepで検証し、無効または寿命切れになった要素を取り除く。不足した分だけleaf内または周辺の空間検索から補充する。記憶中の寄与は経過時間に応じて減衰する。
+保持中の近傍は各stepで検証し、無効または寿命切れになった要素を取り除きます。不足した分だけleaf内または周辺の空間検索から補充します。記憶中の寄与は経過時間に応じて減衰します。
 
-近傍のidentityにはphysical indexとは別のstable IDを使用する。これにより、物理配列を並べ替えても同じ個体への参照を維持できる。
+近傍のidentityにはphysical indexとは別のstable IDを使用します。これにより、物理配列を並べ替えても同じ個体への参照を維持できます。
 
 ### 群れ全体の追跡
 
-空間階層のleafから小クラスターを推定し、近接する小クラスターをまとめて大クラスターとして追跡する。
+空間階層のleafから小クラスターを推定し、近接する小クラスターをまとめて大クラスターとして追跡します。
 
 | 局所相互作用 | 群れ全体の追跡 |
 | --- | --- |
@@ -53,32 +53,32 @@ C++でシミュレーションを計算し、WebAssemblyの線形メモリに保
 | 近距離反発 | 離脱個体への復帰補助 |
 | 捕食者への直接反応 | デバッグ表示・カメラ基準 |
 
-clusterは群れ全体の状態推定に使用し、個体間の通常の群泳規則とは分離する。
+clusterは群れ全体の状態推定に使用し、個体間の通常の群泳規則とは分離します。
 
 ### 捕食者
 
-通常魚は `predatorAlertRadius` 内の捕食者を検知し、逃避方向と脅威状態を更新する。脅威は時間とともに減衰し、逃避中は通常の群泳より回避を優先する。
+通常魚は `predatorAlertRadius` 内の捕食者を検知し、逃避方向と脅威状態を更新します。脅威は時間とともに減衰し、逃避中は通常の群泳より回避を優先します。
 
-捕食者側は対象の追跡と休止状態を持つ。通常魚の局所相互作用とは別経路で処理する。
+捕食者側は対象の追跡と休止状態を持ちます。通常魚の局所相互作用とは別経路で処理します。
 
 ### 運動と姿勢
 
-相互作用から得た操舵を速度と位置へ反映し、姿勢を更新する。
+相互作用から得た操舵を速度と位置へ反映し、姿勢を更新します。
 
-姿勢制御は主に次の要素から構成される。
+姿勢制御は主に次の要素から構成されます。
 
 - 目標方向への回転応答
 - 移動距離あたりの最大曲率
 - 水平化トルク
 - 最小 / 最大速度
 
-`maxTurnAngle` は単純な角速度上限ではなく、移動距離に対する最大曲率として扱う。
+`maxTurnAngle` は単純な角速度上限ではなく、移動距離に対する最大曲率として扱います。
 
-時間に意味を持つ状態は経過時間を基準に更新する。近傍寿命、脅威・ストレスの減衰、cluster追跡などが該当する。tree rebuild、leaf再収集、reorderなどの保守処理は物理状態とは分離し、所定のframe間隔で実行する。
+時間に意味を持つ状態は経過時間を基準に更新します。近傍寿命、脅威・ストレスの減衰、cluster追跡などが該当します。tree rebuild、leaf再収集、reorderなどの保守処理は物理状態とは分離し、所定のframe間隔で実行します。
 
 ### 1ステップの処理
 
-概ね次の順序でシミュレーションを進める。clusterはデバッグ表示だけでなく、群れへの復帰補助にも使用する。
+概ね次の順序でシミュレーションを進めます。clusterはデバッグ表示だけでなく、群れへの復帰補助にも使用します。
 
 | 順序 | 処理 |
 | ---: | --- |
@@ -89,7 +89,7 @@ clusterは群れ全体の状態推定に使用し、個体間の通常の群泳�
 | 5 | 所定のframe間隔でleaf cacheの再収集、treeの再構築、空間順reorderを行う |
 | 6 | 1 frameあたりの処理量を制限しながらtreeのsplit / mergeを進める |
 
-この順序により、1ステップ中の全個体は同じ時点の状態を参照する。treeやreorderの保守頻度は描画負荷に応じて下がる一方、近傍寿命やcluster追跡など挙動上の時間は実際の経過時間で扱う。
+この順序により、1ステップ中の全個体は同じ時点の状態を参照します。treeやreorderの保守頻度は描画負荷に応じて下がる一方、近傍寿命やcluster追跡など挙動上の時間は実際の経過時間で扱います。
 
 ## 大規模化
 
@@ -101,9 +101,9 @@ $$
 N(N-1)
 $$
 
-となる。
+となります。
 
-本実装では個体群を空間的なunitへ分割し、leafを近傍探索の基本単位とする。通常は同一leaf内から近傍を補充し、不足時のみ周辺のleafを検索する。
+本実装では個体群を空間的なunitへ分割し、leafを近傍探索の基本単位とします。通常は同一leaf内から近傍を補充し、不足時のみ周辺のleafを検索します。
 
 近傍が確定した後の相互作用計算は、各個体が参照する近傍数を $k$ とすると概ね
 
@@ -111,13 +111,13 @@ $$
 N \times k,\qquad k \leq \texttt{maxNeighbors}
 $$
 
-となる。これは近傍候補探索やtree maintenanceの計算量を含まない。
+となります。これは近傍候補探索やtree maintenanceの計算量を含みません。
 
-treeは完全rebuildと局所的なsplit / mergeを組み合わせて維持する。完全rebuildを毎frame実行せず、保守処理の集中を避ける。
+treeは完全rebuildと局所的なsplit / mergeを組み合わせて維持します。完全rebuildを毎frame実行せず、保守処理の集中を避けます。
 
 ### データ配置
 
-シミュレーション状態はC++側のSoAに保持する。
+シミュレーション状態はC++側のSoAに保持します。
 
 ```cpp
 positions[i]
@@ -127,13 +127,13 @@ speciesIds[i]
 stresses[i]
 ```
 
-位置・速度・姿勢はread/write bufferを分離し、1 step中は全個体が同じ時点の状態を参照する。step完了後にbufferをswapする。
+位置・速度・姿勢はread/write bufferを分離し、1 step中は全個体が同じ時点の状態を参照します。step完了後にbufferをswapします。
 
-近傍キャッシュは個体ごとに `maxNeighbors` 分の領域を持ち、有効要素を先頭側へ詰める。近傍index、age、stable slotをまとめて保持する。
+近傍キャッシュは個体ごとに `maxNeighbors` 分の領域を持ち、有効要素を先頭側へ詰めます。近傍index、age、stable slotをまとめて保持します。
 
-tree更新後は、種族ごとの領域を維持したままleaf順へphysical storageを並べ替える。空間的に近い個体をメモリ上でも近づけるための処理である。
+tree更新後は、種族ごとの領域を維持したままleaf順へphysical storageを並べ替えます。空間的に近い個体をメモリ上でも近づけるための処理です。
 
-reorderではstable IDとphysical indexを分離し、次の参照を同じ対応表で更新する。
+reorderではstable IDとphysical indexを分離し、次の参照を同じ対応表で更新します。
 
 - SoAの各buffer
 - neighbor reference
@@ -143,7 +143,7 @@ reorderではstable IDとphysical indexを分離し、次の参照を同じ対�
 
 ### 描画
 
-C++側のシミュレーション状態はWebAssembly memoryを通してJavaScriptから参照する。
+C++側のシミュレーション状態はWebAssembly memoryを通してJavaScriptから参照します。
 
 | 層 | 主な責務 |
 | --- | --- |
@@ -152,11 +152,11 @@ C++側のシミュレーション状態はWebAssembly memoryを通してJavaScri
 | JavaScript | WASM buffer view、simulation step、描画データの受け渡し |
 | Three.js | InstancedMesh、LOD、camera、post-process |
 
-通常魚は `InstancedMesh` で描画し、距離に応じてLODを切り替える。水中fog、SSAO、Bloomなどの描画処理はシミュレーション状態を変更しない。
+通常魚は `InstancedMesh` で描画し、距離に応じてLODを切り替えます。水中fog、SSAO、Bloomなどの描画処理はシミュレーション状態を変更しません。
 
 ## 性能と検証
 
-性能変更は、同一条件での計測とシミュレーション状態の検証を分けて評価する。
+性能変更は、同一条件での計測とシミュレーション状態の検証を分けて評価します。
 
 | 変更 | 確認 |
 | --- | --- |
@@ -170,7 +170,7 @@ C++側のシミュレーション状態はWebAssembly memoryを通してJavaScri
 
 ### Native benchmark
 
-native benchmarkでは、CPU側の処理を区間ごとに計測する。
+native benchmarkでは、CPU側の処理を区間ごとに計測します。
 
 | 区間 | 内容 |
 | --- | --- |
@@ -180,11 +180,11 @@ native benchmarkでは、CPU側の処理を区間ごとに計測する。
 | reorder | physical storageの並べ替え |
 | cluster update | small / school clusterの更新 |
 
-固定seed、個体数、task数、warmup、measurement frame数を指定できる。挙動同値の最適化では、性能値とは別にsimulation checksumを比較する。
+固定seed、個体数、task数、warmup、measurement frame数を指定できます。挙動同値の最適化では、性能値とは別にsimulation checksumを比較します。
 
 ### Browser benchmark
 
-browser benchmarkでは、次の処理を分離して計測する。
+browser benchmarkでは、次の処理を分離して計測します。
 
 - WASM simulation
 - JavaScript側のinstance packing
@@ -192,13 +192,13 @@ browser benchmarkでは、次の処理を分離して計測する。
 - GPU timer query
 - 実フレーム間隔
 
-実画面のFPSは最終的な体感指標として使用するが、CPU simulation、JavaScript、GPUのどこが律速しているかの判断には区間別の計測を使用する。
+実画面のFPSは最終的な体感指標として使用しますが、CPU simulation、JavaScript、GPUのどこが律速しているかの判断には区間別の計測を使用します。
 
-測定条件とコマンドは [`scripts/bench.md`](scripts/bench.md)、変更ごとの検証基準は [`docs/testing.md`](docs/testing.md) を参照。
+測定条件とコマンドは [`scripts/bench.md`](scripts/bench.md)、変更ごとの検証基準は [`docs/testing.md`](docs/testing.md) を参照してください。
 
 ## パラメータ
 
-UIには、魚種ごとの挙動を決める `SpeciesParams` と、全体へ作用する調整値がある。通常のパラメータ変更は実行中のWASMへ逐次反映され、個体数または捕食者フラグの変更時は群れを再初期化する。設定はブラウザの `localStorage` に保存される。
+UIには、魚種ごとの挙動を決める `SpeciesParams` と、全体へ作用する調整値があります。通常のパラメータ変更は実行中のWASMへ逐次反映され、個体数または捕食者フラグの変更時は群れを再初期化します。設定はブラウザの `localStorage` に保存されます。
 
 ### 魚種ごとの主要項目
 
@@ -230,7 +230,7 @@ UIには、魚種ごとの挙動を決める `SpeciesParams` と、全体へ作�
 | `schoolPullFullDistance` | 設定した復帰力へ到達する中心距離 |
 | `schoolPullDenseScale` | 近傍が十分いる個体にも残す復帰力の倍率 |
 
-ワールド座標の1 unitは1 mとして扱う。各値は独立ではなく、近傍数、作用範囲、速度、旋回能力の組み合わせによって群れの密度・形状・回転が変化する。
+ワールド座標の1 unitは1 mとして扱います。各値は独立ではなく、近傍数、作用範囲、速度、旋回能力の組み合わせによって群れの密度・形状・回転が変化します。
 
 ## プロジェクト構成
 
@@ -243,7 +243,7 @@ UIには、魚種ごとの挙動を決める `SpeciesParams` と、全体へ作�
 | `src/benchmark` | browser benchmark |
 | `scripts` | build、native benchmark、deploy関連 |
 
-責務境界は [`docs/architecture.md`](docs/architecture.md) を参照。
+責務境界は [`docs/architecture.md`](docs/architecture.md) を参照してください。
 
 ## セットアップ
 
@@ -264,9 +264,9 @@ production build:
 npm run build
 ```
 
-GitHub Pagesへの公開は `npm run deploy` を使用する。
+GitHub Pagesへの公開には `npm run deploy` を使用します。
 
-利用可能なコマンドは [`docs/command_cheatsheet.md`](docs/command_cheatsheet.md) を参照。
+利用可能なコマンドは [`docs/command_cheatsheet.md`](docs/command_cheatsheet.md) を参照してください。
 
 ## 開発資料
 
@@ -277,7 +277,7 @@ GitHub Pagesへの公開は `npm run deploy` を使用する。
 
 ## 参考
 
-本実装は以下の研究を参考にするが、論文実装の忠実な再現ではない。
+本実装は以下の研究を参考にしていますが、論文実装の忠実な再現ではありません。
 
 | 参考 | 本実装で参照している観点 |
 | --- | --- |
