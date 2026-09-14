@@ -1704,6 +1704,17 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
     }
 
     if (activeCount < maxNeighbors) {
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+      if (diagnostics) {
+        ++diagnostics->leafCandidateSearchBoids;
+        diagnostics->leafCandidateSearchStartingActiveSum +=
+            static_cast<uint64_t>(activeCount);
+        diagnostics->leafCandidateSearchLeafMembersSum +=
+            static_cast<uint64_t>(indices.size());
+        ++diagnostics->candidateSearchStartingActiveHistogram[
+            static_cast<std::size_t>(glm::clamp(activeCount, 0, 32))];
+      }
+#endif
 
       for (size_t i = 0; i < indices.size(); ++i) {
         if (i == index)
@@ -2029,6 +2040,11 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
           // 係数は速度と separation に応じてスケール。極端な発散は後段の加速度クリップで抑える。
           const float impulse = response * overlapBoost * glm::max(selfParams.separation, 0.02f) *
                                 (1.0f + selfParams.maxSpeed) * 18.0f;
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+          if (diagnostics) {
+            diagnostics->recordPenetration(penetrationRatio, impulse);
+          }
+#endif
           buf->accelerations[gIdx] += (diff * (1.0f / dist)) * (-impulse);
         }
 
@@ -2100,6 +2116,11 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
           const float overlapBoost = 1.0f + (penetrationRatio * penetrationRatio) * 3.0f;
           const float impulse = response * overlapBoost * glm::max(selfParams.separation, 0.02f) *
                                 (1.0f + selfParams.maxSpeed) * 18.0f;
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+          if (diagnostics) {
+            diagnostics->recordPenetration(penetrationRatio, impulse);
+          }
+#endif
           buf->accelerations[gIdx] += (diff * (1.0f / dist)) * (-impulse);
         }
 

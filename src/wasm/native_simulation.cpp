@@ -550,6 +550,11 @@ void NativeSimulation::runBenchmark() {
          << ",\"leaf_candidates_already_cached\":" << diagnostics.leafCandidatesAlreadyCached
          << ",\"leaf_candidates_in_range\":" << diagnostics.leafCandidatesInRange
          << ",\"leaf_candidates_in_fov\":" << diagnostics.leafCandidatesInFov
+         << ",\"leaf_candidate_search_boids\":" << diagnostics.leafCandidateSearchBoids
+         << ",\"leaf_candidate_search_starting_active_sum\":"
+         << diagnostics.leafCandidateSearchStartingActiveSum
+         << ",\"leaf_candidate_search_leaf_members_sum\":"
+         << diagnostics.leafCandidateSearchLeafMembersSum
          << ",\"cache_inserts\":" << diagnostics.cacheInserts
          << ",\"external_queries\":" << diagnostics.externalQueries
          << ",\"external_candidates_visited\":" << diagnostics.externalCandidatesVisited
@@ -567,7 +572,21 @@ void NativeSimulation::runBenchmark() {
     if (i != 0) output << ',';
     output << diagnostics.neighborCountHistogram[i];
   }
-  output << ']';
+  output << "],\"candidate_search_starting_active_histogram\":[";
+  for (std::size_t i = 0;
+       i < diagnostics.candidateSearchStartingActiveHistogram.size(); ++i) {
+    if (i != 0) output << ',';
+    output << diagnostics.candidateSearchStartingActiveHistogram[i];
+  }
+  output << "],\"penetration_ratio_histogram\":[";
+  for (std::size_t i = 0; i < diagnostics.penetrationRatioHistogram.size(); ++i) {
+    if (i != 0) output << ',';
+    output << diagnostics.penetrationRatioHistogram[i];
+  }
+  output << "],\"penetration_ratio_sum\":" << diagnostics.penetrationRatioSum
+         << ",\"penetration_ratio_max\":" << diagnostics.penetrationRatioMax
+         << ",\"penetration_impulse_sum\":" << diagnostics.penetrationImpulseSum
+         << ",\"penetration_impulse_max\":" << diagnostics.penetrationImpulseMax;
 #endif
   output << "},\"reorder\":" << options_.reorderCadence
          << ",\"reorder_validation_failures\":"
