@@ -1,4 +1,8 @@
-# wasm-boids
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/tokachi269/wasm-boids)
+
+<img width="1471" height="1193" alt="Image" src="https://github.com/user-attachments/assets/7d597a84-e659-4b84-bad3-bd4237db115f" />
+
+# wasm-boids 🐟
 
 本プロジェクトは、階層的Boidアルゴリズムと、局所相互作用から三次元の回転魚群が生じる研究を参考にしたリアルタイムシミュレーションです。
 
@@ -103,7 +107,7 @@ $$
 
 となります。
 
-本実装全体のスケーリングを設計上の目安で表すと、概ね $O(N \log N)$ です。ただし、すべての処理が $O(N \log N)$ なのではありません。毎frameの相互作用と運動更新は上限付きの近傍・leafを使うため $O(N)$ に近く、定期的なtree再構築に概ね $O(N \log N)$ の処理が含まれます。そのため、全探索の $O(N^2)$ ではありませんが、全体を常に $O(N)$ とみなすこともできません。実測した範囲では、treeの保守頻度と近傍数の上限が効くため、増加率は $O(N)$ に近い結果になります。
+本実装全体のスケーリングを設計上の目安で表すと、概ね $O(N \log N)$ です。ただし、すべての処理が $O(N \log N)$ なのではありません。毎frameの相互作用と運動更新は上限付きの近傍・leafを使うため $O(N)$ に近く、定期的なtree再構築に概ね $O(N \log N)$ の処理が含まれます。そのため、全探索の $O(N^2)$ ではありませんが、全体を常に $O(N)$ とみなすこともできません。
 
 本実装では個体群を空間的なunitへ分割し、leafを近傍探索の基本単位とします。通常は同一leaf内から近傍を補充し、不足時のみ周辺のleafを検索します。近傍が確定した後の相互作用計算は、各個体が参照する近傍数を $k$ とすると概ね
 
@@ -126,22 +130,6 @@ $$
 | cluster追跡 | 概ね $O(N)$ + 上限付きcluster処理 | small / school clusterの数に上限を設けています |
 
 ここでいう概ね $O(N \log N)$ は、通常の空間分布と現在の各上限を前提に、定期的なtree maintenanceまで含めた全体の性格を示すものです。空間検索の最悪計算量を保証する表現ではありません。
-
-### 個体数による実測
-
-設計上の表記だけでなく、native Release benchmarkでも増加率を確認しています。seed 1、fixed dt $1/60$、1 task、warmup 300 frame、測定 1000 frameで各条件を3回実行し、`frame mean` の中央値を採用しました。1 taskは固定seedのchecksumを揃えるための条件であり、ブラウザのFPSや通常実行のマルチスレッド性能を表すものではありません。
-
-![個体数によるnative benchmarkのスケーリング](assets/native-scaling.svg)
-
-| 個体数 | frame mean | 前の条件からの増加 | 実測指数 $p$ |
-| ---: | ---: | ---: | ---: |
-| 10,000 | 6.65 ms | — | — |
-| 20,000 | 12.91 ms | 1.94 倍 (+94.0%) | 0.96 |
-| 50,000 | 34.77 ms | 2.69 倍 (+169.4%) | 1.08 |
-| 100,000 | 70.40 ms | 2.02 倍 (+102.5%) | 1.02 |
-| 200,000 | 152.93 ms | 2.17 倍 (+117.2%) | 1.12 |
-
-10,000から200,000までの実測指数は約 $p=1.05$ です。これはこの条件ではほぼ線形に近い増え方を示しますが、空間分布、近傍の埋まり方、定期的なtree rebuildやreorderによって変わります。上の計算量表は、個々のphaseと保守処理を分けて読むためのものです。
 
 treeは完全rebuildと局所的なsplit / mergeを組み合わせて維持します。完全rebuildを毎frame実行せず、保守処理の集中を避けます。
 
@@ -284,7 +272,6 @@ UIには、魚種ごとの挙動を決める `SpeciesParams` と、全体へ作�
 - CMake
 
 ```powershell
-npm ci
 npm run serve
 ```
 
@@ -305,14 +292,10 @@ GitHub Pagesへの公開には `npm run deploy` を使用します。
 - [`docs/engineering/agent_harness.md`](docs/engineering/agent_harness.md) — バグ修正と画面確認
 - [`scripts/bench.md`](scripts/bench.md) — benchmarkの条件と計測項目
 
-## 参考
+## 参考文献
 
-本実装は以下の研究を参考にしていますが、論文実装の忠実な再現ではありません。
-
-| 参考 | 本実装で参照している観点 |
-| --- | --- |
-| [大規模な魚群シミュレーションのための階層的Boidアルゴリズム](https://ipsj.ixsq.nii.ac.jp/records/37917) | 個体群を空間的・階層的に扱い、相互作用の候補を絞る考え方 |
-| [Emergence of a Giant Rotating Cluster of Fish in Three Dimensions by Local Interactions](https://doi.org/10.7566/JPSJ.91.064806) | 少数の近傍との局所相互作用から三次元の回転群が生じる考え方 |
+- [大規模な魚群シミュレーションのための階層的Boidアルゴリズム](https://ipsj.ixsq.nii.ac.jp/records/37917)
+- [Emergence of a Giant Rotating Cluster of Fish in Three Dimensions by Local Interactions](https://doi.org/10.7566/JPSJ.91.064806)
 
 ## ライセンス
 
