@@ -2,6 +2,8 @@
 
 <img width="1988" height="1256" alt="image" src="https://github.com/user-attachments/assets/6c54ca49-f834-404c-9ab2-c8d31f99154e" />
 
+[デモ](https://tokachi269.github.io/wasm-boids/)
+
 # wasm-boids 🐟
 
 本プロジェクトは、階層的Boidアルゴリズムと、局所相互作用から三次元の回転魚群が生じる研究を参考にしたリアルタイムシミュレーションです。
@@ -9,8 +11,6 @@
 Boidsの分離・整列・凝集を基礎に、視野、少数近傍、近傍記憶、捕食者応答、旋回・姿勢制御を組み合わせています。論文実装の忠実な再現ではなく、魚群らしい集団運動、数万匹規模での実行、変更後の再現性を同時に扱うための独自実装です。
 
 C++でシミュレーションを計算し、WebAssemblyの線形メモリに保持した位置・速度・姿勢をJavaScriptのtyped array viewから参照します。描画はThree.jsの `InstancedMesh` / LODが担当します。
-
-[デモ](https://tokachi269.github.io/wasm-boids/)
 
 | 項目 | 内容 |
 | --- | --- |
