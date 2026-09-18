@@ -104,6 +104,36 @@ inline float schoolPullStateScale(float centerDistance, float phi) {
   return distanceGate * glm::mix(denseScale, 1.0f, sparse);
 }
 
+// 0..1 の更新率をstep列へ決定論的に分配する。
+// 1は毎step、0.5は2stepに1回相当、0は初回だけ更新する。
+// stableId 由来の位相で個体ごとに更新stepをずらし、負荷と力の更新が
+// 群れ全体で同時に脈動するのを防ぐ。
+inline uint32_t makeUpdatePhaseKey(uint32_t stableId) {
+  stableId ^= stableId >> 16;
+  stableId *= 0x7feb352dU;
+  stableId ^= stableId >> 15;
+  stableId *= 0x846ca68bU;
+  stableId ^= stableId >> 16;
+  return stableId;
+}
+
+inline bool updateRateDue(float rate, int frame, uint32_t phaseKey) {
+  const double clampedRate = static_cast<double>(glm::clamp(rate, 0.0f, 1.0f));
+  if (frame <= 0) {
+    return true;
+  }
+  if (clampedRate <= 0.0) {
+    return false;
+  }
+  if (clampedRate >= 1.0) {
+    return true;
+  }
+  const double phase =
+      static_cast<double>(phaseKey & 0x00ffffffU) * (1.0 / 16777216.0);
+  return std::floor(static_cast<double>(frame) * clampedRate + phase) !=
+         std::floor(static_cast<double>(frame - 1) * clampedRate + phase);
+}
+
 // ------------------------------------------------------------
 // NaN/Inf を「作らない」ための最小限ガード
 // ------------------------------------------------------------
@@ -1291,7 +1321,6 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
 
   const int globalFrame = simulation.getFrameCount();
   const uint32_t worldSeed = simulation.getRandomSeed();
-
   int gIdx = 0;
   glm::vec3 pos;
   glm::vec3 vel;
@@ -1383,6 +1412,23 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
     sid = speciesId;
     gIdx = indices[index];
     const int stableId = buf->ids[gIdx];
+    const uint32_t updatePhaseKey =
+        makeUpdatePhaseKey(static_cast<uint32_t>(stableId));
+    const bool refreshNeighbors = updateRateDue(
+        gSimulationTuning.neighborRefreshRate, globalFrame,
+        updatePhaseKey + 0x009e3779U);
+    const bool updateAlignment = updateRateDue(
+        gSimulationTuning.alignmentUpdateRate, globalFrame,
+        updatePhaseKey + 0x00243f6aU);
+    const bool updateCohesion = updateRateDue(
+        gSimulationTuning.cohesionUpdateRate, globalFrame,
+        updatePhaseKey + 0x00b7e151U);
+    const bool updateSchoolPull = updateRateDue(
+        gSimulationTuning.schoolPullUpdateRate, globalFrame,
+        updatePhaseKey + 0x0085a308U);
+    const bool updatePredatorTarget = updateRateDue(
+        gSimulationTuning.predatorTargetUpdateRate, globalFrame,
+        updatePhaseKey + 0x0013198aU);
     pos = buf->positions[gIdx];
     vel = buf->velocities[gIdx];
     const SpeciesParams &selfParams = globalSpeciesParams[sid];
@@ -1392,6 +1438,15 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
     }
     const float baseCohesionStrength = leafBaseCohesionStrength;
     glm::vec3 longTermCohesion(0.0f);
+    if (updateAlignment) {
+      buf->cachedAlignmentForces[gIdx] = glm::vec3(0.0f);
+    }
+    if (updateCohesion) {
+      buf->cachedCohesionForces[gIdx] = glm::vec3(0.0f);
+    }
+    if (updateSchoolPull) {
+      buf->cachedSchoolPullForces[gIdx] = glm::vec3(0.0f);
+    }
     // 近接回避は距離ベースの軽量反発で扱う。
     // - 近傍ごとの高コスト計算や、相手状態の更新は避けて並列性を保つ。
     float threatLevel = glm::clamp(buf->predatorThreats[gIdx], 0.0f, 1.0f);
@@ -1409,7 +1464,7 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
     float schoolDistance = 0.0f;
     bool hasSchoolCenterDir = false;
 
-    if (sid >= 0) {
+    if (updateSchoolPull && sid >= 0) {
       const auto *schools = simulation.getSpeciesSchoolClusters(sid);
       if (schools) {
         // 新鮮な全 school を走査し、この個体に最も近い群れだけを選ぶ。
@@ -1468,8 +1523,10 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
 
     candidates.clear();
     if (globalSpeciesParams[sid].isPredator) {
-      // 毎フレーム更新される簡易フェーズ用のベクトルをリセット
-      buf->predatorApproachDirs[gIdx] = glm::vec3(0.0f);
+      // 標的探索を行うstepだけ接近方向を再計算する。
+      if (updatePredatorTarget) {
+        buf->predatorApproachDirs[gIdx] = glm::vec3(0.0f);
+      }
       // 捕食者の追跡/休憩サイクルを管理する
       int &tgtIdx = buf->predatorTargetIndices[gIdx];
       float &tgtTime = buf->predatorTargetTimers[gIdx];
@@ -1516,6 +1573,8 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
         }
         if (targetInvalid) {
           tgtIdx = -1;
+        }
+        if (targetInvalid && updatePredatorTarget) {
           predatorTargetCandidates.clear();
           if (predatorTargetCandidates.capacity() < kPredatorCacheLimit) {
             predatorTargetCandidates.reserve(kPredatorCacheLimit);
@@ -1729,7 +1788,7 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
     const bool hasVel = (velLen2 > EPS);
     glm::vec3 forward(0.0f);
 
-    if (activeCount < maxNeighbors) {
+    if (refreshNeighbors && activeCount < maxNeighbors) {
       if (hasVel) {
 #ifdef BOIDS_INTERACTION_DIAGNOSTICS
         BOIDS_DIAG_INCREMENT(forwardNormalizations);
@@ -1893,7 +1952,7 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
     const bool externalThrottleHit =
         (((globalFrame + stableId) % kExternalNeighborStride) == 0);
     const bool lostBoid = (neighborCount == 0);
-    if (wantsExternal && (externalThrottleHit || lostBoid)) {
+    if (refreshNeighbors && wantsExternal && (externalThrottleHit || lostBoid)) {
       // cohesionRange を基本に、最低限 separationRange も含む半径にする。
       const float queryRadius = glm::max(selfParams.cohesionRange,
                                          glm::max(selfParams.separationRange, 0.0f));
@@ -1974,7 +2033,7 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
     if (totalNeighborCount == 0) {
       // 近傍が完全に途切れた場合は、余計な補助機構で加速させずに保守的に振る舞う。
       // ただし大クラスター中心が取れている場合のみ、弱い誘導で群れへ復帰させる。
-      if (hasSchoolCenterDir) {
+      if (updateSchoolPull && hasSchoolCenterDir) {
         if (schoolDistanceSq > EPS) {
           const float clusterDist = schoolDistance;
           glm::vec3 clusterDir = schoolCenterDir *
@@ -1991,17 +2050,27 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
               schoolConfidence);
           const float threatScatter =
               glm::smoothstep(0.10f, 0.55f, threatLevel);
-          clusterPull *= confidenceScale * (1.0f - threatScatter) *
-                         schoolInfluenceScale *
+          clusterPull *= confidenceScale * schoolInfluenceScale *
                          schoolPullStateScale(clusterDist, 0.0f);
-          buf->accelerations[gIdx] += clusterDir * clusterPull;
-          if (simulation.isBehaviorInspectorTarget(gIdx)) {
-            simulation.recordBehaviorInteraction(
-                gIdx, glm::vec3(0.0f), glm::vec3(0.0f), glm::vec3(0.0f),
-                clusterDir * clusterPull, 0, clusterDist,
-                schoolInfluenceScale);
-          }
+          buf->cachedSchoolPullForces[gIdx] =
+              clusterDir * (clusterPull * (1.0f - threatScatter));
         }
+      }
+
+      const float fleeCohesionScale =
+          1.0f - 0.97f * glm::clamp(threatLevel, 0.0f, 1.0f);
+      const glm::vec3 combinedAlignment = buf->cachedAlignmentForces[gIdx];
+      const glm::vec3 combinedCohesion =
+          buf->cachedCohesionForces[gIdx] * fleeCohesionScale +
+          buf->cachedSchoolPullForces[gIdx];
+      buf->accelerations[gIdx] += combinedAlignment + combinedCohesion;
+      if (simulation.isBehaviorInspectorTarget(gIdx)) {
+        simulation.recordBehaviorInteraction(
+            gIdx, glm::vec3(0.0f), combinedAlignment,
+            buf->cachedCohesionForces[gIdx] * fleeCohesionScale,
+            buf->cachedSchoolPullForces[gIdx], 0,
+            hasSchoolCenterDir ? schoolDistance : 0.0f,
+            hasSchoolCenterDir ? schoolInfluenceScale : 0.0f);
       }
 
       continue;
@@ -2052,7 +2121,8 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
 #endif
         glm::vec3 diff = buf->positions[gNeighbor] - pos;
         float distSq = glm::dot(diff, diff);
-        if (cohesionRangeSq > 0.0f && distSq < cohesionRangeSq) {
+        if ((updateCohesion || updateSchoolPull) &&
+            cohesionRangeSq > 0.0f && distSq < cohesionRangeSq) {
           ++closeNeighborCount;
         }
         // 近接反発（軽量版）
@@ -2108,17 +2178,19 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
         wSep *= memoryFade;
         sumSep += (diff * wSep) * (-1.0f);
 
-        // 凝集の重み計算：近いほど強い（距離の正規化を反転）
-        float t = glm::clamp(dist / cohesionRange, 0.0f, 1.0f);
-        float wCoh = 1.0f - t; // 近いほど強い（0=遠い、1=近い）
-        wCoh *= memoryFade;
+        if (updateCohesion) {
+          // 凝集の重み計算：近いほど強い（距離の正規化を反転）
+          float t = glm::clamp(dist / cohesionRange, 0.0f, 1.0f);
+          float wCoh = 1.0f - t; // 近いほど強い（0=遠い、1=近い）
+          wCoh *= memoryFade;
+          sumCohDir += diff * wCoh;
+          wCohSum += wCoh;
+        }
 
-        // 相対ベクトル（diff）を重み付きで加算（世界座標を使わない）
-        sumCohDir += diff * wCoh;
-        wCohSum += wCoh;
-
-        // alignment も寿命でフェードさせ、近傍入れ替わりの急変を抑える。
-        sumAlign += buf->velocities[gNeighbor] * memoryFade;
+        if (updateAlignment) {
+          // alignment も寿命でフェードさせ、近傍入れ替わりの急変を抑える。
+          sumAlign += buf->velocities[gNeighbor] * memoryFade;
+        }
       }
 
       // ---- 近傍(ユニット外: SpatialIndex 球検索) ----
@@ -2141,7 +2213,8 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
         if (!(distSq > EPS && distSq < viewRangeSq)) {
           continue;
         }
-        if (cohesionRangeSq > 0.0f && distSq < cohesionRangeSq) {
+        if ((updateCohesion || updateSchoolPull) &&
+            cohesionRangeSq > 0.0f && distSq < cohesionRangeSq) {
           ++closeNeighborCount;
         }
 
@@ -2174,12 +2247,15 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
         wSep = glm::clamp(wSep, 0.0f, 1.0f);
         sumSep += (diff * wSep) * (-1.0f);
 
-        float t = glm::clamp(dist / cohesionRange, 0.0f, 1.0f);
-        float wCoh = 1.0f - t;
-
-        sumCohDir += diff * wCoh;
-        wCohSum += wCoh;
-        sumAlign += buf->velocities[gNeighbor];
+        if (updateCohesion) {
+          float t = glm::clamp(dist / cohesionRange, 0.0f, 1.0f);
+          float wCoh = 1.0f - t;
+          sumCohDir += diff * wCoh;
+          wCohSum += wCoh;
+        }
+        if (updateAlignment) {
+          sumAlign += buf->velocities[gNeighbor];
+        }
       }
 
       // cohesionRange 内の近傍数で φ を更新し、薄さ検出を即時化する。
@@ -2219,8 +2295,7 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
       }
 
       // 凝集の最終ベクトル（重みの総和で正規化、原点依存なし）
-      glm::vec3 totalCohesion = glm::vec3(0.0f);
-      if (wCohSum > EPS) {
+      if (updateCohesion && wCohSum > EPS) {
         glm::vec3 cohDir = sumCohDir / wCohSum; // 重み付き平均方向
         float cohLen2 = glm::length2(cohDir);
         if (cohLen2 > EPS) {
@@ -2229,22 +2304,24 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
 #endif
           const float edgeFactor =
               1.0f + glm::clamp(1.0f - phi, 0.0f, 1.0f); // 外縁ほど強化
-          totalCohesion = (cohDir * (1.0f / glm::sqrt(cohLen2))) *
-                          (selfParams.cohesion * edgeFactor);
+          buf->cachedCohesionForces[gIdx] =
+              (cohDir * (1.0f / glm::sqrt(cohLen2))) *
+              (selfParams.cohesion * edgeFactor);
         }
       }
       // 整列の最終ベクトル
-      glm::vec3 avgAlignVel = sumAlign * invN;
-      glm::vec3 totalAlignment = glm::vec3(0.0f);
-      glm::vec3 aliDir = avgAlignVel - vel;
-      float aliLen2 = glm::length2(aliDir);
-      if (aliLen2 > EPS) {
+      if (updateAlignment) {
+        glm::vec3 avgAlignVel = sumAlign * invN;
+        glm::vec3 aliDir = avgAlignVel - vel;
+        float aliLen2 = glm::length2(aliDir);
+        if (aliLen2 > EPS) {
 #ifdef BOIDS_INTERACTION_DIAGNOSTICS
-        BOIDS_DIAG_INCREMENT(forceNormalizations);
+          BOIDS_DIAG_INCREMENT(forceNormalizations);
 #endif
-        totalAlignment =
-            (aliDir * (1.0f / glm::sqrt(aliLen2))) *
-          globalSpeciesParams[sid].alignment;
+          buf->cachedAlignmentForces[gIdx] =
+              (aliDir * (1.0f / glm::sqrt(aliLen2))) *
+              globalSpeciesParams[sid].alignment;
+        }
       }
 
       if (hasSchoolCenterDir) {
@@ -2291,10 +2368,11 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
                 schoolConfidence);
             clusterPull *= confidenceScale * schoolInfluenceScale *
                            schoolPullStateScale(clusterDist, phi);
-            // 脅威中は「群れ中心へ戻す」より「回避/散開」を優先する。
-            const float threatScatter = glm::smoothstep(0.10f, 0.55f, threatLevel);
-            const float clusterThreatScale = 1.0f - threatScatter;
-            longTermCohesion += globalDir * (clusterPull * clusterThreatScale);
+            // school pull は従来どおり、専用の脅威抑制と後段の凝集抑制を両方受ける。
+            const float threatScatter =
+                glm::smoothstep(0.10f, 0.55f, threatLevel);
+            longTermCohesion +=
+                globalDir * (clusterPull * (1.0f - threatScatter));
           }
         }
       }
@@ -2311,9 +2389,13 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
         // threat が高い局面は「中心へ戻す」より「散開」を優先する。
         const float fleeCohesionScale =
           1.0f - 0.97f * glm::clamp(threatLevel, 0.0f, 1.0f);
-        const glm::vec3 combinedCohesion =
-          (totalCohesion + longTermCohesion) * fleeCohesionScale;
-      const glm::vec3 combinedAlignment = totalAlignment;
+      if (updateSchoolPull) {
+        buf->cachedSchoolPullForces[gIdx] = longTermCohesion;
+      }
+      const glm::vec3 combinedCohesion =
+          (buf->cachedCohesionForces[gIdx] +
+           buf->cachedSchoolPullForces[gIdx]) * fleeCohesionScale;
+      const glm::vec3 combinedAlignment = buf->cachedAlignmentForces[gIdx];
 
       if (simulation.isBehaviorInspectorTarget(gIdx)) {
         const float selectedSchoolDistance = hasSchoolCenterDir
@@ -2321,8 +2403,9 @@ void BoidUnit::computeBoidInteraction(float dt, float stressRiseBlend
             : 0.0f;
         simulation.recordBehaviorInteraction(
             gIdx, totalSeparation, combinedAlignment,
-            totalCohesion * fleeCohesionScale,
-            longTermCohesion * fleeCohesionScale, totalNeighborCount,
+            buf->cachedCohesionForces[gIdx] * fleeCohesionScale,
+            buf->cachedSchoolPullForces[gIdx] * fleeCohesionScale,
+            totalNeighborCount,
             selectedSchoolDistance, schoolInfluenceScale);
       }
 

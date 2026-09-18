@@ -29,6 +29,10 @@ struct SoABuffers {
   std::vector<glm::vec3, A16<glm::vec3>> velocities;
   std::vector<glm::vec3, A16<glm::vec3>> velocitiesWrite;
   std::vector<glm::vec3, A16<glm::vec3>> accelerations;
+  // 更新率を落とした社会力を次の再計算まで保持する。
+  std::vector<glm::vec3, A16<glm::vec3>> cachedAlignmentForces;
+  std::vector<glm::vec3, A16<glm::vec3>> cachedCohesionForces;
+  std::vector<glm::vec3, A16<glm::vec3>> cachedSchoolPullForces;
   std::vector<glm::quat, A16<glm::quat>> orientations;
   std::vector<glm::quat, A16<glm::quat>> orientationsWrite;
   std::vector<glm::vec3, A16<glm::vec3>> predatorInfluences;
@@ -61,6 +65,9 @@ struct SoABuffers {
     velocities.reserve(n);
     velocitiesWrite.reserve(n);
     accelerations.reserve(n);
+    cachedAlignmentForces.reserve(n);
+    cachedCohesionForces.reserve(n);
+    cachedSchoolPullForces.reserve(n);
     ids.reserve(n);
     stresses.reserve(n);
     speciesIds.reserve(n);
@@ -87,6 +94,9 @@ struct SoABuffers {
     orientations.resize(n, glm::quat(1, 0, 0, 0));
     orientationsWrite.resize(n, glm::quat(1, 0, 0, 0));
     accelerations.resize(n);
+    cachedAlignmentForces.resize(n, glm::vec3(0.0f));
+    cachedCohesionForces.resize(n, glm::vec3(0.0f));
+    cachedSchoolPullForces.resize(n, glm::vec3(0.0f));
     ids.resize(n);
     stresses.resize(n);
     speciesIds.resize(n);
