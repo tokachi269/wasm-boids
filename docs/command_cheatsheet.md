@@ -63,9 +63,19 @@ npm run benchmark:serve
 
 ## Development server
 
+通常のDebug WASM:
+
 ```powershell
 npm run serve
 ```
+
+Release最適化（`-O3`）したWASMで、Vueのhot reloadとWASMの自動再buildを使う場合:
+
+```powershell
+npm run serve:release
+```
+
+いずれも起動は1コマンドでよい。`App.vue`などのJavaScript/Vue変更はhot reloadされ、C++変更時は監視中のWASM buildだけが再実行される。
 
 ## Deploy
 

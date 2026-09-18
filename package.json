@@ -13,9 +13,10 @@
         "benchmark:simd": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/analyze-wasm-simd.ps1",
         "build-wasm:dev": "emcmake cmake -B build-dev -DCMAKE_BUILD_TYPE=Debug -DWASM_RUNTIME_OUTPUT_DIR=src/wasm/build/dev && cmake --build build-dev",
         "build-wasm:prod": "emcmake cmake -B build-prod -DCMAKE_BUILD_TYPE=Release -DWASM_RUNTIME_OUTPUT_DIR=src/wasm/build/prod && cmake --build build-prod",
-    "serve": "cross-env WASM_BUILD_DIR=dev VUE_APP_WASM_BUILD_DIR=dev concurrently \"nodemon --watch src/wasm --ext cpp,h --exec \\\"npm run build-wasm:dev\\\"\" \"wait-on src/wasm/build/dev/wasm_boids.js && vue-cli-service serve\"",
+        "serve": "cross-env WASM_BUILD_DIR=dev VUE_APP_WASM_BUILD_DIR=dev concurrently \"nodemon --watch src/wasm --ext cpp,h --exec \\\"npm run build-wasm:dev\\\"\" \"wait-on src/wasm/build/dev/wasm_boids.js && vue-cli-service serve\"",
+        "serve:release": "cross-env WASM_BUILD_DIR=prod VUE_APP_WASM_BUILD_DIR=prod concurrently \"nodemon --watch src/wasm --ext cpp,h --exec \\\"npm run build-wasm:prod\\\"\" \"wait-on src/wasm/build/prod/wasm_boids.js && vue-cli-service serve\"",
         "vue:build": "vue-cli-service build",
-    "build": "cross-env WASM_BUILD_DIR=prod VUE_APP_WASM_BUILD_DIR=prod npm-run-all build-wasm:prod vue:build",
+        "build": "cross-env WASM_BUILD_DIR=prod VUE_APP_WASM_BUILD_DIR=prod npm-run-all build-wasm:prod vue:build",
         "deploy": "npm run build && wait-on dist/index.html && gh-pages -d dist",
         "watch-wasm": "nodemon --watch src/wasm --ext cpp,h --exec \"emcc -fsyntax-only src/wasm/main.cpp\""
     },
