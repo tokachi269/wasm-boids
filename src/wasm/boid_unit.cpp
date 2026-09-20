@@ -868,8 +868,8 @@ void BoidUnit::applyInterUnitInfluence(BoidUnit *other, float dt) {
 
         spatial_query::forEachBoidInSphereLimited(
           simulation, predatorPos, predatorEffectRange, oversampleLimit,
-          [&](int idxB, const BoidUnit *leafNode) {
-            if (!leafNode || leafNode == predatorUnit) {
+          [&](int idxB, int groupId) {
+            if (groupId == predatorUnit->id) {
               return;
             }
             const int sidB = soa->speciesIds[idxB];
@@ -1631,8 +1631,8 @@ void BoidUnit::computeBoidInteraction(float elapsedDt, float steeringDt,
                 clusterMembershipRadius * clusterMembershipRadius;
             spatial_query::forEachBoidInSphereLimited(
                 simulation, pos, targetSearchRadius, kPredatorCandidateLimit,
-                [&](int candidateIdx, const BoidUnit *leafNode) {
-                  if (leafNode == this || candidateIdx == gIdx ||
+                [&](int candidateIdx, int groupId) {
+                  if (groupId == id || candidateIdx == gIdx ||
                       buf->speciesIds[candidateIdx] != targetClusterSpecies) {
                     return;
                   }
@@ -1970,12 +1970,12 @@ void BoidUnit::computeBoidInteraction(float elapsedDt, float steeringDt,
         spatial_query::forEachBoidInSphereLimited(
           simulation, pos, queryRadius,
             static_cast<std::size_t>(hardLimit),
-            [&](int candidateIdx, const BoidUnit *leafNode) {
+            [&](int candidateIdx, int groupId) {
 #ifdef BOIDS_INTERACTION_DIAGNOSTICS
               BOIDS_DIAG_INCREMENT(externalCandidatesVisited);
 #endif
               // leaf 内候補は既存の activeNeighbors で扱うので除外。
-              if (!leafNode || leafNode == this) {
+              if (groupId == id) {
                 return;
               }
               if (candidateIdx == gIdx) {

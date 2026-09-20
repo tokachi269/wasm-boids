@@ -20,17 +20,18 @@ public:
   const BoidUnit *getRoot() const { return root_; }
 
   // SpatialIndex implementation
-  void forEachLeaf(const LeafVisitor &visitor) const override;
-  void forEachLeafIntersectingSphere(const glm::vec3 &center, float radius,
-                                     const LeafVisitor &visitor) const override;
+  void forEachGroup(const GroupVisitor &visitor) const override;
+  void forEachCandidateIntersectingSphere(
+      const glm::vec3 &center, float radius,
+      const CandidateVisitor &visitor) const override;
 
   // 球交差クエリ（早期終了対応）。visitor が false を返すと探索を打ち切る。
   // NOTE: 反復DFS + thread_local スタック再利用で、ホットパスの割り当てを避ける。
   // NOTE: thread_local を使うため同一スレッド内で再入不可（ネスト呼び出し禁止）。
   template <typename CancelableVisitor>
-  void forEachLeafIntersectingSphereCancelable(const glm::vec3 &center,
-                                               float radius,
-                                               CancelableVisitor &&visitor) const {
+  void forEachCandidateIntersectingSphereCancelable(
+      const glm::vec3 &center, float radius,
+      CancelableVisitor &&visitor) const {
     if (!root_) {
       return;
     }
@@ -67,9 +68,10 @@ public:
       }
 
       if (current->children.empty()) {
-        SpatialLeaf leaf{current->indices.data(), current->indices.size(), current};
-        if (!visitor(leaf)) {
-          return;
+        for (int index : current->indices) {
+          if (!visitor(index, current->id)) {
+            return;
+          }
         }
         continue;
       }
@@ -88,11 +90,11 @@ public:
   }
 
 private:
-  void forEachLeafRecursive(const BoidUnit *node, const LeafVisitor &visitor) const;
-  void forEachLeafIntersectingSphereRecursive(const BoidUnit *node,
-                                              const glm::vec3 &center,
-                                              float radius,
-                                              const LeafVisitor &visitor) const;
+  void forEachGroupRecursive(const BoidUnit *node,
+                             const GroupVisitor &visitor) const;
+  void forEachCandidateIntersectingSphereRecursive(
+      const BoidUnit *node, const glm::vec3 &center, float radius,
+      const CandidateVisitor &visitor) const;
 
   const BoidUnit *root_ = nullptr;
 };

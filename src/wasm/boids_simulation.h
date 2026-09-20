@@ -242,9 +242,10 @@ public:
     float getMaxPredatorAlertRadius() const { return maxPredatorAlertRadius_; }
 
     // SpatialIndex implementation
-    void forEachLeaf(const LeafVisitor &visitor) const override;
-    void forEachLeafIntersectingSphere(const glm::vec3 &center, float radius,
-                                       const LeafVisitor &visitor) const override;
+    void forEachGroup(const GroupVisitor &visitor) const override;
+    void forEachCandidateIntersectingSphere(
+        const glm::vec3 &center, float radius,
+        const CandidateVisitor &visitor) const override;
 
     /**
      * 球交差クエリ（早期終了対応版）。
@@ -254,24 +255,28 @@ public:
      * - visitor が false を返した時点で探索を打ち切る。
      *
      * 注意:
-     * - SpatialIndex の仮想インターフェースは互換性維持のため変更しない。
-    * - BoidSimulation 固有の高速パスとして提供する。
+     * - BoidSimulation 固有の高速パスとして提供する。
      */
     template <typename CancelableVisitor>
-    void forEachLeafIntersectingSphereCancelable(const glm::vec3 &center, float radius,
-                                                 CancelableVisitor &&visitor) const {
+    void forEachCandidateIntersectingSphereCancelable(
+        const glm::vec3 &center, float radius,
+        CancelableVisitor &&visitor) const {
         // BoidUnit ツリーが有効な場合は tree 実装の cancelable を使う。
         // 将来的に別の SpatialIndex 実装へ差し替えた場合は、最後まで走査するフォールバックになる。
         if (activeSpatialIndex_ == &treeSpatialIndex_) {
-            treeSpatialIndex_.forEachLeafIntersectingSphereCancelable(center, radius,
+            treeSpatialIndex_.forEachCandidateIntersectingSphereCancelable(center, radius,
                 std::forward<CancelableVisitor>(visitor));
             return;
         }
 
         // フォールバック: cancelできない場合は最後まで走査する。
-        forEachLeafIntersectingSphere(center, radius, [&](const SpatialLeaf &leaf) {
-            (void)visitor(leaf);
-        });
+        bool active = true;
+        forEachCandidateIntersectingSphere(
+            center, radius, [&](int boidIndex, int groupId) {
+                if (active) {
+                    active = visitor(boidIndex, groupId);
+                }
+            });
     }
 
 private:

@@ -248,17 +248,13 @@ void BoidSimulation::updateSpeciesEnvelopes() {
   std::vector<glm::vec3> accumCenter(speciesCount, glm::vec3(0.0f));
   std::vector<float> accumWeight(speciesCount, 0.0f);
 
-  forEachLeaf([&](const SpatialLeaf &leaf) {
-    const BoidUnit *node = leaf.node;
-    if (!node) {
-      return;
-    }
-    const int sid = node->speciesId;
+  forEachGroup([&](const SpatialGroup &group) {
+    const int sid = group.speciesId;
     if (sid < 0 || sid >= static_cast<int>(speciesCount)) {
       return;
     }
-    const float w = static_cast<float>(leaf.count);
-    accumCenter[sid] += node->center * w;
+    const float w = static_cast<float>(group.count);
+    accumCenter[sid] += group.center * w;
     accumWeight[sid] += w;
   });
 
@@ -272,18 +268,14 @@ void BoidSimulation::updateSpeciesEnvelopes() {
   }
 
   std::vector<float> maxRadius(speciesCount, 0.0f);
-  forEachLeaf([&](const SpatialLeaf &leaf) {
-    const BoidUnit *node = leaf.node;
-    if (!node) {
-      return;
-    }
-    const int sid = node->speciesId;
+  forEachGroup([&](const SpatialGroup &group) {
+    const int sid = group.speciesId;
     if (sid < 0 || sid >= static_cast<int>(speciesCount)) {
       return;
     }
-    const glm::vec3 delta = node->center - centers[sid];
+    const glm::vec3 delta = group.center - centers[sid];
     const float dist = glm::length(delta);
-    const float r = dist + node->radius;
+    const float r = dist + group.radius;
     if (r > maxRadius[sid]) {
       maxRadius[sid] = r;
     }
@@ -360,12 +352,11 @@ void BoidSimulation::updateSpeciesClusters(float dt) {
     }
   }
 
-  forEachLeaf([&](const SpatialLeaf &leaf) {
-    const BoidUnit *node = leaf.node;
-    if (!node || leaf.count == 0) {
+  forEachGroup([&](const SpatialGroup &group) {
+    if (group.count == 0) {
       return;
     }
-    const int sid = node->speciesId;
+    const int sid = group.speciesId;
     if (sid < 0 || sid >= static_cast<int>(speciesCount)) {
       return;
     }
@@ -373,10 +364,11 @@ void BoidSimulation::updateSpeciesClusters(float dt) {
     auto &clusters = speciesClusters[sid];
     const SpeciesParams &params = globalSpeciesParams[sid];
 
-    const glm::vec3 pos = node->center;
-    const glm::vec3 vel = node->averageVelocity;
-    const float leafRadius = glm::max(node->radius, 0.0f);
-    const int leafBoidCount = static_cast<int>(glm::min<std::size_t>(leaf.count, 1000000000u));
+    const glm::vec3 pos = group.center;
+    const glm::vec3 vel = group.averageVelocity;
+    const float leafRadius = glm::max(group.radius, 0.0f);
+    const int leafBoidCount = static_cast<int>(
+        glm::min<std::size_t>(group.count, 1000000000u));
 
     if (leafBoidCount < kClusterMinLeafBoids) {
       return;
@@ -798,20 +790,21 @@ void BoidSimulation::clearPool() {
   }
 }
 
-void BoidSimulation::forEachLeaf(const LeafVisitor &visitor) const {
+void BoidSimulation::forEachGroup(const GroupVisitor &visitor) const {
   if (!activeSpatialIndex_ || !visitor) {
     return;
   }
-  activeSpatialIndex_->forEachLeaf(visitor);
+  activeSpatialIndex_->forEachGroup(visitor);
 }
 
-void BoidSimulation::forEachLeafIntersectingSphere(const glm::vec3 &center,
-                                             float radius,
-                                             const LeafVisitor &visitor) const {
+void BoidSimulation::forEachCandidateIntersectingSphere(
+    const glm::vec3 &center, float radius,
+    const CandidateVisitor &visitor) const {
   if (!activeSpatialIndex_ || !visitor) {
     return;
   }
-  activeSpatialIndex_->forEachLeafIntersectingSphere(center, radius, visitor);
+  activeSpatialIndex_->forEachCandidateIntersectingSphere(center, radius,
+                                                           visitor);
 }
 
 // ダブルバッファのRead側をレンダリング用ポインタに設定
@@ -1766,9 +1759,9 @@ bool BoidSimulation::reorderStorageByLeafOrder() {
     }
   }
 
-  treeSpatialIndex_.forEachLeaf([&](const SpatialLeaf &leaf) {
-    for (std::size_t i = 0; i < leaf.count; ++i) {
-      const int oldIndex = leaf.indices[i];
+  treeSpatialIndex_.forEachGroup([&](const SpatialGroup &group) {
+    for (std::size_t i = 0; i < group.count; ++i) {
+      const int oldIndex = group.indices[i];
       if (oldIndex < 0 || oldIndex >= count) {
         continue;
       }
