@@ -10,6 +10,12 @@ workdir: `D:\GitHub\wasm-boids`
 npm run build-native
 ```
 
+Nativeの小さな契約テスト:
+
+```powershell
+npm run test-native
+```
+
 固定条件の既定benchmark:
 
 ```powershell

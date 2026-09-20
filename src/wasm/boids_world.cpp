@@ -44,6 +44,21 @@ void BoidsWorld::stepFixed(float realDt) {
 
 void BoidsWorld::rebuildSpatialIndex() { simulation_->build(); }
 
+void BoidsWorld::setGuides(const std::vector<Guide> &guides) {
+  simulation_->setGuides(guides);
+}
+
+void BoidsWorld::setObstacles(const std::vector<Obstacle> &obstacles) {
+  simulation_->setObstacles(obstacles);
+}
+
+void BoidsWorld::configureGroundPlane(bool enabled, float height,
+                                      float influenceDistance, float strength,
+                                      float damping) {
+  simulation_->configureGroundPlane(enabled, height, influenceDistance,
+                                    strength, damping);
+}
+
 void BoidsWorld::setSeed(uint32_t seed) {
   config_.seed = seed;
   simulation_->setRandomSeed(seed);

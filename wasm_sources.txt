@@ -3,6 +3,6 @@ src/wasm/entry.cpp
 src/wasm/boid_unit.cpp
 src/wasm/boids_simulation.cpp
 src/wasm/boid_tree_spatial_index.cpp
-src/wasm/obstacle_field.cpp
+src/wasm/steering_environment.cpp
 src/wasm/wasm_bindings.cpp
 src/wasm/simulation_tuning.cpp

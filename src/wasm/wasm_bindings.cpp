@@ -1,7 +1,7 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #include "boids_simulation.h"
 #include "boid.h"
-#include "obstacle_field.h"
+#include "steering_environment.h"
 #include "species_params.h"
 #include "simulation_tuning.h"
 #include <glm/glm.hpp>
@@ -63,8 +63,38 @@ void setSimulationTuningParams(const SimulationTuningParams &params) {
 
 void configureGroundPlaneFromJS(bool enabled, float height, float blendDistance,
                                 float stiffness, float damping) {
-    obstacle_field::configureGroundPlane(enabled, height, blendDistance,
-                                         stiffness, damping);
+    BoidSimulation::instance().configureGroundPlane(
+      enabled, height, blendDistance, stiffness, damping);
+}
+
+uintptr_t resizeSteeringGuideInput(int count) {
+    if (count < 0) {
+      return 0;
+    }
+    return reinterpret_cast<uintptr_t>(
+      BoidSimulation::instance().getSteeringEnvironment().resizeGuideInput(
+        static_cast<std::size_t>(count)));
+}
+
+bool commitSteeringGuideInput(int count) {
+    return count >= 0 &&
+      BoidSimulation::instance().getSteeringEnvironment().commitGuideInput(
+        static_cast<std::size_t>(count));
+}
+
+uintptr_t resizeSteeringObstacleInput(int count) {
+    if (count < 0) {
+      return 0;
+    }
+    return reinterpret_cast<uintptr_t>(
+      BoidSimulation::instance().getSteeringEnvironment().resizeObstacleInput(
+        static_cast<std::size_t>(count)));
+}
+
+bool commitSteeringObstacleInput(int count) {
+    return count >= 0 &&
+      BoidSimulation::instance().getSteeringEnvironment().commitObstacleInput(
+        static_cast<std::size_t>(count));
 }
 
 EMSCRIPTEN_BINDINGS(my_module)
@@ -153,5 +183,9 @@ value_object<SimulationTuningParams>("SimulationTuningParams")
     function("setSimulationTuningParams", &setSimulationTuningParams);
     function("callInitBoids", &callInitBoids); // 新しい関数を登録
     function("configureGroundPlane", &configureGroundPlaneFromJS);
+    function("resizeSteeringGuideInput", &resizeSteeringGuideInput);
+    function("commitSteeringGuideInput", &commitSteeringGuideInput);
+    function("resizeSteeringObstacleInput", &resizeSteeringObstacleInput);
+    function("commitSteeringObstacleInput", &commitSteeringObstacleInput);
 }
 

@@ -32,6 +32,8 @@ struct SoABuffers {
   std::vector<glm::quat, A16<glm::quat>> orientations;
   std::vector<glm::quat, A16<glm::quat>> orientationsWrite;
   std::vector<glm::vec3, A16<glm::vec3>> predatorInfluences;
+  std::vector<glm::vec3, A16<glm::vec3>> obstacleAvoidanceTangents;
+  std::vector<int> obstacleAvoidanceIds;
   std::vector<int> ids;
   std::vector<float> stresses;
   std::vector<int> speciesIds;
@@ -73,6 +75,8 @@ struct SoABuffers {
     predatorApproachDirs.reserve(n);
     predatorDisengageDirs.reserve(n);
     predatorInfluences.reserve(n);
+    obstacleAvoidanceTangents.reserve(n);
+    obstacleAvoidanceIds.reserve(n);
     predatorThreats.reserve(n);
     neighborOffsets.reserve(n + 1);
     neighborCounts.reserve(n);
@@ -97,6 +101,8 @@ struct SoABuffers {
     predatorApproachDirs.resize(n, glm::vec3(0.0f));
     predatorDisengageDirs.resize(n, glm::vec3(0.0f));
     predatorInfluences.resize(n, glm::vec3(0.0f));
+    obstacleAvoidanceTangents.resize(n, glm::vec3(0.0f));
+    obstacleAvoidanceIds.resize(n, -1);
     predatorThreats.resize(n, 0.0f);
     neighborOffsets.assign(n + 1, 0);
     neighborCounts.assign(n, 0);

@@ -1375,6 +1375,10 @@ void BoidSimulation::initializeBoids(
   buf.resizeAll(totalCount);
   std::fill(buf.accelerations.begin(), buf.accelerations.end(), glm::vec3(0.0f));
   std::fill(buf.predatorInfluences.begin(), buf.predatorInfluences.end(), glm::vec3(0.0f));
+  std::fill(buf.obstacleAvoidanceTangents.begin(),
+            buf.obstacleAvoidanceTangents.end(), glm::vec3(0.0f));
+  std::fill(buf.obstacleAvoidanceIds.begin(), buf.obstacleAvoidanceIds.end(),
+            -1);
   std::fill(buf.stresses.begin(), buf.stresses.end(), 0.0f);
   std::fill(buf.predatorTargetIndices.begin(), buf.predatorTargetIndices.end(), -1);
   std::fill(buf.predatorTargetTimers.begin(), buf.predatorTargetTimers.end(), 0.0f);
@@ -1457,6 +1461,8 @@ void BoidSimulation::setFlockSize(int newSize, float posRange, float velRange) {
     buf.velocities.resize(newSize);
     buf.velocitiesWrite.resize(newSize);
     buf.accelerations.resize(newSize);
+    buf.obstacleAvoidanceTangents.resize(newSize);
+    buf.obstacleAvoidanceIds.resize(newSize, -1);
     buf.ids.resize(newSize);
     buf.stresses.resize(newSize);
     buf.speciesIds.resize(newSize);
@@ -1486,6 +1492,8 @@ void BoidSimulation::setFlockSize(int newSize, float posRange, float velRange) {
       buf.velocities.push_back(vel);
       buf.velocitiesWrite.push_back(vel);
       buf.accelerations.push_back(glm::vec3(0.0f));
+      buf.obstacleAvoidanceTangents.push_back(glm::vec3(0.0f));
+      buf.obstacleAvoidanceIds.push_back(-1);
       buf.ids.push_back(i);
       buf.stresses.push_back(0.0f);
       buf.speciesIds.push_back(0);
@@ -1658,6 +1666,9 @@ bool BoidSimulation::validateReorderedState(const SoABuffers &before) const {
   if (!samePermuted(before.positions, buf.positions) ||
       !samePermuted(before.velocities, buf.velocities) ||
       !samePermuted(before.accelerations, buf.accelerations) ||
+      !samePermuted(before.obstacleAvoidanceTangents,
+                    buf.obstacleAvoidanceTangents) ||
+      !samePermuted(before.obstacleAvoidanceIds, buf.obstacleAvoidanceIds) ||
       !samePermuted(before.orientations, buf.orientations) ||
       !samePermuted(before.predatorInfluences, buf.predatorInfluences) ||
       !samePermuted(before.ids, buf.ids) ||
@@ -1804,6 +1815,9 @@ bool BoidSimulation::reorderStorageByLeafOrder() {
   buf.swapReadWrite();
 
   permute(buf.accelerations, reorderScratch_.accelerations);
+  permute(buf.obstacleAvoidanceTangents,
+          reorderScratch_.obstacleAvoidanceTangents);
+  permute(buf.obstacleAvoidanceIds, reorderScratch_.obstacleAvoidanceIds);
   permute(buf.predatorInfluences, reorderScratch_.predatorInfluences);
   permute(buf.ids, reorderScratch_.ids);
   permute(buf.stresses, reorderScratch_.stresses);

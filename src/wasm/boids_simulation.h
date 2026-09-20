@@ -11,6 +11,7 @@
 #include "boids_buffers.h"
 #include "spatial_index.h"
 #include "boid_tree_spatial_index.h"
+#include "steering_environment.h"
 #ifdef BOIDS_INTERACTION_DIAGNOSTICS
 #include "interaction_diagnostics.h"
 #include <mutex>
@@ -118,6 +119,22 @@ public:
     uint32_t getRandomSeed() const { return randomSeed_; }
     void setFixedTimeStep(float dt);
     float getFixedTimeStep() const { return fixedTimeStep_; }
+    SteeringEnvironment &getSteeringEnvironment() { return steeringEnvironment_; }
+    const SteeringEnvironment &getSteeringEnvironment() const {
+        return steeringEnvironment_;
+    }
+    void setGuides(const std::vector<boids::Guide> &guides) {
+        steeringEnvironment_.setGuides(guides);
+    }
+    void setObstacles(const std::vector<boids::Obstacle> &obstacles) {
+        steeringEnvironment_.setObstacles(obstacles);
+    }
+    void configureGroundPlane(bool enabled, float height,
+                              float influenceDistance, float strength,
+                              float damping) {
+        steeringEnvironment_.configureGroundPlane(
+            enabled, height, influenceDistance, strength, damping);
+    }
     void setSpatialReorderCadence(int frames) {
         spatialReorderCadence_ = frames > 0 ? frames : 0;
     }
@@ -268,6 +285,7 @@ private:
     SoABuffers buf; // 中央バッファに一本化
     SoABuffers reorderScratch_;
     std::vector<SpeciesParams> speciesParams_;
+    SteeringEnvironment steeringEnvironment_;
     uint32_t randomSeed_ = 5489u;
     float fixedTimeStep_ = 1.0f / 60.0f;
     int spatialReorderCadence_ = 30;

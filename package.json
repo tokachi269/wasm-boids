@@ -7,6 +7,7 @@
         "build-native": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-native.ps1",
         "build-native:profile": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-native.ps1 -Profile",
         "build-native:diagnostics": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-native.ps1 -InteractionDiagnostics",
+        "test-native": "ctest --test-dir build-native --output-on-failure",
         "benchmark": "npm run build-native && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-native-benchmark.ps1",
         "benchmark:build": "npm run build-wasm:prod && npm run vue:build",
         "benchmark:serve": "node scripts/serve-benchmark.mjs",

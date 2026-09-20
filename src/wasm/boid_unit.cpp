@@ -2,7 +2,7 @@
 
 #include "boids_buffers.h"
 #include "boids_simulation.h"
-#include "obstacle_field.h"
+#include "steering_environment.h"
 #include "pool_accessor.h"
 #include "simulation_tuning.h"
 #include "spatial_query.h"
@@ -377,12 +377,25 @@ static void updateLeafKinematics(BoidUnit *unit, float dt,
     const float predatorWarmup =
       isPredator ? glm::clamp(predatorChaseTimer * 0.3f, 0.2f, 1.0f) : 1.0f;
 
-    // 障害物（まずは地面）とのソフト制約を評価し、事前に逃がす。
-    const glm::vec3 obstacleAvoidance =
-        obstacle_field::computeAvoidance(position, velocity);
-    if (obstacleAvoidance.x != 0.0f || obstacleAvoidance.y != 0.0f ||
-        obstacleAvoidance.z != 0.0f) {
-      acceleration += obstacleAvoidance;
+    // Guide/Obstacleは現在状態から追加steeringを返すだけで、
+    // 近傍相互作用やkinematicsの更新順は変えない。
+    const int stableId = unit->buf->ids[gIdx];
+    if (stableId >= 0) {
+      SteeringEnvironment &steering = simulation.getSteeringEnvironment();
+      const bool retainsAvoidanceSide = steering.usesAvoidanceMemory();
+      ObstacleAvoidanceMemory avoidanceMemory;
+      if (retainsAvoidanceSide) {
+        avoidanceMemory.obstacleId = unit->buf->obstacleAvoidanceIds[gIdx];
+        avoidanceMemory.tangent =
+            unit->buf->obstacleAvoidanceTangents[gIdx];
+      }
+      acceleration += steering.computeSteering(
+          position, velocity, static_cast<uint32_t>(stableId),
+          avoidanceMemory);
+      if (retainsAvoidanceSide) {
+        unit->buf->obstacleAvoidanceIds[gIdx] = avoidanceMemory.obstacleId;
+        unit->buf->obstacleAvoidanceTangents[gIdx] = avoidanceMemory.tangent;
+      }
     }
 
     // UI から渡される「逃避優先度」。
@@ -681,8 +694,8 @@ static void updateLeafKinematics(BoidUnit *unit, float dt,
     const glm::vec3 newVelocity = newDir * finalSpeed;
     unit->buf->velocitiesWrite[gIdx] = newVelocity;
     unit->buf->positionsWrite[gIdx] = position + newVelocity * dt;
-    obstacle_field::resolvePenetration(unit->buf->positionsWrite[gIdx],
-                       unit->buf->velocitiesWrite[gIdx]);
+    simulation.getSteeringEnvironment().resolvePenetration(
+        unit->buf->positionsWrite[gIdx], unit->buf->velocitiesWrite[gIdx]);
     unit->buf->predatorInfluences[gIdx] *=
         response.predatorInfluenceRetention;
     glm::vec3 orientationForward =

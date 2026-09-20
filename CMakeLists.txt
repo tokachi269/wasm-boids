@@ -114,7 +114,7 @@ set(BOIDS_CORE_SOURCES
     src/wasm/boids_simulation.cpp
     src/wasm/boids_world.cpp
     src/wasm/boid_tree_spatial_index.cpp
-    src/wasm/obstacle_field.cpp
+    src/wasm/steering_environment.cpp
     src/wasm/simulation_tuning.cpp
 )
 
@@ -209,4 +209,13 @@ else()
 
     find_package(Threads REQUIRED)
     target_link_libraries(boids_core PUBLIC Threads::Threads)
+
+    include(CTest)
+    if(BUILD_TESTING)
+        add_executable(steering_environment_test
+            tests/steering_environment_test.cpp
+        )
+        target_link_libraries(steering_environment_test PRIVATE boids_core)
+        add_test(NAME steering_environment COMMAND steering_environment_test)
+    endif()
 endif()
