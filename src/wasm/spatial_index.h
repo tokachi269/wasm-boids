@@ -23,7 +23,8 @@ public:
 
   virtual void forEachGroup(const GroupVisitor &visitor) const = 0;
 
-  virtual void rebuildGroupMembership(std::size_t boidCount) const = 0;
+  virtual void ensureGroupMembership(std::size_t boidCount) const = 0;
+  virtual void invalidateGroupMembership() const = 0;
   virtual bool localGroupForBoid(int boidIndex, SpatialGroup &group) const = 0;
 
   virtual void forEachCandidateIntersectingSphere(

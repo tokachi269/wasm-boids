@@ -797,11 +797,17 @@ void BoidSimulation::forEachGroup(const GroupVisitor &visitor) const {
   activeSpatialIndex_->forEachGroup(visitor);
 }
 
-void BoidSimulation::rebuildGroupMembership(std::size_t boidCount) const {
+void BoidSimulation::ensureGroupMembership(std::size_t boidCount) const {
   if (!activeSpatialIndex_) {
     return;
   }
-  activeSpatialIndex_->rebuildGroupMembership(boidCount);
+  activeSpatialIndex_->ensureGroupMembership(boidCount);
+}
+
+void BoidSimulation::invalidateGroupMembership() const {
+  if (activeSpatialIndex_) {
+    activeSpatialIndex_->invalidateGroupMembership();
+  }
 }
 
 bool BoidSimulation::localGroupForBoid(int boidIndex,
@@ -1171,6 +1177,7 @@ void BoidSimulation::update(float dt) {
       // - maxBoidsPerUnit: 大きいほど分割しにくい（個体数条件）
       if (u && u->needsSplit(40.0f, 0.5f, maxBoidsPerUnit)) {
         u->splitInPlace(maxBoidsPerUnit);
+        invalidateGroupMembership();
         leafCache.clear();
         break;
       }
@@ -1186,6 +1193,7 @@ void BoidSimulation::update(float dt) {
         if (a && b && parent && a->canMergeWith(*b)) {
           leafCache.clear();
           a->mergeWith(b);
+          invalidateGroupMembership();
           // 親子リンクを遡らずに葉ノードを除去し、プールに戻す
           auto it =
               std::find(parent->children.begin(), parent->children.end(), b);

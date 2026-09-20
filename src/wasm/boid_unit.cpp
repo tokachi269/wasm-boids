@@ -1243,7 +1243,7 @@ void BoidUnit::updateRecursive(float dt, bool updateInteraction,
     }
   }
   if (updateInteraction) {
-    simulation.rebuildGroupMembership(buf->positions.size());
+    simulation.ensureGroupMembership(buf->positions.size());
   }
   simulation.recordPhaseTiming(
       BoidSimulation::Phase::TreeTraversal,

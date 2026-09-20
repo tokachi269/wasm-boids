@@ -18,13 +18,14 @@ public:
 
   void setRoot(const BoidUnit *root) {
     root_ = root;
-    groupByBoid_.clear();
+    invalidateGroupMembership();
   }
   const BoidUnit *getRoot() const { return root_; }
 
   // SpatialIndex implementation
   void forEachGroup(const GroupVisitor &visitor) const override;
-  void rebuildGroupMembership(std::size_t boidCount) const override;
+  void ensureGroupMembership(std::size_t boidCount) const override;
+  void invalidateGroupMembership() const override;
   bool localGroupForBoid(int boidIndex, SpatialGroup &group) const override;
   void forEachCandidateIntersectingSphere(
       const glm::vec3 &center, float radius,
@@ -104,4 +105,5 @@ private:
 
   const BoidUnit *root_ = nullptr;
   mutable std::vector<const BoidUnit *> groupByBoid_;
+  mutable bool groupMembershipValid_ = false;
 };

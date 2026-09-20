@@ -33,9 +33,17 @@ void BoidTreeSpatialIndex::forEachGroup(const GroupVisitor &visitor) const {
   forEachGroupRecursive(root_, visitor);
 }
 
-void BoidTreeSpatialIndex::rebuildGroupMembership(std::size_t boidCount) const {
+void BoidTreeSpatialIndex::ensureGroupMembership(std::size_t boidCount) const {
+  if (groupMembershipValid_ && groupByBoid_.size() == boidCount) {
+    return;
+  }
   groupByBoid_.assign(boidCount, nullptr);
   rebuildGroupMembershipRecursive(root_);
+  groupMembershipValid_ = true;
+}
+
+void BoidTreeSpatialIndex::invalidateGroupMembership() const {
+  groupMembershipValid_ = false;
 }
 
 void BoidTreeSpatialIndex::rebuildGroupMembershipRecursive(
@@ -59,7 +67,7 @@ void BoidTreeSpatialIndex::rebuildGroupMembershipRecursive(
 
 bool BoidTreeSpatialIndex::localGroupForBoid(int boidIndex,
                                              SpatialGroup &group) const {
-  if (boidIndex < 0 ||
+  if (!groupMembershipValid_ || boidIndex < 0 ||
       static_cast<std::size_t>(boidIndex) >= groupByBoid_.size()) {
     return false;
   }
