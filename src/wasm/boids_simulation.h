@@ -325,6 +325,8 @@ private:
     // tree 等の保守処理頻度は負荷に追従できるよう render frame 基準のままにする。
     float simulationTimeSeconds_ = 0.0f;
     float clusterUpdateDtAccumulator_ = 0.0f;
+    float interactionDtAccumulator_ = 0.0f;
+    int interactionFrameCounter_ = 0;
     // render フレームと独立した固定ステップ更新用の dt 蓄積。
     float simulationDtAccumulator_ = 0.0f;
 

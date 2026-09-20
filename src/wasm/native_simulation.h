@@ -27,6 +27,7 @@ private:
     std::size_t benchWarmupFrames = 1000;
     int benchBoids = -1;
     std::size_t benchTasks = 1;
+    int interactionStepFrames = 1;
     int reorderCadence = 30;
     int maxNeighborsOverride = -1;
     bool validateReorder = false;

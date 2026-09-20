@@ -12,14 +12,7 @@ struct SimulationTuningParams {
   float schoolPullStartDistance = 2.5f;
   float schoolPullFullDistance = 3.0f;
   float schoolPullDenseScale = 0.16f;
-
-  // 相互作用系の更新率。1 は毎step、0.5 は2stepに1回相当。
-  // kinematics、近距離反発、separation、逃避は常に毎step更新する。
-  float neighborRefreshRate = 1.0f;
-  float alignmentUpdateRate = 1.0f;
-  float cohesionUpdateRate = 1.0f;
-  float schoolPullUpdateRate = 1.0f;
-  float predatorTargetUpdateRate = 1.0f;
+  int interactionStepFrames = 1;
 
   // 散らばり過ぎ防止の、固定ワールド原点を基準にした「見えないソフト境界」。
   // - softBoundaryStart を超えたあたりから原点寄せが始まり、softBoundaryRadius に向けて強くなる。

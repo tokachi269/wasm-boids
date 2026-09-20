@@ -114,29 +114,9 @@
                   <input class="value-input" type="number" min="0" max="1" step="0.01" v-model.number="systemSettings.schoolPullDenseScale" :title="tuningHelp.schoolPullDenseScale" />
                 </div>
                 <div class="setting-row">
-                  <label :title="tuningHelp.neighborRefreshRate">近傍探索更新率<br />(Neighbor Search):</label>
-                  <input type="range" min="0" max="1" step="0.05" v-model.number="systemSettings.neighborRefreshRate" :title="tuningHelp.neighborRefreshRate" />
-                  <input class="value-input" type="number" min="0" max="1" step="0.01" v-model.number="systemSettings.neighborRefreshRate" :title="tuningHelp.neighborRefreshRate" />
-                </div>
-                <div class="setting-row">
-                  <label :title="tuningHelp.alignmentUpdateRate">整列更新率<br />(Alignment):</label>
-                  <input type="range" min="0" max="1" step="0.05" v-model.number="systemSettings.alignmentUpdateRate" :title="tuningHelp.alignmentUpdateRate" />
-                  <input class="value-input" type="number" min="0" max="1" step="0.01" v-model.number="systemSettings.alignmentUpdateRate" :title="tuningHelp.alignmentUpdateRate" />
-                </div>
-                <div class="setting-row">
-                  <label :title="tuningHelp.cohesionUpdateRate">凝集更新率<br />(Cohesion):</label>
-                  <input type="range" min="0" max="1" step="0.05" v-model.number="systemSettings.cohesionUpdateRate" :title="tuningHelp.cohesionUpdateRate" />
-                  <input class="value-input" type="number" min="0" max="1" step="0.01" v-model.number="systemSettings.cohesionUpdateRate" :title="tuningHelp.cohesionUpdateRate" />
-                </div>
-                <div class="setting-row">
-                  <label :title="tuningHelp.schoolPullUpdateRate">大クラスタ引力更新率<br />(School Pull):</label>
-                  <input type="range" min="0" max="1" step="0.05" v-model.number="systemSettings.schoolPullUpdateRate" :title="tuningHelp.schoolPullUpdateRate" />
-                  <input class="value-input" type="number" min="0" max="1" step="0.01" v-model.number="systemSettings.schoolPullUpdateRate" :title="tuningHelp.schoolPullUpdateRate" />
-                </div>
-                <div class="setting-row">
-                  <label :title="tuningHelp.predatorTargetUpdateRate">捕食者標的更新率<br />(Predator Target):</label>
-                  <input type="range" min="0" max="1" step="0.05" v-model.number="systemSettings.predatorTargetUpdateRate" :title="tuningHelp.predatorTargetUpdateRate" />
-                  <input class="value-input" type="number" min="0" max="1" step="0.01" v-model.number="systemSettings.predatorTargetUpdateRate" :title="tuningHelp.predatorTargetUpdateRate" />
+                  <label :title="tuningHelp.interactionStepFrames">相互作用更新間隔<br />(Frames / Update):</label>
+                  <input type="range" min="1" max="4" step="1" v-model.number="systemSettings.interactionStepFrames" :title="tuningHelp.interactionStepFrames" />
+                  <input class="value-input" type="number" min="1" max="4" step="1" v-model.number="systemSettings.interactionStepFrames" :title="tuningHelp.interactionStepFrames" />
                 </div>
               </div>
             </details>
@@ -549,11 +529,7 @@ const DEFAULT_TUNING_SETTINGS = {
   schoolPullStartDistance: 0.0,
   schoolPullFullDistance: 3.0,
   schoolPullDenseScale: 0.1,
-  neighborRefreshRate: 1.0,
-  alignmentUpdateRate: 1.0,
-  cohesionUpdateRate: 1.0,
-  schoolPullUpdateRate: 1.0,
-  predatorTargetUpdateRate: 1.0,
+  interactionStepFrames: 1,
 };
   
 // 調整スライダーの説明（ユーザ目線）。ホバー時に title として表示する。
@@ -566,11 +542,7 @@ const tuningHelp = {
   schoolPullStartDistance: '大クラスタ中心からこの距離までは引力を掛けません。',
   schoolPullFullDistance: 'この距離で設定した大クラスタ引力が最大になります。',
   schoolPullDenseScale: '近傍が十分いる個体へ残す引力の倍率です。0なら密集時は無効、1なら密度を無視します。',
-  neighborRefreshRate: '新しい近傍を探す更新率です。1は毎step、0.5は約2stepに1回、0は初回だけです。',
-  alignmentUpdateRate: '整列力を再計算する更新率です。計算しないstepでは直前の力を保持します。',
-  cohesionUpdateRate: '凝集力を再計算する更新率です。計算しないstepでは直前の力を保持します。',
-  schoolPullUpdateRate: '大クラスタ引力を再計算する更新率です。計算しないstepでは直前の力を保持します。',
-  predatorTargetUpdateRate: '捕食者が標的を探し直す更新率です。追跡中の移動と捕獲判定は毎step行います。',
+  interactionStepFrames: '近傍相互作用を何stepに1回再計算するかを指定します。位置・速度・旋回は毎step更新し、間のstepでは直前の力を保持します。',
 };
 
 // デバッグ表示/負荷設定の説明（ユーザ目線）。

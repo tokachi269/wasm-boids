@@ -48,16 +48,8 @@ void setSimulationTuningParams(const SimulationTuningParams &params) {
       gSimulationTuning.schoolPullStartDistance + 1e-3f);
     gSimulationTuning.schoolPullDenseScale =
       std::clamp(gSimulationTuning.schoolPullDenseScale, 0.0f, 1.0f);
-    gSimulationTuning.neighborRefreshRate =
-      std::clamp(gSimulationTuning.neighborRefreshRate, 0.0f, 1.0f);
-    gSimulationTuning.alignmentUpdateRate =
-      std::clamp(gSimulationTuning.alignmentUpdateRate, 0.0f, 1.0f);
-    gSimulationTuning.cohesionUpdateRate =
-      std::clamp(gSimulationTuning.cohesionUpdateRate, 0.0f, 1.0f);
-    gSimulationTuning.schoolPullUpdateRate =
-      std::clamp(gSimulationTuning.schoolPullUpdateRate, 0.0f, 1.0f);
-    gSimulationTuning.predatorTargetUpdateRate =
-      std::clamp(gSimulationTuning.predatorTargetUpdateRate, 0.0f, 1.0f);
+    gSimulationTuning.interactionStepFrames =
+      std::clamp(gSimulationTuning.interactionStepFrames, 1, 4);
 
     // ソフト境界は「無効化しやすさ」と「破綻防止」を優先してクランプ。
     gSimulationTuning.softBoundaryRadius = std::max(gSimulationTuning.softBoundaryRadius, 0.0f);
@@ -115,11 +107,7 @@ value_object<SimulationTuningParams>("SimulationTuningParams")
     .field("schoolPullStartDistance", &SimulationTuningParams::schoolPullStartDistance)
     .field("schoolPullFullDistance", &SimulationTuningParams::schoolPullFullDistance)
     .field("schoolPullDenseScale", &SimulationTuningParams::schoolPullDenseScale)
-    .field("neighborRefreshRate", &SimulationTuningParams::neighborRefreshRate)
-    .field("alignmentUpdateRate", &SimulationTuningParams::alignmentUpdateRate)
-    .field("cohesionUpdateRate", &SimulationTuningParams::cohesionUpdateRate)
-    .field("schoolPullUpdateRate", &SimulationTuningParams::schoolPullUpdateRate)
-    .field("predatorTargetUpdateRate", &SimulationTuningParams::predatorTargetUpdateRate)
+    .field("interactionStepFrames", &SimulationTuningParams::interactionStepFrames)
     .field("softBoundaryRadius", &SimulationTuningParams::softBoundaryRadius)
     .field("softBoundaryStart", &SimulationTuningParams::softBoundaryStart)
     .field("softBoundarySteer", &SimulationTuningParams::softBoundarySteer);

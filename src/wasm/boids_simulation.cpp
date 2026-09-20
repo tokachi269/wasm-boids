@@ -1037,6 +1037,16 @@ void BoidSimulation::update(float dt) {
   }
   const float safeDt = glm::clamp(dt, 0.0f, 0.1f);
   simulationTimeSeconds_ += safeDt;
+  const float simulationStepDt = safeDt * 5.0f;
+  const int interactionStepFrames =
+      std::clamp(gSimulationTuning.interactionStepFrames, 1, 4);
+  bool shouldUpdateInteraction = false;
+  if (safeDt > 0.0f) {
+    interactionDtAccumulator_ += simulationStepDt;
+    shouldUpdateInteraction =
+        (interactionFrameCounter_ % interactionStepFrames) == 0;
+    ++interactionFrameCounter_;
+  }
 
   if (behaviorInspectorIndex_ >= 0) {
     behaviorInspectorBuffer_.fill(0.0f);
@@ -1059,7 +1069,11 @@ void BoidSimulation::update(float dt) {
   if (root) {
     try {
       setRenderPointersToReadBuffers();
-      root->updateRecursive(safeDt * 5.0f);
+      root->updateRecursive(simulationStepDt, shouldUpdateInteraction,
+                            interactionDtAccumulator_);
+      if (shouldUpdateInteraction) {
+        interactionDtAccumulator_ = 0.0f;
+      }
       if (safeDt > 0.0f) {
         setRenderPointersToWriteBuffers();
         buf.swapReadWrite();
@@ -1337,6 +1351,8 @@ void BoidSimulation::initializeBoids(
   frameCount = 0;
   simulationTimeSeconds_ = 0.0f;
   clusterUpdateDtAccumulator_ = 0.0f;
+  interactionDtAccumulator_ = 0.0f;
+  interactionFrameCounter_ = 0;
   simulationDtAccumulator_ = 0.0f;
   auto &globalSpeciesParams = speciesParams_;
   // globalSpeciesParams を更新
@@ -1358,9 +1374,6 @@ void BoidSimulation::initializeBoids(
   buf.reserveAll(totalCount);
   buf.resizeAll(totalCount);
   std::fill(buf.accelerations.begin(), buf.accelerations.end(), glm::vec3(0.0f));
-  std::fill(buf.cachedAlignmentForces.begin(), buf.cachedAlignmentForces.end(), glm::vec3(0.0f));
-  std::fill(buf.cachedCohesionForces.begin(), buf.cachedCohesionForces.end(), glm::vec3(0.0f));
-  std::fill(buf.cachedSchoolPullForces.begin(), buf.cachedSchoolPullForces.end(), glm::vec3(0.0f));
   std::fill(buf.predatorInfluences.begin(), buf.predatorInfluences.end(), glm::vec3(0.0f));
   std::fill(buf.stresses.begin(), buf.stresses.end(), 0.0f);
   std::fill(buf.predatorTargetIndices.begin(), buf.predatorTargetIndices.end(), -1);
@@ -1444,9 +1457,6 @@ void BoidSimulation::setFlockSize(int newSize, float posRange, float velRange) {
     buf.velocities.resize(newSize);
     buf.velocitiesWrite.resize(newSize);
     buf.accelerations.resize(newSize);
-    buf.cachedAlignmentForces.resize(newSize);
-    buf.cachedCohesionForces.resize(newSize);
-    buf.cachedSchoolPullForces.resize(newSize);
     buf.ids.resize(newSize);
     buf.stresses.resize(newSize);
     buf.speciesIds.resize(newSize);
@@ -1476,9 +1486,6 @@ void BoidSimulation::setFlockSize(int newSize, float posRange, float velRange) {
       buf.velocities.push_back(vel);
       buf.velocitiesWrite.push_back(vel);
       buf.accelerations.push_back(glm::vec3(0.0f));
-      buf.cachedAlignmentForces.push_back(glm::vec3(0.0f));
-      buf.cachedCohesionForces.push_back(glm::vec3(0.0f));
-      buf.cachedSchoolPullForces.push_back(glm::vec3(0.0f));
       buf.ids.push_back(i);
       buf.stresses.push_back(0.0f);
       buf.speciesIds.push_back(0);
@@ -1651,9 +1658,6 @@ bool BoidSimulation::validateReorderedState(const SoABuffers &before) const {
   if (!samePermuted(before.positions, buf.positions) ||
       !samePermuted(before.velocities, buf.velocities) ||
       !samePermuted(before.accelerations, buf.accelerations) ||
-      !samePermuted(before.cachedAlignmentForces, buf.cachedAlignmentForces) ||
-      !samePermuted(before.cachedCohesionForces, buf.cachedCohesionForces) ||
-      !samePermuted(before.cachedSchoolPullForces, buf.cachedSchoolPullForces) ||
       !samePermuted(before.orientations, buf.orientations) ||
       !samePermuted(before.predatorInfluences, buf.predatorInfluences) ||
       !samePermuted(before.ids, buf.ids) ||
@@ -1800,9 +1804,6 @@ bool BoidSimulation::reorderStorageByLeafOrder() {
   buf.swapReadWrite();
 
   permute(buf.accelerations, reorderScratch_.accelerations);
-  permute(buf.cachedAlignmentForces, reorderScratch_.cachedAlignmentForces);
-  permute(buf.cachedCohesionForces, reorderScratch_.cachedCohesionForces);
-  permute(buf.cachedSchoolPullForces, reorderScratch_.cachedSchoolPullForces);
   permute(buf.predatorInfluences, reorderScratch_.predatorInfluences);
   permute(buf.ids, reorderScratch_.ids);
   permute(buf.stresses, reorderScratch_.stresses);
