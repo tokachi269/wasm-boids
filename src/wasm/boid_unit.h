@@ -16,6 +16,7 @@
 #endif
 
 struct SoABuffers;
+struct SpatialGroup;
 class BoidSimulation;
 
 class BoidUnit
@@ -51,7 +52,8 @@ public:
     int getMaxID() const;
     bool isBoidUnit() const;
     void computeBoundingSphere();
-    void computeBoidInteraction(float elapsedDt, float steeringDt,
+    void computeBoidInteraction(int gIdx, const SpatialGroup &group,
+                                float elapsedDt, float steeringDt,
                                 float stressRiseBlend
 #ifdef BOIDS_INTERACTION_DIAGNOSTICS
                                 , InteractionDiagnostics *diagnostics

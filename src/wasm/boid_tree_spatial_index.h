@@ -16,11 +16,16 @@ public:
   BoidTreeSpatialIndex() = default;
   explicit BoidTreeSpatialIndex(const BoidUnit *root) : root_(root) {}
 
-  void setRoot(const BoidUnit *root) { root_ = root; }
+  void setRoot(const BoidUnit *root) {
+    root_ = root;
+    groupByBoid_.clear();
+  }
   const BoidUnit *getRoot() const { return root_; }
 
   // SpatialIndex implementation
   void forEachGroup(const GroupVisitor &visitor) const override;
+  void rebuildGroupMembership(std::size_t boidCount) const override;
+  bool localGroupForBoid(int boidIndex, SpatialGroup &group) const override;
   void forEachCandidateIntersectingSphere(
       const glm::vec3 &center, float radius,
       const CandidateVisitor &visitor) const override;
@@ -92,9 +97,11 @@ public:
 private:
   void forEachGroupRecursive(const BoidUnit *node,
                              const GroupVisitor &visitor) const;
+  void rebuildGroupMembershipRecursive(const BoidUnit *node) const;
   void forEachCandidateIntersectingSphereRecursive(
       const BoidUnit *node, const glm::vec3 &center, float radius,
       const CandidateVisitor &visitor) const;
 
   const BoidUnit *root_ = nullptr;
+  mutable std::vector<const BoidUnit *> groupByBoid_;
 };

@@ -797,6 +797,19 @@ void BoidSimulation::forEachGroup(const GroupVisitor &visitor) const {
   activeSpatialIndex_->forEachGroup(visitor);
 }
 
+void BoidSimulation::rebuildGroupMembership(std::size_t boidCount) const {
+  if (!activeSpatialIndex_) {
+    return;
+  }
+  activeSpatialIndex_->rebuildGroupMembership(boidCount);
+}
+
+bool BoidSimulation::localGroupForBoid(int boidIndex,
+                                       SpatialGroup &group) const {
+  return activeSpatialIndex_ &&
+         activeSpatialIndex_->localGroupForBoid(boidIndex, group);
+}
+
 void BoidSimulation::forEachCandidateIntersectingSphere(
     const glm::vec3 &center, float radius,
     const CandidateVisitor &visitor) const {

@@ -23,6 +23,9 @@ public:
 
   virtual void forEachGroup(const GroupVisitor &visitor) const = 0;
 
+  virtual void rebuildGroupMembership(std::size_t boidCount) const = 0;
+  virtual bool localGroupForBoid(int boidIndex, SpatialGroup &group) const = 0;
+
   virtual void forEachCandidateIntersectingSphere(
       const glm::vec3 &center, float radius,
       const CandidateVisitor &visitor) const = 0;

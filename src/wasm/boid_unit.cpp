@@ -1080,7 +1080,7 @@ void BoidUnit::updateRecursive(float dt, bool updateInteraction,
   // ----------------------------------------------
   // 並列化の基本方針
   // ----------------------------------------------
-  // leaf をチャンクにまとめ、少数タスクで処理する。
+  // 対象rangeを小さなチャンクに分け、少数タスクで処理する。
   // - タスク/ future の発行が細かすぎると、待機・同期のオーバーヘッドが支配的になりやすい。
   auto &pool = getThreadPool();
   static std::vector<std::future<void>> asyncTasks;
@@ -1114,8 +1114,8 @@ void BoidUnit::updateRecursive(float dt, bool updateInteraction,
     }
     const std::size_t taskCount = std::min<std::size_t>(maxTasks, total);
     // worker 数と仕事の分割数を分離する。少数の大rangeを固定で担当すると、
-    // 重いleafが同じrangeへ偏ったframeで他workerが先に待機してしまう。
-    // 各consumerが共有counterから小rangeを順次取得し、leaf単位の挙動は変えずに
+    // 重い仕事が同じrangeへ偏ったframeで他workerが先に待機してしまう。
+    // 各consumerが共有counterから小rangeを順次取得し、処理内容は変えずに
     // 最後まで仕事を融通できるようにする。
     constexpr std::size_t kChunksPerTask = 12;
     const std::size_t targetChunks = taskCount * kChunksPerTask;
@@ -1242,6 +1242,9 @@ void BoidUnit::updateRecursive(float dt, bool updateInteraction,
       (*it)->computeBoundingSphere();
     }
   }
+  if (updateInteraction) {
+    simulation.rebuildGroupMembership(buf->positions.size());
+  }
   simulation.recordPhaseTiming(
       BoidSimulation::Phase::TreeTraversal,
       std::chrono::duration<double, std::milli>(PhaseClock::now() -
@@ -1252,23 +1255,24 @@ void BoidUnit::updateRecursive(float dt, bool updateInteraction,
   // 間のstepでは直前の acceleration を保持し、kinematicsだけを通常dtで進める。
   const auto interactionStart = PhaseClock::now();
   if (updateInteraction) {
-    runParallelRanges(leafUnits.size(), 0, [&](std::size_t begin, std::size_t end) {
+    runParallelRanges(buf->positions.size(), 0,
+                      [&](std::size_t begin, std::size_t end) {
 #ifdef BOIDS_INTERACTION_DIAGNOSTICS
       InteractionDiagnostics diagnostics;
 #endif
       for (std::size_t i = begin; i < end; ++i) {
-        BoidUnit *unit = leafUnits[i];
-        if (unit) {
-          for (int gIdx : unit->indices) {
-            unit->buf->accelerations[gIdx] = glm::vec3(0.0f);
-          }
-          unit->computeBoidInteraction(interactionElapsedDt, dt,
-                                       interactionStressRiseBlend
-#ifdef BOIDS_INTERACTION_DIAGNOSTICS
-                                       , &diagnostics
-#endif
-          );
+        SpatialGroup group{};
+        const int gIdx = static_cast<int>(i);
+        if (!simulation.localGroupForBoid(gIdx, group)) {
+          continue;
         }
+        buf->accelerations[gIdx] = glm::vec3(0.0f);
+        computeBoidInteraction(gIdx, group, interactionElapsedDt, dt,
+                               interactionStressRiseBlend
+#ifdef BOIDS_INTERACTION_DIAGNOSTICS
+                               , &diagnostics
+#endif
+        );
       }
 #ifdef BOIDS_INTERACTION_DIAGNOSTICS
       simulation.mergeInteractionDiagnostics(diagnostics);
@@ -1334,7 +1338,8 @@ inline float BoidUnit::easeOut(float t) {
  * - Fast-start吸引制御による群れの縁での強制凝集
  * - 捕食者の追跡ターゲット選択と更新
  */
-void BoidUnit::computeBoidInteraction(float elapsedDt, float steeringDt,
+void BoidUnit::computeBoidInteraction(int gIdx, const SpatialGroup &group,
+                                      float elapsedDt, float steeringDt,
                                       float stressRiseBlend
 #ifdef BOIDS_INTERACTION_DIAGNOSTICS
                                       , InteractionDiagnostics *diagnostics
@@ -1349,7 +1354,6 @@ void BoidUnit::computeBoidInteraction(float elapsedDt, float steeringDt,
   const int globalFrame = simulation.getFrameCount();
   const uint32_t worldSeed = simulation.getRandomSeed();
 
-  int gIdx = 0;
   glm::vec3 pos;
   glm::vec3 vel;
   int sid = -1;
@@ -1392,11 +1396,14 @@ void BoidUnit::computeBoidInteraction(float elapsedDt, float steeringDt,
   // 既存の activeNeighbors/cohesionMemories は leaf 内 index 前提なので、
   // 外部近傍はフレーム内の加速度計算にのみ利用し、メモリ構造は崩さない。
   static thread_local std::vector<int> externalNeighbors;
-  if (candidates.capacity() < indices.size()) {
-    candidates.reserve(indices.size());
+  if (candidates.capacity() < group.count) {
+    candidates.reserve(group.count);
   }
 
-  const int leafSpeciesId = speciesId;
+  const int leafSpeciesId = group.speciesId;
+  const int localGroupId = group.id;
+  const int *localIndices = group.indices;
+  const std::size_t localCount = group.count;
   // -----------------------------------------------
   // 種族ごとに一定な値は先に計算して使い回す
   // -----------------------------------------------
@@ -1429,16 +1436,11 @@ void BoidUnit::computeBoidInteraction(float elapsedDt, float steeringDt,
       glm::max(leafParams.cohesion, 0.0f);
   const float leafTau = leafParams.tau;
 
-  // -----------------------------------------------
-  // 各 Boid（leafノード内）ごとの反復
-  // -----------------------------------------------
-  for (size_t index = 0; index < indices.size(); ++index) {
-    // -------------------------------------------------------
-    // 1. 初期化フェーズ
-    //    - 対象 Boid のグローバルインデックスと位置・速度を取得
-    // -------------------------------------------------------
-    sid = speciesId;
-    gIdx = indices[index];
+  // -------------------------------------------------------
+  // 1. 初期化フェーズ
+  //    - 対象 Boid のグローバルインデックスと位置・速度を取得
+  // -------------------------------------------------------
+    sid = leafSpeciesId;
     const int stableId = buf->ids[gIdx];
     pos = buf->positions[gIdx];
     vel = buf->velocities[gIdx];
@@ -1627,7 +1629,7 @@ void BoidUnit::computeBoidInteraction(float elapsedDt, float steeringDt,
             spatial_query::forEachBoidInSphereLimited(
                 simulation, pos, targetSearchRadius, kPredatorCandidateLimit,
                 [&](int candidateIdx, int groupId) {
-                  if (groupId == id || candidateIdx == gIdx ||
+                  if (groupId == localGroupId || candidateIdx == gIdx ||
                       buf->speciesIds[candidateIdx] != targetClusterSpecies) {
                     return;
                   }
@@ -1716,7 +1718,7 @@ void BoidUnit::computeBoidInteraction(float elapsedDt, float steeringDt,
         gIdx >= static_cast<int>(buf->neighborCounts.size()) ||
         static_cast<std::size_t>(gIdx + 1) >= buf->neighborOffsets.size()) {
       // 境界を超えた場合はスキップ
-      continue;
+      return;
     }
 
     const std::size_t neighborBegin = buf->neighborOffsets[gIdx];
@@ -1799,22 +1801,22 @@ void BoidUnit::computeBoidInteraction(float elapsedDt, float steeringDt,
         diagnostics->leafCandidateSearchStartingActiveSum +=
             static_cast<uint64_t>(activeCount);
         diagnostics->leafCandidateSearchLeafMembersSum +=
-            static_cast<uint64_t>(indices.size());
+            static_cast<uint64_t>(localCount);
         ++diagnostics->candidateSearchStartingActiveHistogram[
             static_cast<std::size_t>(glm::clamp(activeCount, 0, 32))];
         ++diagnostics->candidateSearchLeafSizeHistogram[
-            std::min<std::size_t>(indices.size(), 64)];
+            std::min<std::size_t>(localCount, 64)];
       }
 #endif
 
-      for (size_t i = 0; i < indices.size(); ++i) {
-        if (i == index)
+      for (size_t i = 0; i < localCount; ++i) {
+        const int gNeighbor = localIndices[i];
+        if (gNeighbor == gIdx)
           continue;
 
 #ifdef BOIDS_INTERACTION_DIAGNOSTICS
         BOIDS_DIAG_INCREMENT(leafCandidatesChecked);
 #endif
-        int gNeighbor = indices[i];
         bool alreadyCached = false;
         for (int entryIndex = 0; entryIndex < activeCount; ++entryIndex) {
           if (neighborEntries[entryIndex].index == gNeighbor) {
@@ -1970,7 +1972,7 @@ void BoidUnit::computeBoidInteraction(float elapsedDt, float steeringDt,
               BOIDS_DIAG_INCREMENT(externalCandidatesVisited);
 #endif
               // leaf 内候補は既存の activeNeighbors で扱うので除外。
-              if (groupId == id) {
+              if (groupId == localGroupId) {
                 return;
               }
               if (candidateIdx == gIdx) {
@@ -2061,7 +2063,7 @@ void BoidUnit::computeBoidInteraction(float elapsedDt, float steeringDt,
         }
       }
 
-      continue;
+      return;
     }
 
     // phi は「近傍がどれだけ充足しているか」を表す指標。
@@ -2307,7 +2309,7 @@ void BoidUnit::computeBoidInteraction(float elapsedDt, float steeringDt,
       if (hasSchoolCenterDir) {
         if (globalSpeciesParams[sid].isPredator) {
           // 捕食者は大クラスタ引力に左右されない。修正ループを防ぐため即スキップ。
-          continue;
+          return;
         }
         if (schoolDistanceSq > EPS) {
           const float clusterDist = schoolDistance;
@@ -2430,7 +2432,6 @@ void BoidUnit::computeBoidInteraction(float elapsedDt, float steeringDt,
       buf->accelerations[gIdx] +=
           totalSeparation + combinedAlignment + combinedCohesion;
     }
-  }
 
   // 大型クラスタ計算後に thread_local バッファの肥大化を抑制
   if (candidates.capacity() > kCandidateCacheLimit) {
