@@ -357,15 +357,13 @@ static inline glm::vec3 buildFallbackTurnAxis(const glm::vec3 &oldDir) {
   return axis * (1.0f / glm::sqrt(axisLen2));
 }
 
-static void updateLeafKinematics(BoidUnit *unit, float dt,
+static void updateBoidKinematics(BoidUnit *unit, int gIdx, float dt,
                                  const TimeStepResponse &response) {
   BoidSimulation &simulation = simulationFor(unit);
   const auto &globalSpeciesParams = simulation.getSpeciesParamsList();
   const float framePhaseBase =
       simulation.getSimulationTimeSeconds() * 60.0f;
-  for (size_t i = 0; i < unit->indices.size(); ++i) {
-    int gIdx = unit->indices[i];
-    int sid = unit->buf->speciesIds[gIdx];
+    const int sid = unit->buf->speciesIds[gIdx];
     glm::vec3 velocity = unit->buf->velocities[gIdx];
     glm::vec3 acceleration = unit->buf->accelerations[gIdx];
     glm::vec3 position = unit->buf->positions[gIdx];
@@ -717,7 +715,6 @@ static void updateLeafKinematics(BoidUnit *unit, float dt,
         unit->buf->stresses[gIdx] = 0.0f;
       }
     }
-  }
 }
 
 /**
@@ -1309,12 +1306,10 @@ void BoidUnit::updateRecursive(float dt, bool updateInteraction,
   // 第二段階: 位置と速度を更新
   // ----------------------------------------------
   const auto kinematicsStart = PhaseClock::now();
-  runParallelRanges(leafUnits.size(), 1, [&](std::size_t begin, std::size_t end) {
+  runParallelRanges(buf->positions.size(), 1,
+                    [&](std::size_t begin, std::size_t end) {
     for (std::size_t i = begin; i < end; ++i) {
-      BoidUnit *unit = leafUnits[i];
-      if (unit) {
-        updateLeafKinematics(unit, dt, timeStepResponse);
-      }
+      updateBoidKinematics(this, static_cast<int>(i), dt, timeStepResponse);
     }
   });
   simulation.recordPhaseTiming(
