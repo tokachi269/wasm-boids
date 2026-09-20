@@ -1098,10 +1098,10 @@ void BoidUnit::updateRecursive(float dt, bool updateInteraction,
 
 #ifdef __EMSCRIPTEN__
   // main browser thread で Atomics.wait/futex wait すると待ち時間が支配的になりやすい。
-  // ここではメインスレッド上での過剰並列化だけを抑え、
-  // 「完全逐次化」による性能低下を避ける。
+  // 8 logical thread環境では8 taskまで使うと描画と競合したため、実測で最良だった
+  // 6 taskを上限にしてブラウザ側の余力を残す。
   if (emscripten_is_main_browser_thread()) {
-    maxTasks = std::min<std::size_t>(maxTasks, 4);
+    maxTasks = std::min<std::size_t>(maxTasks, 6);
   }
 #endif
 
