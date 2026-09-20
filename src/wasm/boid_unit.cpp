@@ -8,6 +8,7 @@
 #include "spatial_query.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <cmath>
@@ -1115,36 +1116,44 @@ void BoidUnit::updateRecursive(float dt, bool updateInteraction,
       return;
     }
     const std::size_t taskCount = std::min<std::size_t>(maxTasks, total);
-    const std::size_t chunk = (total + taskCount - 1) / taskCount;
+    // worker 数と仕事の分割数を分離する。少数の大rangeを固定で担当すると、
+    // 重いleafが同じrangeへ偏ったframeで他workerが先に待機してしまう。
+    // 各consumerが共有counterから小rangeを順次取得し、leaf単位の挙動は変えずに
+    // 最後まで仕事を融通できるようにする。
+    constexpr std::size_t kChunksPerTask = 12;
+    const std::size_t targetChunks = taskCount * kChunksPerTask;
+    const std::size_t chunk =
+        taskCount == 1 ? total : (total + targetChunks - 1) / targetChunks;
+    std::atomic<std::size_t> next{0};
     std::array<double, 8> taskMilliseconds{};
-    const bool measureTasks = simulation.isParallelTimingEnabled();
+    const bool measureTasks = simulation.isParallelTimingEnabled() &&
+                              parallelPhase >= 0;
 
-    const auto runTask = [&](std::size_t taskIndex, std::size_t begin,
-                             std::size_t end) {
-      if (!measureTasks) {
-        fnCopy(begin, end);
-        return;
+    const auto runTask = [&](std::size_t taskIndex) {
+      const auto start =
+          measureTasks ? PhaseClock::now() : PhaseClock::time_point{};
+      for (;;) {
+        const std::size_t begin =
+            next.fetch_add(chunk, std::memory_order_relaxed);
+        if (begin >= total) {
+          break;
+        }
+        fnCopy(begin, std::min(total, begin + chunk));
       }
-      const auto start = PhaseClock::now();
-      fnCopy(begin, end);
-      taskMilliseconds[taskIndex] =
-          std::chrono::duration<double, std::milli>(PhaseClock::now() - start)
-              .count();
+      if (measureTasks) {
+        taskMilliseconds[taskIndex] =
+            std::chrono::duration<double, std::milli>(PhaseClock::now() - start)
+                .count();
+      }
     };
 
     asyncTasks.clear();
-    // 1チャンク分は現在スレッドで実行し、残りだけ enqueue してオーバーヘッドを抑える。
+    // 1 consumer は現在スレッドで実行し、残りだけ enqueue する。
     for (std::size_t t = 1; t < taskCount; ++t) {
-      const std::size_t begin = t * chunk;
-      if (begin >= total) {
-        break;
-      }
-      const std::size_t end = std::min(total, begin + chunk);
-      asyncTasks.emplace_back(
-          pool.enqueue([&, t, begin, end] { runTask(t, begin, end); }));
+      asyncTasks.emplace_back(pool.enqueue([&, t] { runTask(t); }));
     }
 
-    runTask(0, 0, std::min(total, chunk));
+    runTask(0);
 
     for (auto &f : asyncTasks) {
       f.get();
@@ -1162,14 +1171,19 @@ void BoidUnit::updateRecursive(float dt, bool updateInteraction,
   // 毎フレームの確保/解放を避けるために static で再利用する。
   // updateRecursive 自体がスレッドセーフでない（callCount が static）のため、ここも同様に割り切る。
   static std::vector<BoidUnit *> leafUnits;
+  static std::vector<BoidUnit *> internalUnits;
   static std::vector<BoidUnit *> predatorLeafUnits;
   leafUnits.clear();
+  internalUnits.clear();
   predatorLeafUnits.clear();
   if (leafUnits.capacity() < 512) {
     leafUnits.reserve(512);
   }
   if (predatorLeafUnits.capacity() < 8) {
     predatorLeafUnits.reserve(8);
+  }
+  if (internalUnits.capacity() < 512) {
+    internalUnits.reserve(512);
   }
 
   const auto treeTraversalStart = PhaseClock::now();
@@ -1193,8 +1207,7 @@ void BoidUnit::updateRecursive(float dt, bool updateInteraction,
       continue;
     }
 
-    // 内部ノードは子を走査し、バウンディング球だけ更新しておく。
-    current->computeBoundingSphere();
+    internalUnits.push_back(current);
 
     const size_t childrenSize = current->children.size();
     BoidUnit **childrenData = current->children.data();
@@ -1208,6 +1221,29 @@ void BoidUnit::updateRecursive(float dt, bool updateInteraction,
     // ここで applyInterUnitInfluence() も併用すると、凝集/整列/分離が
     // 二重に加算され「中心へ引っ張られる」「処理が二重に見える」原因になり得るため、
     // 非捕食者ペア処理は行わない。
+  }
+
+  // interaction中のSpatialIndexは読み取り専用にする。
+  // 以前は各workerがleaf境界を書き換えながら別workerがtree queryで読んでおり、
+  // 実行順によって検索結果が変わり得た。leaf境界を先に確定し、子から親の順で
+  // 内部境界を再計算してからinteractionへ進む。
+  const auto updateLeafBounds = [&](std::size_t begin, std::size_t end) {
+    for (std::size_t i = begin; i < end; ++i) {
+      if (leafUnits[i]) {
+        leafUnits[i]->computeBoundingSphere();
+      }
+    }
+  };
+  if (simulation.isUnitSimpleDensityRequested()) {
+    // debug density bufferは必要に応じてresizeされるため、この経路だけ逐次更新する。
+    updateLeafBounds(0, leafUnits.size());
+  } else {
+    runParallelRanges(leafUnits.size(), -1, updateLeafBounds);
+  }
+  for (auto it = internalUnits.rbegin(); it != internalUnits.rend(); ++it) {
+    if (*it) {
+      (*it)->computeBoundingSphere();
+    }
   }
   simulation.recordPhaseTiming(
       BoidSimulation::Phase::TreeTraversal,
@@ -1315,9 +1351,6 @@ void BoidUnit::computeBoidInteraction(float elapsedDt, float steeringDt,
 #ifdef BOIDS_INTERACTION_DIAGNOSTICS
 #define BOIDS_DIAG_INCREMENT(field) do { if (diagnostics) { ++diagnostics->field; } } while (false)
 #endif
-  // 空間インデックス向けの境界情報を毎フレーム更新
-  computeBoundingSphere();
-
   const int globalFrame = simulation.getFrameCount();
   const uint32_t worldSeed = simulation.getRandomSeed();
 
