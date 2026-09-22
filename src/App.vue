@@ -454,7 +454,7 @@ const useLowSpecPreset =
 const MAX_RENDER_PIXEL_RATIO = useLowSpecPreset ? 1.0 : 1.5;
 // 画面ガワのデフォルト（画像の値）
 // NOTE: 個体数は重い環境でも動かしやすい値を優先する。
-const defaultBoidCount = useLowSpecPreset ? 10000 : 10000;
+const defaultBoidCount = useLowSpecPreset ? 10000 : 20000;
 
 function isConservativeRendererMode() {
   return webglContextLost || webglRecoveryAttempt > 0;
@@ -1467,7 +1467,7 @@ function initThreeJS() {
   applyRendererPixelRatio();
   renderer.setSize(width, height);
   renderer.shadowMap.enabled = debugControls.enableShadows;
-  renderer.shadowMap.type = THREE.PCFShadowMap; // 影を柔らかく
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap; // 影を柔らかく
 
   glContext = renderer.getContext();
 
@@ -1526,18 +1526,19 @@ function initThreeJS() {
   dirLight.castShadow = true;
 
   // 影カメラの範囲を広げる
-  dirLight.shadow.camera.left = -100;
-  dirLight.shadow.camera.right = 100;
-  dirLight.shadow.camera.top = 100;
-  dirLight.shadow.camera.bottom = -100;
+  dirLight.shadow.camera.left = -40;
+  dirLight.shadow.camera.right = 40;
+  dirLight.shadow.camera.top = 40;
+  dirLight.shadow.camera.bottom = -40;
   dirLight.shadow.camera.near = 1;
-  dirLight.shadow.camera.far = 1200;
+  dirLight.shadow.camera.far = 2400;
   dirLight.shadow.camera.updateProjectionMatrix();
 
   dirLight.shadow.mapSize.width = 768;
   dirLight.shadow.mapSize.height = 768;
-  dirLight.shadow.bias = -0.01;
+  dirLight.shadow.bias = -0.0001;
   dirLight.shadow.normalBias = 0.01;
+  dirLight.shadow.intensity = 0.5;
 
   scene.add(dirLight);
   applyLightingTuning();
@@ -1852,7 +1853,7 @@ function resetFogTuning() {
 
 const initialLightingTuning = Object.freeze({
   ambientColor: '#466177',
-  ambientIntensity: 1.55,
+  ambientIntensity: 1.85,
   sunColor: OCEAN_COLORS.SUN_LIGHT,
   sunIntensity: 5.5,
   exposure: 1.1,
