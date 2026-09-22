@@ -529,7 +529,7 @@ const DEFAULT_TUNING_SETTINGS = {
   schoolPullStartDistance: 0.0,
   schoolPullFullDistance: 3.0,
   schoolPullDenseScale: 0.1,
-  interactionStepFrames: 1,
+  interactionStepFrames: 2,
 };
   
 // 調整スライダーの説明（ユーザ目線）。ホバー時に title として表示する。

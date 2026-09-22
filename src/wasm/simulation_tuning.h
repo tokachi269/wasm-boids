@@ -12,7 +12,7 @@ struct SimulationTuningParams {
   float schoolPullStartDistance = 2.5f;
   float schoolPullFullDistance = 3.0f;
   float schoolPullDenseScale = 0.16f;
-  int interactionStepFrames = 1;
+  int interactionStepFrames = 2;
 
   // 散らばり過ぎ防止の、固定ワールド原点を基準にした「見えないソフト境界」。
   // - softBoundaryStart を超えたあたりから原点寄せが始まり、softBoundaryRadius に向けて強くなる。

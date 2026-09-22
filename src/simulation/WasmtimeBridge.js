@@ -436,7 +436,7 @@ export class WasmtimeBridge {
       schoolPullStartDistance: Math.max(0, toNumber(params.schoolPullStartDistance, 2.5)),
       schoolPullFullDistance: Math.max(0, toNumber(params.schoolPullFullDistance, 3.0)),
       schoolPullDenseScale: Math.max(0, Math.min(1, toNumber(params.schoolPullDenseScale, 0.16))),
-      interactionStepFrames: Math.max(1, Math.min(4, Math.round(toNumber(params.interactionStepFrames, 1)))),
+      interactionStepFrames: Math.max(1, Math.min(4, Math.round(toNumber(params.interactionStepFrames, 2)))),
 
       // 散らばり過ぎ防止（固定ワールド原点を基準にした見えないソフト境界）。
       softBoundaryRadius: Math.max(0, toNumber(params.softBoundaryRadius, 100.0)),
