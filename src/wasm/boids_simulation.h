@@ -243,9 +243,6 @@ public:
 
     // SpatialIndex implementation
     void forEachGroup(const GroupVisitor &visitor) const override;
-    void ensureGroupMembership(std::size_t boidCount) const override;
-    void invalidateGroupMembership() const override;
-    bool localGroupForBoid(int boidIndex, SpatialGroup &group) const override;
     void forEachCandidateIntersectingSphere(
         const glm::vec3 &center, float radius,
         const CandidateVisitor &visitor) const override;

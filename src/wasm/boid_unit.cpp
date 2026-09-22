@@ -1242,9 +1242,6 @@ void BoidUnit::updateRecursive(float dt, bool updateInteraction,
       (*it)->computeBoundingSphere();
     }
   }
-  if (updateInteraction) {
-    simulation.ensureGroupMembership(buf->positions.size());
-  }
   simulation.recordPhaseTiming(
       BoidSimulation::Phase::TreeTraversal,
       std::chrono::duration<double, std::milli>(PhaseClock::now() -
@@ -1255,19 +1252,24 @@ void BoidUnit::updateRecursive(float dt, bool updateInteraction,
   // 間のstepでは直前の acceleration を保持し、kinematicsだけを通常dtで進める。
   const auto interactionStart = PhaseClock::now();
   if (updateInteraction) {
-    runParallelRanges(buf->positions.size(), 0,
+    static std::vector<SpatialGroup> interactionGroups;
+    interactionGroups.clear();
+    simulation.forEachGroup([&](const SpatialGroup &group) {
+      interactionGroups.push_back(group);
+    });
+    // 旧leaf列挙のLIFO順に合わせ、空間順の処理順序を維持する。
+    std::reverse(interactionGroups.begin(), interactionGroups.end());
+    runParallelRanges(interactionGroups.size(), 0,
                       [&](std::size_t begin, std::size_t end) {
 #ifdef BOIDS_INTERACTION_DIAGNOSTICS
       InteractionDiagnostics diagnostics;
 #endif
       for (std::size_t i = begin; i < end; ++i) {
-        SpatialGroup group{};
-        const int gIdx = static_cast<int>(i);
-        if (!simulation.localGroupForBoid(gIdx, group)) {
-          continue;
+        const SpatialGroup &group = interactionGroups[i];
+        for (std::size_t index = 0; index < group.count; ++index) {
+          buf->accelerations[group.indices[index]] = glm::vec3(0.0f);
         }
-        buf->accelerations[gIdx] = glm::vec3(0.0f);
-        computeBoidInteraction(gIdx, group, interactionElapsedDt, dt,
+        computeBoidInteraction(group, interactionElapsedDt, dt,
                                interactionStressRiseBlend
 #ifdef BOIDS_INTERACTION_DIAGNOSTICS
                                , &diagnostics
@@ -1338,7 +1340,7 @@ inline float BoidUnit::easeOut(float t) {
  * - Fast-start吸引制御による群れの縁での強制凝集
  * - 捕食者の追跡ターゲット選択と更新
  */
-void BoidUnit::computeBoidInteraction(int gIdx, const SpatialGroup &group,
+void BoidUnit::computeBoidInteraction(const SpatialGroup &group,
                                       float elapsedDt, float steeringDt,
                                       float stressRiseBlend
 #ifdef BOIDS_INTERACTION_DIAGNOSTICS
@@ -1354,6 +1356,7 @@ void BoidUnit::computeBoidInteraction(int gIdx, const SpatialGroup &group,
   const int globalFrame = simulation.getFrameCount();
   const uint32_t worldSeed = simulation.getRandomSeed();
 
+  int gIdx = 0;
   glm::vec3 pos;
   glm::vec3 vel;
   int sid = -1;
@@ -1436,10 +1439,12 @@ void BoidUnit::computeBoidInteraction(int gIdx, const SpatialGroup &group,
       glm::max(leafParams.cohesion, 0.0f);
   const float leafTau = leafParams.tau;
 
-  // -------------------------------------------------------
-  // 1. 初期化フェーズ
-  //    - 対象 Boid のグローバルインデックスと位置・速度を取得
-  // -------------------------------------------------------
+  for (std::size_t index = 0; index < localCount; ++index) {
+    // -------------------------------------------------------
+    // 1. 初期化フェーズ
+    //    - 対象 Boid のグローバルインデックスと位置・速度を取得
+    // -------------------------------------------------------
+    gIdx = localIndices[index];
     sid = leafSpeciesId;
     const int stableId = buf->ids[gIdx];
     pos = buf->positions[gIdx];
@@ -1718,7 +1723,7 @@ void BoidUnit::computeBoidInteraction(int gIdx, const SpatialGroup &group,
         gIdx >= static_cast<int>(buf->neighborCounts.size()) ||
         static_cast<std::size_t>(gIdx + 1) >= buf->neighborOffsets.size()) {
       // 境界を超えた場合はスキップ
-      return;
+      continue;
     }
 
     const std::size_t neighborBegin = buf->neighborOffsets[gIdx];
@@ -2063,7 +2068,7 @@ void BoidUnit::computeBoidInteraction(int gIdx, const SpatialGroup &group,
         }
       }
 
-      return;
+      continue;
     }
 
     // phi は「近傍がどれだけ充足しているか」を表す指標。
@@ -2309,7 +2314,7 @@ void BoidUnit::computeBoidInteraction(int gIdx, const SpatialGroup &group,
       if (hasSchoolCenterDir) {
         if (globalSpeciesParams[sid].isPredator) {
           // 捕食者は大クラスタ引力に左右されない。修正ループを防ぐため即スキップ。
-          return;
+          continue;
         }
         if (schoolDistanceSq > EPS) {
           const float clusterDist = schoolDistance;
@@ -2432,6 +2437,7 @@ void BoidUnit::computeBoidInteraction(int gIdx, const SpatialGroup &group,
       buf->accelerations[gIdx] +=
           totalSeparation + combinedAlignment + combinedCohesion;
     }
+  }
 
   // 大型クラスタ計算後に thread_local バッファの肥大化を抑制
   if (candidates.capacity() > kCandidateCacheLimit) {
