@@ -53,7 +53,11 @@ export class FogPipeline {
     const scaledHeight = Math.max(1, Math.floor(height * scale));
 
     // 深度テクスチャ付きのターゲットを確保し、fog パスへ共有する
-    const rtOptions = { depthBuffer: true, stencilBuffer: false };
+    const rtOptions = {
+      depthBuffer: true,
+      stencilBuffer: false,
+      type: THREE.HalfFloatType,
+    };
     this.heightFogRenderTarget = new THREE.WebGLRenderTarget(scaledWidth, scaledHeight, rtOptions);
     // Fog は深度の「線形復元」に必要な精度があれば良い。
     // Float 深度は帯域/互換性の面で重くなりやすいので、整数深度を優先する。
@@ -118,7 +122,7 @@ export class FogPipeline {
       this.composer.addPass(bloomPass);
     }
 
-    this.composer.addPass(new OutputPass());
+    this.composer.addPass(createDitheredOutputPass());
   }
 
   /** ウィンドウリサイズ時に呼び出してバッファサイズを調整。 */
@@ -279,7 +283,6 @@ export function createHeightFogShader(config = {}) {
       return texture2D(tDistanceCurveLut, vec2(u, 0.5)).r;
     }
 
-
     void main() {
       vec4 baseColor = texture2D(tDiffuse, vUv);
       float depth = texture2D(tDepth, vUv).x;
@@ -353,6 +356,30 @@ export function createHeightFogShader(config = {}) {
     }
   `,
   };
+}
+
+function createDitheredOutputPass() {
+  const outputPass = new OutputPass();
+  const shader = outputPass.material.fragmentShader;
+
+  outputPass.material.fragmentShader = shader
+    .replace(
+      'varying vec2 vUv;',
+      `varying vec2 vUv;
+
+float outputDither(vec2 pixel) {
+  return fract(sin(dot(pixel, vec2(12.9898, 78.233))) * 43758.5453);
+}`,
+    )
+    .replace(
+      /\n\s*}\s*$/,
+      `
+  // tone mappingとsRGB変換の後、表示用8bitへ丸める直前にディザを加える。
+  gl_FragColor.rgb += vec3((outputDither(gl_FragCoord.xy) - 0.5) / 255.0);
+}`,
+    );
+  outputPass.material.needsUpdate = true;
+  return outputPass;
 }
 
 export const HeightFogShader = createHeightFogShader();
