@@ -1,7 +1,7 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #include "boids_simulation.h"
 #include "boid.h"
-#include "obstacle_field.h"
+#include "steering_environment.h"
 #include "species_params.h"
 #include "simulation_tuning.h"
 #include <glm/glm.hpp>
@@ -48,6 +48,8 @@ void setSimulationTuningParams(const SimulationTuningParams &params) {
       gSimulationTuning.schoolPullStartDistance + 1e-3f);
     gSimulationTuning.schoolPullDenseScale =
       std::clamp(gSimulationTuning.schoolPullDenseScale, 0.0f, 1.0f);
+    gSimulationTuning.interactionStepFrames =
+      std::clamp(gSimulationTuning.interactionStepFrames, 1, 4);
 
     // ソフト境界は「無効化しやすさ」と「破綻防止」を優先してクランプ。
     gSimulationTuning.softBoundaryRadius = std::max(gSimulationTuning.softBoundaryRadius, 0.0f);
@@ -61,8 +63,38 @@ void setSimulationTuningParams(const SimulationTuningParams &params) {
 
 void configureGroundPlaneFromJS(bool enabled, float height, float blendDistance,
                                 float stiffness, float damping) {
-    obstacle_field::configureGroundPlane(enabled, height, blendDistance,
-                                         stiffness, damping);
+    BoidSimulation::instance().configureGroundPlane(
+      enabled, height, blendDistance, stiffness, damping);
+}
+
+uintptr_t resizeSteeringGuideInput(int count) {
+    if (count < 0) {
+      return 0;
+    }
+    return reinterpret_cast<uintptr_t>(
+      BoidSimulation::instance().getSteeringEnvironment().resizeGuideInput(
+        static_cast<std::size_t>(count)));
+}
+
+bool commitSteeringGuideInput(int count) {
+    return count >= 0 &&
+      BoidSimulation::instance().getSteeringEnvironment().commitGuideInput(
+        static_cast<std::size_t>(count));
+}
+
+uintptr_t resizeSteeringObstacleInput(int count) {
+    if (count < 0) {
+      return 0;
+    }
+    return reinterpret_cast<uintptr_t>(
+      BoidSimulation::instance().getSteeringEnvironment().resizeObstacleInput(
+        static_cast<std::size_t>(count)));
+}
+
+bool commitSteeringObstacleInput(int count) {
+    return count >= 0 &&
+      BoidSimulation::instance().getSteeringEnvironment().commitObstacleInput(
+        static_cast<std::size_t>(count));
 }
 
 EMSCRIPTEN_BINDINGS(my_module)
@@ -105,6 +137,7 @@ value_object<SimulationTuningParams>("SimulationTuningParams")
     .field("schoolPullStartDistance", &SimulationTuningParams::schoolPullStartDistance)
     .field("schoolPullFullDistance", &SimulationTuningParams::schoolPullFullDistance)
     .field("schoolPullDenseScale", &SimulationTuningParams::schoolPullDenseScale)
+    .field("interactionStepFrames", &SimulationTuningParams::interactionStepFrames)
     .field("softBoundaryRadius", &SimulationTuningParams::softBoundaryRadius)
     .field("softBoundaryStart", &SimulationTuningParams::softBoundaryStart)
     .field("softBoundarySteer", &SimulationTuningParams::softBoundarySteer);
@@ -150,5 +183,9 @@ value_object<SimulationTuningParams>("SimulationTuningParams")
     function("setSimulationTuningParams", &setSimulationTuningParams);
     function("callInitBoids", &callInitBoids); // 新しい関数を登録
     function("configureGroundPlane", &configureGroundPlaneFromJS);
+    function("resizeSteeringGuideInput", &resizeSteeringGuideInput);
+    function("commitSteeringGuideInput", &commitSteeringGuideInput);
+    function("resizeSteeringObstacleInput", &resizeSteeringObstacleInput);
+    function("commitSteeringObstacleInput", &commitSteeringObstacleInput);
 }
 

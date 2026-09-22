@@ -4,47 +4,46 @@
 #include <glm/vec3.hpp>
 #include <utility>
 
-// SpatialIndex を用いた球領域クエリのヘルパー郡
+// SpatialIndex を用いた球領域クエリのヘルパー群
 namespace spatial_query {
 
 // 任意のコールバックを使って球内の Boid index を列挙する簡易ユーティリティ
-// これにより呼び出し側が葉ノード走査ループを重複して書かずに済む。
+// 呼び出し側はtreeのnodeやleafを参照しない。
 
 template <typename Visitor>
 inline void forEachBoidInSphere(const SpatialIndex &index,
                                 const glm::vec3 &center, float radius,
                                 Visitor &&visitor) {
-  index.forEachLeafIntersectingSphere(
-      center, radius, [&](const SpatialLeaf &leaf) {
-        for (std::size_t i = 0; i < leaf.count; ++i) {
-          visitor(leaf.indices[i], leaf.node);
-        }
-      });
+  index.forEachCandidateIntersectingSphere(
+      center, radius, std::forward<Visitor>(visitor));
 }
 
 namespace detail {
 
 // BoidSimulation など cancelable API を持つ型ならそちらを使う（SFINAE）。
 template <typename Index, typename CancelableVisitor>
-inline auto forEachLeafIntersectingSphereCancelable(
+inline auto forEachCandidateIntersectingSphereCancelable(
     const Index &index, const glm::vec3 &center, float radius,
     CancelableVisitor &&visitor, int)
-    -> decltype(index.forEachLeafIntersectingSphereCancelable(
+    -> decltype(index.forEachCandidateIntersectingSphereCancelable(
                     center, radius, std::forward<CancelableVisitor>(visitor)),
                 void()) {
-  index.forEachLeafIntersectingSphereCancelable(
+  index.forEachCandidateIntersectingSphereCancelable(
       center, radius, std::forward<CancelableVisitor>(visitor));
 }
 
-// フォールバック: cancelできない場合は最後まで走査する（limit は leaf 内ループでのみ効く）。
+// フォールバック: underlying indexは最後まで走査するが、visitor呼び出しは打ち切る。
 template <typename Index, typename CancelableVisitor>
-inline void forEachLeafIntersectingSphereCancelable(
+inline void forEachCandidateIntersectingSphereCancelable(
     const Index &index, const glm::vec3 &center, float radius,
     CancelableVisitor &&visitor, long) {
-  index.forEachLeafIntersectingSphere(center, radius,
-                                      [&](const SpatialLeaf &leaf) {
-                                        (void)visitor(leaf);
-                                      });
+  bool active = true;
+  index.forEachCandidateIntersectingSphere(
+      center, radius, [&](int boidIndex, int groupId) {
+        if (active) {
+          active = visitor(boidIndex, groupId);
+        }
+      });
 }
 
 } // namespace detail
@@ -60,14 +59,12 @@ inline void forEachBoidInSphereLimited(const Index &index,
   }
 
   std::size_t remaining = limit;
-  detail::forEachLeafIntersectingSphereCancelable(
+  detail::forEachCandidateIntersectingSphereCancelable(
       index, center, radius,
-      [&](const SpatialLeaf &leaf) -> bool {
-        for (std::size_t i = 0; i < leaf.count; ++i) {
-          visitor(leaf.indices[i], leaf.node);
-          if (--remaining == 0) {
-            return false;
-          }
+      [&](int boidIndex, int groupId) -> bool {
+        visitor(boidIndex, groupId);
+        if (--remaining == 0) {
+          return false;
         }
         return true;
       },

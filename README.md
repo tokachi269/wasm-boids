@@ -288,6 +288,7 @@ GitHub Pagesへの公開には `npm run deploy` を使用します。
 ## 開発資料
 
 - [`docs/architecture.md`](docs/architecture.md) — 実装の責務境界
+- [`docs/steering.md`](docs/steering.md) — Guide / Obstacle steering API
 - [`docs/testing.md`](docs/testing.md) — 変更内容ごとの検証方針
 - [`docs/engineering/agent_harness.md`](docs/engineering/agent_harness.md) — バグ修正と画面確認
 - [`scripts/bench.md`](scripts/bench.md) — benchmarkの条件と計測項目

@@ -54,7 +54,8 @@ bool NativeSimulation::configureFromCommandLine(int argc, char **argv) {
     if (arg != "--bench" && arg != "--predator-diagnostic" &&
         arg != "--seed" && arg != "--boids" && arg != "--tasks" &&
         arg != "--warmup" && arg != "--reorder" &&
-        arg != "--max-neighbors" && arg != "--validate-reorder") {
+        arg != "--max-neighbors" && arg != "--validate-reorder" &&
+        arg != "--interaction-step-frames") {
       std::cerr << "Unknown argument: " << arg << '\n';
       return false;
     }
@@ -114,6 +115,13 @@ bool NativeSimulation::configureFromCommandLine(int argc, char **argv) {
         return false;
       }
       options_.validateReorder = enabled != 0;
+    } else if (arg == "--interaction-step-frames") {
+      unsigned int frames = 0;
+      if (!parseUnsigned(argv[i], frames) || frames < 1 || frames > 4) {
+        std::cerr << "Invalid interaction step frames: " << argv[i] << '\n';
+        return false;
+      }
+      options_.interactionStepFrames = static_cast<int>(frames);
     } else {
       if (!parseUnsigned(argv[i], options_.benchTasks) ||
           options_.benchTasks > 64) {
@@ -150,6 +158,7 @@ void NativeSimulation::run() {
     settings_.front().maxNeighbors = options_.maxNeighborsOverride;
   }
   startSimulation();                                // BoidSimulation 初期化
+  gSimulationTuning.interactionStepFrames = options_.interactionStepFrames;
   world_.setSpatialReorderCadence(options_.reorderCadence);
   world_.setReorderValidationEnabled(options_.validateReorder);
   if (options_.bench) {
@@ -485,6 +494,8 @@ void NativeSimulation::runBenchmark() {
          << ",\"warmup\":" << warmupFrames
          << ",\"seed\":" << options_.seed
          << ",\"boids\":" << world_.boidCount()
+         << ",\"interaction_step_frames\":"
+         << options_.interactionStepFrames
          << ",\"frame_ms\":{\"p50\":" << percentile(0.50)
          << ",\"p95\":" << percentile(0.95)
          << ",\"p99\":" << percentile(0.99)

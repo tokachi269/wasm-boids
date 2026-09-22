@@ -18,7 +18,7 @@ Species settings / seed / dt
 
 | Decision | Owner | Consumers |
 |---|---|---|
-| 個体位置、速度、姿勢、近傍相互作用、tree、cluster | `src/wasm/*` | WASM bindings、bridge、描画 |
+| 個体位置、速度、姿勢、近傍相互作用、Guide/Obstacle、tree、cluster | `src/wasm/*` | WASM bindings、bridge、描画 |
 | WASM bufferの取得とJS viewの寿命 | `src/simulation/WasmtimeBridge.js` | `App.vue`、描画 |
 | 個体のLOD、instance packing、material patch | `src/rendering/BoidInstancing.js` | Three.js renderer |
 | 水中媒質、SSAO、Bloom、post-process順序 | `src/rendering/FogPipeline.js` | screen output |

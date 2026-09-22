@@ -104,6 +104,30 @@ export class WasmtimeBridge {
       'void',
       ['boolean', 'number', 'number', 'number', 'number'],
     );
+    this.resizeSteeringGuideInputHandle = createWrappedFunction(
+      this.wasm,
+      'resizeSteeringGuideInput',
+      'number',
+      ['number'],
+    );
+    this.commitSteeringGuideInputHandle = createWrappedFunction(
+      this.wasm,
+      'commitSteeringGuideInput',
+      'boolean',
+      ['number'],
+    );
+    this.resizeSteeringObstacleInputHandle = createWrappedFunction(
+      this.wasm,
+      'resizeSteeringObstacleInput',
+      'number',
+      ['number'],
+    );
+    this.commitSteeringObstacleInputHandle = createWrappedFunction(
+      this.wasm,
+      'commitSteeringObstacleInput',
+      'boolean',
+      ['number'],
+    );
     this.cachedUnitMappingsPtr = 0;
     this.cachedUnitMappingsCount = 0;
     this.cachedUnitMappingsView = null;
@@ -156,12 +180,102 @@ export class WasmtimeBridge {
     if (options.groundPlane) {
       applyGroundPlane(this.configureGroundPlaneHandle, options.groundPlane);
     }
+    if (Array.isArray(options.guides)) {
+      this.setGuides(options.guides);
+    }
+    if (Array.isArray(options.obstacles)) {
+      this.setObstacles(options.obstacles);
+    }
 
     // 空間インデックスを再構築
     ensureHandle(this.buildHandle, 'build')();
 
     // 最新ポインタを更新して総数を返す
     return this.stepSimulation(0);
+  }
+
+  configureGroundPlane(options) {
+    applyGroundPlane(this.configureGroundPlaneHandle, options);
+  }
+
+  setGuides(guides = []) {
+    const records = Array.isArray(guides) ? guides : [];
+    const count = records.length;
+    const resize = ensureHandle(
+      this.resizeSteeringGuideInputHandle,
+      'resizeSteeringGuideInput',
+    );
+    const commit = ensureHandle(
+      this.commitSteeringGuideInputHandle,
+      'commitSteeringGuideInput',
+    );
+    const ptr = resize(count);
+    if (count > 0) {
+      if (!ptr) {
+        throw new Error('WasmtimeBridge: Guide入力バッファを確保できません');
+      }
+      const view = new Float32Array(this.wasm.HEAPF32.buffer, ptr, count * 7);
+      records.forEach((guide, index) => {
+        const target = vector3Values(guide?.target, [0, 0, 0]);
+        const offset = index * 7;
+        view[offset] = guide?.enabled === false ? 0 : 1;
+        view[offset + 1] = target[0];
+        view[offset + 2] = target[1];
+        view[offset + 3] = target[2];
+        view[offset + 4] = finiteNumber(guide?.freeRadius, 0);
+        view[offset + 5] = finiteNumber(guide?.responseDistance, 1);
+        view[offset + 6] = finiteNumber(guide?.strength, 0);
+      });
+    }
+    if (!commit(count)) {
+      throw new Error('WasmtimeBridge: Guide設定のcommitに失敗しました');
+    }
+  }
+
+  setObstacles(obstacles = []) {
+    const records = Array.isArray(obstacles) ? obstacles : [];
+    const count = records.length;
+    const resize = ensureHandle(
+      this.resizeSteeringObstacleInputHandle,
+      'resizeSteeringObstacleInput',
+    );
+    const commit = ensureHandle(
+      this.commitSteeringObstacleInputHandle,
+      'commitSteeringObstacleInput',
+    );
+    const ptr = resize(count);
+    if (count > 0) {
+      if (!ptr) {
+        throw new Error('WasmtimeBridge: Obstacle入力バッファを確保できません');
+      }
+      const view = new Float32Array(this.wasm.HEAPF32.buffer, ptr, count * 17);
+      records.forEach((obstacle, index) => {
+        const position = vector3Values(obstacle?.position, [0, 0, 0]);
+        const rotation = quaternionValues(obstacle?.rotation);
+        const size = vector3Values(obstacle?.size, [1, 1, 1]);
+        const offset = index * 17;
+        view[offset] = obstacle?.enabled === false ? 0 : 1;
+        view[offset + 1] = finiteNumber(obstacle?.id, index);
+        view[offset + 2] = obstacleShapeValue(obstacle?.shape);
+        view[offset + 3] = position[0];
+        view[offset + 4] = position[1];
+        view[offset + 5] = position[2];
+        view[offset + 6] = rotation[0];
+        view[offset + 7] = rotation[1];
+        view[offset + 8] = rotation[2];
+        view[offset + 9] = rotation[3];
+        view[offset + 10] = size[0];
+        view[offset + 11] = size[1];
+        view[offset + 12] = size[2];
+        view[offset + 13] = finiteNumber(obstacle?.influenceDistance, 2);
+        view[offset + 14] = finiteNumber(obstacle?.strength, 18);
+        view[offset + 15] = finiteNumber(obstacle?.damping, 8);
+        view[offset + 16] = finiteNumber(obstacle?.tangentStrength, 4);
+      });
+    }
+    if (!commit(count)) {
+      throw new Error('WasmtimeBridge: Obstacle設定のcommitに失敗しました');
+    }
   }
 
   configureBenchmarkDiagnostics({ seed = 5489, taskLimit = 1, parallelTiming = true } = {}) {
@@ -322,6 +436,7 @@ export class WasmtimeBridge {
       schoolPullStartDistance: Math.max(0, toNumber(params.schoolPullStartDistance, 2.5)),
       schoolPullFullDistance: Math.max(0, toNumber(params.schoolPullFullDistance, 3.0)),
       schoolPullDenseScale: Math.max(0, Math.min(1, toNumber(params.schoolPullDenseScale, 0.16))),
+      interactionStepFrames: Math.max(1, Math.min(4, Math.round(toNumber(params.interactionStepFrames, 2)))),
 
       // 散らばり過ぎ防止（固定ワールド原点を基準にした見えないソフト境界）。
       softBoundaryRadius: Math.max(0, toNumber(params.softBoundaryRadius, 100.0)),
@@ -678,6 +793,51 @@ function buildSpeciesRanges(list = []) {
 }
 
 // cwrap または素の関数を返し、存在しなければ null
+function finiteNumber(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function vector3Values(value, fallback) {
+  if (Array.isArray(value) || ArrayBuffer.isView(value)) {
+    return [
+      finiteNumber(value[0], fallback[0]),
+      finiteNumber(value[1], fallback[1]),
+      finiteNumber(value[2], fallback[2]),
+    ];
+  }
+  return [
+    finiteNumber(value?.x, fallback[0]),
+    finiteNumber(value?.y, fallback[1]),
+    finiteNumber(value?.z, fallback[2]),
+  ];
+}
+
+function quaternionValues(value) {
+  if (Array.isArray(value) || ArrayBuffer.isView(value)) {
+    return [
+      finiteNumber(value[0], 0),
+      finiteNumber(value[1], 0),
+      finiteNumber(value[2], 0),
+      finiteNumber(value[3], 1),
+    ];
+  }
+  return [
+    finiteNumber(value?.x, 0),
+    finiteNumber(value?.y, 0),
+    finiteNumber(value?.z, 0),
+    finiteNumber(value?.w, 1),
+  ];
+}
+
+function obstacleShapeValue(shape) {
+  if (Number.isInteger(shape) && shape >= 0 && shape <= 3) {
+    return shape;
+  }
+  const values = { plane: 0, sphere: 1, capsule: 2, box: 3 };
+  return values[String(shape ?? 'sphere').toLowerCase()] ?? 1;
+}
+
 function createWrappedFunction(wasm, name, returnType, argTypes) {
   if (!wasm) {
     return null;

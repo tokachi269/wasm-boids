@@ -11,6 +11,7 @@
 #include "boids_buffers.h"
 #include "spatial_index.h"
 #include "boid_tree_spatial_index.h"
+#include "steering_environment.h"
 #ifdef BOIDS_INTERACTION_DIAGNOSTICS
 #include "interaction_diagnostics.h"
 #include <mutex>
@@ -118,6 +119,22 @@ public:
     uint32_t getRandomSeed() const { return randomSeed_; }
     void setFixedTimeStep(float dt);
     float getFixedTimeStep() const { return fixedTimeStep_; }
+    SteeringEnvironment &getSteeringEnvironment() { return steeringEnvironment_; }
+    const SteeringEnvironment &getSteeringEnvironment() const {
+        return steeringEnvironment_;
+    }
+    void setGuides(const std::vector<boids::Guide> &guides) {
+        steeringEnvironment_.setGuides(guides);
+    }
+    void setObstacles(const std::vector<boids::Obstacle> &obstacles) {
+        steeringEnvironment_.setObstacles(obstacles);
+    }
+    void configureGroundPlane(bool enabled, float height,
+                              float influenceDistance, float strength,
+                              float damping) {
+        steeringEnvironment_.configureGroundPlane(
+            enabled, height, influenceDistance, strength, damping);
+    }
     void setSpatialReorderCadence(int frames) {
         spatialReorderCadence_ = frames > 0 ? frames : 0;
     }
@@ -225,9 +242,10 @@ public:
     float getMaxPredatorAlertRadius() const { return maxPredatorAlertRadius_; }
 
     // SpatialIndex implementation
-    void forEachLeaf(const LeafVisitor &visitor) const override;
-    void forEachLeafIntersectingSphere(const glm::vec3 &center, float radius,
-                                       const LeafVisitor &visitor) const override;
+    void forEachGroup(const GroupVisitor &visitor) const override;
+    void forEachCandidateIntersectingSphere(
+        const glm::vec3 &center, float radius,
+        const CandidateVisitor &visitor) const override;
 
     /**
      * 球交差クエリ（早期終了対応版）。
@@ -237,24 +255,28 @@ public:
      * - visitor が false を返した時点で探索を打ち切る。
      *
      * 注意:
-     * - SpatialIndex の仮想インターフェースは互換性維持のため変更しない。
-    * - BoidSimulation 固有の高速パスとして提供する。
+     * - BoidSimulation 固有の高速パスとして提供する。
      */
     template <typename CancelableVisitor>
-    void forEachLeafIntersectingSphereCancelable(const glm::vec3 &center, float radius,
-                                                 CancelableVisitor &&visitor) const {
+    void forEachCandidateIntersectingSphereCancelable(
+        const glm::vec3 &center, float radius,
+        CancelableVisitor &&visitor) const {
         // BoidUnit ツリーが有効な場合は tree 実装の cancelable を使う。
         // 将来的に別の SpatialIndex 実装へ差し替えた場合は、最後まで走査するフォールバックになる。
         if (activeSpatialIndex_ == &treeSpatialIndex_) {
-            treeSpatialIndex_.forEachLeafIntersectingSphereCancelable(center, radius,
+            treeSpatialIndex_.forEachCandidateIntersectingSphereCancelable(center, radius,
                 std::forward<CancelableVisitor>(visitor));
             return;
         }
 
         // フォールバック: cancelできない場合は最後まで走査する。
-        forEachLeafIntersectingSphere(center, radius, [&](const SpatialLeaf &leaf) {
-            (void)visitor(leaf);
-        });
+        bool active = true;
+        forEachCandidateIntersectingSphere(
+            center, radius, [&](int boidIndex, int groupId) {
+                if (active) {
+                    active = visitor(boidIndex, groupId);
+                }
+            });
     }
 
 private:
@@ -268,6 +290,7 @@ private:
     SoABuffers buf; // 中央バッファに一本化
     SoABuffers reorderScratch_;
     std::vector<SpeciesParams> speciesParams_;
+    SteeringEnvironment steeringEnvironment_;
     uint32_t randomSeed_ = 5489u;
     float fixedTimeStep_ = 1.0f / 60.0f;
     int spatialReorderCadence_ = 30;
@@ -325,6 +348,8 @@ private:
     // tree 等の保守処理頻度は負荷に追従できるよう render frame 基準のままにする。
     float simulationTimeSeconds_ = 0.0f;
     float clusterUpdateDtAccumulator_ = 0.0f;
+    float interactionDtAccumulator_ = 0.0f;
+    int interactionFrameCounter_ = 0;
     // render フレームと独立した固定ステップ更新用の dt 蓄積。
     float simulationDtAccumulator_ = 0.0f;
 

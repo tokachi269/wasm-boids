@@ -5,15 +5,16 @@
 #include <glm/gtx/norm.hpp>
 
 // 非ホットパス向けの素直な実装。ホットパスは cancelable 版（反復DFS）を使う。
-void BoidTreeSpatialIndex::forEachLeafRecursive(const BoidUnit *node,
-                                               const LeafVisitor &visitor) const {
+void BoidTreeSpatialIndex::forEachGroupRecursive(
+    const BoidUnit *node, const GroupVisitor &visitor) const {
   if (!node) {
     return;
   }
 
   if (node->children.empty()) {
-    SpatialLeaf leaf{node->indices.data(), node->indices.size(), node};
-    visitor(leaf);
+    visitor(SpatialGroup{node->indices.data(), node->indices.size(), node->id,
+                         node->speciesId, node->center, node->averageVelocity,
+                         node->radius});
     return;
   }
 
@@ -21,20 +22,20 @@ void BoidTreeSpatialIndex::forEachLeafRecursive(const BoidUnit *node,
     if (!child) {
       continue;
     }
-    forEachLeafRecursive(child, visitor);
+    forEachGroupRecursive(child, visitor);
   }
 }
 
-void BoidTreeSpatialIndex::forEachLeaf(const LeafVisitor &visitor) const {
+void BoidTreeSpatialIndex::forEachGroup(const GroupVisitor &visitor) const {
   if (!root_) {
     return;
   }
-  forEachLeafRecursive(root_, visitor);
+  forEachGroupRecursive(root_, visitor);
 }
 
-void BoidTreeSpatialIndex::forEachLeafIntersectingSphereRecursive(
+void BoidTreeSpatialIndex::forEachCandidateIntersectingSphereRecursive(
     const BoidUnit *node, const glm::vec3 &center, float radius,
-    const LeafVisitor &visitor) const {
+    const CandidateVisitor &visitor) const {
   if (!node) {
     return;
   }
@@ -47,8 +48,9 @@ void BoidTreeSpatialIndex::forEachLeafIntersectingSphereRecursive(
   }
 
   if (node->children.empty()) {
-    SpatialLeaf leaf{node->indices.data(), node->indices.size(), node};
-    visitor(leaf);
+    for (int index : node->indices) {
+      visitor(index, node->id);
+    }
     return;
   }
 
@@ -56,14 +58,15 @@ void BoidTreeSpatialIndex::forEachLeafIntersectingSphereRecursive(
     if (!child) {
       continue;
     }
-    forEachLeafIntersectingSphereRecursive(child, center, radius, visitor);
+    forEachCandidateIntersectingSphereRecursive(child, center, radius, visitor);
   }
 }
 
-void BoidTreeSpatialIndex::forEachLeafIntersectingSphere(
-    const glm::vec3 &center, float radius, const LeafVisitor &visitor) const {
+void BoidTreeSpatialIndex::forEachCandidateIntersectingSphere(
+    const glm::vec3 &center, float radius,
+    const CandidateVisitor &visitor) const {
   if (!root_) {
     return;
   }
-  forEachLeafIntersectingSphereRecursive(root_, center, radius, visitor);
+  forEachCandidateIntersectingSphereRecursive(root_, center, radius, visitor);
 }

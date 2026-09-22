@@ -84,7 +84,7 @@
                   <input
                     type="range"
                     min="0"
-                    max="0.0002"
+                    max="0.001"
                     step="0.000001"
                     v-model.number="systemSettings.schoolPullCoefficient"
                     :title="tuningHelp.schoolPullCoefficient"
@@ -112,6 +112,11 @@
                   <label :title="tuningHelp.schoolPullDenseScale">密集時引力倍率<br />(Dense Scale):</label>
                   <input type="range" min="0" max="1" step="0.01" v-model.number="systemSettings.schoolPullDenseScale" :title="tuningHelp.schoolPullDenseScale" />
                   <input class="value-input" type="number" min="0" max="1" step="0.01" v-model.number="systemSettings.schoolPullDenseScale" :title="tuningHelp.schoolPullDenseScale" />
+                </div>
+                <div class="setting-row">
+                  <label :title="tuningHelp.interactionStepFrames">相互作用更新間隔<br />(Frames / Update):</label>
+                  <input type="range" min="1" max="4" step="1" v-model.number="systemSettings.interactionStepFrames" :title="tuningHelp.interactionStepFrames" />
+                  <input class="value-input" type="number" min="1" max="4" step="1" v-model.number="systemSettings.interactionStepFrames" :title="tuningHelp.interactionStepFrames" />
                 </div>
               </div>
             </details>
@@ -366,7 +371,7 @@ import { LivePerformanceMonitor } from "./benchmark/LivePerformanceMonitor.js";
 const buildVersion = process.env.VUE_APP_BUILD_VERSION || "unknown";
 
 // WASM 側の初期配置レンジ（posRange）。描画側の位置量子化レンジ決定にも使う。
-const DEFAULT_SIMULATION_POS_RANGE = 4;
+const DEFAULT_SIMULATION_POS_RANGE = 5;
 const browserBenchmarkConfig = readBrowserBenchmarkConfig(
   typeof window !== "undefined" ? window.location.search : "",
 );
@@ -478,17 +483,17 @@ const DEFAULT_SETTINGS = [
     cohesion: 3.5, // 凝集
     cohesionRange: 4, // 凝集範囲
     separation: 0.4, // 分離
-    separationRange: 0.4, // 分離範囲
+    separationRange: 0.25, // 分離範囲
     alignment: 6.0, // 整列
     alignmentRange: 1, // 整列範囲
     maxSpeed: 0.35, // 最大速度
-    maxTurnAngle: 0.42, // 最大曲がり（曲率）
+    maxTurnAngle: 0.7, // 最大曲がり（曲率）
     maxNeighbors: 4, // 最大近傍数
     horizontalTorque: 0.026, // 水平化トルク
     torqueStrength: 0.1, // 回転トルク強度
     lambda: 0.102, // 速度調整係数（減衰係数）
-    tau: 0.5, // 記憶時間
-    predatorAlertRadius: 2.5, // 捕食者を察知して逃避を始める距離
+    tau: 0.4, // 記憶時間
+    predatorAlertRadius: 3.0, // 捕食者を察知して逃避を始める距離
     densityReturnStrength: 0.0, // 密度復帰強度
     schoolPullEnabled: true, // 大クラスタ引力係数を反映するか
     isPredator: false,
@@ -517,13 +522,14 @@ const DEFAULT_SETTINGS = [
   },
 ];
 const DEFAULT_TUNING_SETTINGS = {
-  threatDecay: 1.0, // 脅威減衰速度（1/sec）
-  maxEscapeWeight: 0.6, // 逃避方向の最大割合（0〜1）
-  baseEscapeStrength: 6.0, // 逃避舵取り強度（目標速度へ寄せる強さ）
-  schoolPullCoefficient: 0.0002, // 大クラスタ引力係数
-  schoolPullStartDistance: 2.5,
+  threatDecay: 2.0, // 脅威減衰速度（1/sec）
+  maxEscapeWeight: 0.7, // 逃避方向の最大割合（0〜1）
+  baseEscapeStrength: 4.0, // 逃避舵取り強度（目標速度へ寄せる強さ）
+  schoolPullCoefficient: 0.0004, // 大クラスタ引力係数
+  schoolPullStartDistance: 0.0,
   schoolPullFullDistance: 3.0,
-  schoolPullDenseScale: 0.16,
+  schoolPullDenseScale: 0.1,
+  interactionStepFrames: 2,
 };
   
 // 調整スライダーの説明（ユーザ目線）。ホバー時に title として表示する。
@@ -536,6 +542,7 @@ const tuningHelp = {
   schoolPullStartDistance: '大クラスタ中心からこの距離までは引力を掛けません。',
   schoolPullFullDistance: 'この距離で設定した大クラスタ引力が最大になります。',
   schoolPullDenseScale: '近傍が十分いる個体へ残す引力の倍率です。0なら密集時は無効、1なら密度を無視します。',
+  interactionStepFrames: '近傍相互作用を何stepに1回再計算するかを指定します。位置・速度・旋回は毎step更新し、間のstepでは直前の力を保持します。',
 };
 
 // デバッグ表示/負荷設定の説明（ユーザ目線）。
@@ -2283,7 +2290,7 @@ function reinitializeFlockNow() {
     wasmBridge.initializeFlock(newSettingsRef, {
       spatialScale: 1,
       posRange: DEFAULT_SIMULATION_POS_RANGE,
-      velRange: 0.25,
+      velRange: 0.025,
       groundPlane: {
         enabled: true,
         height: groundMesh?.position?.y ?? -10,

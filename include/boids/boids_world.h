@@ -9,6 +9,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include "species_params.h"
+#include "boids/steering.h"
 #ifdef BOIDS_INTERACTION_DIAGNOSTICS
 #include "interaction_diagnostics.h"
 #endif
@@ -60,6 +61,11 @@ public:
   void step(float dt);
   void stepFixed(float realDt);
   void rebuildSpatialIndex();
+  void setGuides(const std::vector<Guide> &guides);
+  void setObstacles(const std::vector<Obstacle> &obstacles);
+  void configureGroundPlane(bool enabled, float height,
+                            float influenceDistance, float strength,
+                            float damping);
 
   void setSeed(uint32_t seed);
   uint32_t seed() const;

@@ -3,7 +3,9 @@ param(
     [int]$Warmup = 1000,
     [uint32]$Seed = 1,
     [int]$Boids = 5000,
-    [int]$Tasks = 1
+    [int]$Tasks = 1,
+    [ValidateRange(1, 4)]
+    [int]$InteractionStepFrames = 1
 )
 
 $ErrorActionPreference = 'Stop'
@@ -12,5 +14,5 @@ if (-not (Test-Path $executable)) {
     throw "Native benchmark executable not found. Run npm run build-native first."
 }
 
-& $executable --bench $Frames --warmup $Warmup --seed $Seed --boids $Boids --tasks $Tasks
+& $executable --bench $Frames --warmup $Warmup --seed $Seed --boids $Boids --tasks $Tasks --interaction-step-frames $InteractionStepFrames
 exit $LASTEXITCODE
