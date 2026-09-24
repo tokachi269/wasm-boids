@@ -2153,7 +2153,13 @@ function initParticleSystem() {
   if (!particleField) {
     particleField = new ParticleField(useLowSpecPreset);
   }
-  particleField.init(scene, renderer, camera, controls);
+  particleField.init(
+    scene,
+    renderer,
+    camera,
+    controls,
+    groundMesh?.position.y ?? -9,
+  );
 }
 
 // カメラ操作に応じて粒子ボリュームの中心とスケールを更新

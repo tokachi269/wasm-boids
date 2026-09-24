@@ -38,16 +38,12 @@ export class ParticleField {
     this.particleMaterial = null;
     this.elapsedTime = 0;
 
-    // 粒子帯の基準座標（ワールド座標）。
-    // 海中の粒子は「ワールドに漂っている」表現なので、カメラに追従させない。
-    // ＝カメラが移動すると、粒子が視界から流れていく（戻ってこない）。
-    this.worldOrigin = new THREE.Vector3(0, 0, 0);
   }
 
   /**
    * Three.js のシーンとカメラ、コントロール類を受け取りパーティクルを初期化します。
    */
-  init(scene, renderer, camera, controls) {
+  init(scene, renderer, camera, controls, groundHeight = -9) {
     if (!scene || !renderer?.capabilities?.isWebGL2) {
       console.warn('Skipping particle system: WebGL2 required.');
       return false;
@@ -77,7 +73,7 @@ export class ParticleField {
       blending: THREE.AdditiveBlending,
       uniforms: {
         uTime: { value: 0 }, // 経過時間（CPUから制御）
-        uOrigin: { value: new THREE.Vector3() }, // 粒子帯の基準座標（カメラ位置）
+        uCameraPosition: { value: new THREE.Vector3() }, // 周期領域をカメラ周辺へwrapする基準
         uFlowDir: { value: DEFAULT_FLOW_DIR.clone() }, // 流れ方向の基準ベクトル
         uLat1: { value: DEFAULT_LAT1.clone() }, // 流れに直交するラテラル軸1
         uLat2: { value: DEFAULT_LAT2.clone() }, // 同ラテラル軸2
@@ -88,6 +84,7 @@ export class ParticleField {
         uSizePx: { value: this.isMobileDevice ? 5.0 : 12.0 }, // スクリーン上の粒子サイズ（px）
         uFadeNear: { value: 1.5 }, // 手前でフェードアウトを開始する距離
         uFadeFar: { value: 14.0 }, // フェードアウトが完了する距離
+        uGroundHeight: { value: groundHeight }, // 海底より下の粒子を表示しない
         uColorNear: { value: new THREE.Color(0x5bc8e8) }, // カメラ近傍の粒子色（明るい水中の輝き）
         uColorFar: { value: new THREE.Color(0x0b3d65) }, // 遠方の粒子色（深い海の青）
       },
@@ -95,13 +92,9 @@ export class ParticleField {
       fragmentShader: PARTICLE_FRAGMENT_SHADER,
     });
 
-    const baseTargetDistance = controls
-      ? camera.position.distanceTo(controls.target)
-      : camera.position.length();
     material.userData = {
       baseSpread: baseSpread.clone(),
       baseMaxDistance,
-      baseTargetDistance: Math.max(baseTargetDistance, 0.1), // OrbitControls の距離を初期参照距離として記録
     };
 
     this.particlePoints = new THREE.Points(geometry, material);
@@ -112,8 +105,6 @@ export class ParticleField {
     this.particleMaterial = material;
     this.setWorldBasis(material.uniforms.uFlowDir.value);
 
-    // 粒子帯の中心はワールド基準で固定する。
-    material.uniforms.uOrigin.value.copy(this.worldOrigin);
     this.update(camera, controls);
     return true;
   }
@@ -181,11 +172,10 @@ export class ParticleField {
 
     const uniforms = this.particleMaterial.uniforms;
 
-    // uOrigin はワールド基準で固定。
-    // NOTE: 海中粒子を“環境”として扱うため、カメラ移動で中心を戻さない。
-    // uniforms.uOrigin は init() で設定済み。
+    // 粒子の生成座標はワールド基準のまま、周期領域だけをカメラ周辺へwrapする。
+    uniforms.uCameraPosition.value.copy(targetCamera.position);
 
-    const { baseSpread, baseMaxDistance, baseTargetDistance } = this.particleMaterial.userData || {};
+    const { baseSpread, baseMaxDistance } = this.particleMaterial.userData || {};
     if (!baseSpread || !baseMaxDistance) {
       return;
     }
@@ -225,7 +215,7 @@ precision highp float;
 precision highp int;
 
 uniform float uTime;
-uniform vec3 uOrigin;
+uniform vec3 uCameraPosition;
 uniform vec3 uFlowDir;
 uniform vec3 uLat1;
 uniform vec3 uLat2;
@@ -236,6 +226,7 @@ uniform float uJitterAmp;
 uniform float uSizePx;
 uniform float uFadeNear;
 uniform float uFadeFar;
+uniform float uGroundHeight;
 
 out float vFade;
 out float vColorMix;
@@ -264,15 +255,32 @@ void main() {
   vec3 randSeed = hashVec3(id) - 0.5;
 
   vec3 flowDir = normalize(uFlowDir);
-  vec3 lateral = uLat1 * (randSeed.x * uSpread.x)
-    + uLat2 * (randSeed.y * uSpread.y);
-
   float speedSeed = hashFloat(id * 747796405u);
   float speed = uBaseSpeed * (0.7 + 0.6 * speedSeed);
   float flowCycle = max(uSpread.z, 1e-3);
   float flowParam = randSeed.z + (uTime * speed) / flowCycle;
   float wrappedZ = fract(flowParam) - 0.5;
-  vec3 pos = uOrigin + lateral + flowDir * (wrappedZ * flowCycle);
+
+  // 粒子座標はワールド基準の周期領域で定義する。カメラ移動時に
+  // 全粒子を追従させず、領域端を越えたものだけ反対側へwrapする。
+  vec3 baseCoord = vec3(
+    randSeed.x * uSpread.x,
+    randSeed.y * uSpread.y,
+    wrappedZ * flowCycle
+  );
+  vec3 cameraCoord = vec3(
+    dot(uCameraPosition, uLat1),
+    dot(uCameraPosition, uLat2),
+    dot(uCameraPosition, flowDir)
+  );
+  vec3 safeSpread = max(uSpread, vec3(1e-3));
+  vec3 halfSpread = safeSpread * 0.5;
+  vec3 wrappedCoord = cameraCoord
+    + mod(baseCoord - cameraCoord + halfSpread, safeSpread)
+    - halfSpread;
+  vec3 pos = uLat1 * wrappedCoord.x
+    + uLat2 * wrappedCoord.y
+    + flowDir * wrappedCoord.z;
 
   float phase = hashFloat(id * 1664525u) * 6.28318530718;
   float driftSeed = hashFloat(id * 22695477u);
@@ -295,7 +303,8 @@ void main() {
   float rangeMask = 1.0 - smoothstep(uMaxDistance * 0.7, uMaxDistance, dist);
 
   float fadeT = clamp((dist - uFadeNear) / max(uFadeFar - uFadeNear, 1e-3), 0.0, 1.0);
-  float fade = (1.0 - fadeT) * screenMask * rangeMask * forwardMask;
+  float groundMask = smoothstep(uGroundHeight, uGroundHeight + 0.75, pos.y);
+  float fade = (1.0 - fadeT) * screenMask * rangeMask * forwardMask * groundMask;
   vFade = fade;
   vColorMix = fade;
 
