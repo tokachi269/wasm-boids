@@ -788,21 +788,17 @@ void BoidUnit::computeBoundingSphere() {
     }
     center /= static_cast<float>(childrenSize);
 
-    // 子ノード中心までの平均距離 + 子ノード半径 - パフォーマンス最適化
-    float sum = 0.0f, sum2 = 0.0f;
+    // 親の球がすべての子の球を必ず包含するよう、最も遠い子の外周を使う。
+    // 平均 + 標準偏差では、子が3個以上の場合に外れた子を包含できず、
+    // SpatialIndex の枝刈りで本来の候補を取りこぼす可能性がある。
+    float maxOuterDistance = 0.0f;
     for (size_t i = 0; i < childrenSize; ++i) {
       const BoidUnit *child = childrenData[i];
       const float baseD2 = glm::distance2(center, child->center);
       const float baseD = (baseD2 > 0.0f) ? glm::sqrt(baseD2) : 0.0f;
-      const float d = baseD + child->radius;
-      sum += d;
-      sum2 += d * d;
+      maxOuterDistance = std::max(maxOuterDistance, baseD + child->radius);
     }
-    float mean = sum / static_cast<float>(childrenSize);
-    float var = sum2 / static_cast<float>(childrenSize) - mean * mean;
-    float stddev = var > 0.0f ? std::sqrt(var) : 0.0f;
-
-    radius = mean + 1.0f * stddev;
+    radius = maxOuterDistance;
     simpleDensity = 0.0f;
     simulation.setUnitSimpleDensity(id, 0.0f);
   }
