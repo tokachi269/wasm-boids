@@ -1350,6 +1350,8 @@ void BoidUnit::computeBoidInteraction(const SpatialGroup &group,
 #define BOIDS_DIAG_INCREMENT(field) do { if (diagnostics) { ++diagnostics->field; } } while (false)
 #endif
   const int globalFrame = simulation.getFrameCount();
+  const uint64_t interactionUpdateCount =
+      simulation.getInteractionUpdateCount();
   const uint32_t worldSeed = simulation.getRandomSeed();
 
   int gIdx = 0;
@@ -1951,7 +1953,8 @@ void BoidUnit::computeBoidInteraction(const SpatialGroup &group,
     const bool wantsExternal = (neighborCount * 2 < maxNeighbors);
     constexpr int kExternalNeighborStride = 8;
     const bool externalThrottleHit =
-        (((globalFrame + stableId) % kExternalNeighborStride) == 0);
+        (((interactionUpdateCount + static_cast<uint64_t>(stableId)) %
+          kExternalNeighborStride) == 0);
     const bool lostBoid = (neighborCount == 0);
     if (wantsExternal && (externalThrottleHit || lostBoid)) {
       // cohesionRange を基本に、最低限 separationRange も含む半径にする。
@@ -2103,7 +2106,16 @@ void BoidUnit::computeBoidInteraction(const SpatialGroup &group,
           continue;
         }
         if (sampleLocality) {
-          simulation.recordNeighborIndexDistance(false, gIdx, gNeighbor);
+          bool sameCurrentGroup = false;
+          for (std::size_t localIndex = 0; localIndex < localCount;
+               ++localIndex) {
+            if (localIndices[localIndex] == gNeighbor) {
+              sameCurrentGroup = true;
+              break;
+            }
+          }
+          simulation.recordNeighborIndexDistance(
+              sameCurrentGroup ? 0 : 1, gIdx, gNeighbor);
         }
         ++aggregatedNeighborCount;
 #ifdef BOIDS_INTERACTION_DIAGNOSTICS
@@ -2188,7 +2200,7 @@ void BoidUnit::computeBoidInteraction(const SpatialGroup &group,
           continue;
         }
         if (sampleLocality) {
-          simulation.recordNeighborIndexDistance(true, gIdx, gNeighbor);
+          simulation.recordNeighborIndexDistance(2, gIdx, gNeighbor);
         }
         ++aggregatedNeighborCount;
 #ifdef BOIDS_INTERACTION_DIAGNOSTICS

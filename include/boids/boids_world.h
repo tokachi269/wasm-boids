@@ -41,9 +41,9 @@ public:
     long frames[2];
   };
   struct LocalityStats {
-    uint64_t buckets[2][6];
-    uint64_t distanceSum[2];
-    uint64_t samples[2];
+    uint64_t buckets[3][6];
+    uint64_t distanceSum[3];
+    uint64_t samples[3];
   };
   explicit BoidsWorld(const BoidsWorldConfig &config = {});
   ~BoidsWorld();

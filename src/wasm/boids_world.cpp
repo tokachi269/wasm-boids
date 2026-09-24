@@ -151,7 +151,7 @@ void BoidsWorld::endLocalitySample() { simulation_->endLocalitySample(); }
 BoidsWorld::LocalityStats BoidsWorld::localityStats() const {
   const auto stats = simulation_->getLocalityStats();
   LocalityStats result{};
-  for (int kind = 0; kind < 2; ++kind) {
+  for (int kind = 0; kind < BoidSimulation::kLocalityKindCount; ++kind) {
     result.distanceSum[kind] = stats.distanceSum[kind];
     result.samples[kind] = stats.samples[kind];
     for (int bucket = 0; bucket < 6; ++bucket) {

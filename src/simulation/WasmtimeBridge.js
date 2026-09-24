@@ -372,7 +372,7 @@ export class WasmtimeBridge {
   }
 
   getLocalityStats() {
-    const names = ['same_leaf', 'external'];
+    const names = ['cached_same_group', 'cached_cross_group', 'external'];
     const labels = ['le_1', 'le_4', 'le_16', 'le_64', 'le_256', 'gt_256'];
     const result = {};
     for (let kind = 0; kind < names.length; kind += 1) {

@@ -528,10 +528,11 @@ void NativeSimulation::runBenchmark() {
   }
   const auto locality = world_.localityStats();
   output << "},\"locality\":{";
-  static constexpr const char *kLocalityNames[] = {"same_leaf", "external"};
+  static constexpr const char *kLocalityNames[] = {
+      "cached_same_group", "cached_cross_group", "external"};
   static constexpr const char *kBucketNames[] = {"le_1", "le_4", "le_16",
                                                   "le_64", "le_256", "gt_256"};
-  for (int kind = 0; kind < 2; ++kind) {
+  for (int kind = 0; kind < BoidSimulation::kLocalityKindCount; ++kind) {
     if (kind != 0) output << ',';
     const double meanDistance = locality.samples[kind] > 0
                                     ? static_cast<double>(locality.distanceSum[kind]) /

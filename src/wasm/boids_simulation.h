@@ -37,6 +37,7 @@ public:
     };
     static constexpr int kPhaseCount = static_cast<int>(Phase::Count);
     static constexpr int kParallelPhaseCount = 2;
+    static constexpr int kLocalityKindCount = 3;
     static constexpr int kBehaviorInspectorFloatCount = 27;
 
     struct PhaseTimings {
@@ -54,9 +55,9 @@ public:
     };
 
     struct LocalityStats {
-        uint64_t buckets[2][6]{};
-        uint64_t distanceSum[2]{};
-        uint64_t samples[2]{};
+        uint64_t buckets[kLocalityKindCount][6]{};
+        uint64_t distanceSum[kLocalityKindCount]{};
+        uint64_t samples[kLocalityKindCount]{};
     };
 
     static BoidSimulation& instance();
@@ -109,6 +110,9 @@ public:
     // ---- 参照専用の軽量アクセサ（外部からの直アクセスを減らす） ----
     BoidUnit *getRoot() const { return root; }
     int getFrameCount() const { return frameCount; }
+    uint64_t getInteractionUpdateCount() const {
+        return interactionUpdateCount_;
+    }
     float getSimulationTimeSeconds() const { return simulationTimeSeconds_; }
     int getMaxBoidsPerUnit() const { return maxBoidsPerUnit; }
     void setMaxBoidsPerUnit(int value) { maxBoidsPerUnit = value; }
@@ -158,7 +162,7 @@ public:
         return localitySamplingEnabled_.load(std::memory_order_relaxed);
     }
     LocalityStats getLocalityStats() const;
-    void recordNeighborIndexDistance(bool external, int selfIndex,
+    void recordNeighborIndexDistance(int kind, int selfIndex,
                                      int neighborIndex);
 #ifdef BOIDS_INTERACTION_DIAGNOSTICS
     InteractionDiagnostics getInteractionDiagnostics() const;
@@ -310,9 +314,9 @@ private:
     ParallelTimings parallelTimings_{};
     bool parallelTimingEnabled_ = false;
     std::atomic<bool> localitySamplingEnabled_{false};
-    std::atomic<uint64_t> localityBuckets_[2][6]{};
-    std::atomic<uint64_t> localityDistanceSum_[2]{};
-    std::atomic<uint64_t> localitySamples_[2]{};
+    std::atomic<uint64_t> localityBuckets_[kLocalityKindCount][6]{};
+    std::atomic<uint64_t> localityDistanceSum_[kLocalityKindCount]{};
+    std::atomic<uint64_t> localitySamples_[kLocalityKindCount]{};
     int behaviorInspectorIndex_ = -1;
     std::array<float, kBehaviorInspectorFloatCount> behaviorInspectorBuffer_{};
     std::vector<float> unitSimpleDensities;
@@ -350,6 +354,7 @@ private:
     float clusterUpdateDtAccumulator_ = 0.0f;
     float interactionDtAccumulator_ = 0.0f;
     int interactionFrameCounter_ = 0;
+    uint64_t interactionUpdateCount_ = 0;
     // render フレームと独立した固定ステップ更新用の dt 蓄積。
     float simulationDtAccumulator_ = 0.0f;
 

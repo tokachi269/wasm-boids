@@ -1080,6 +1080,9 @@ void BoidSimulation::update(float dt) {
   } else {
     setRenderPointersToReadBuffers();
   }
+  if (shouldUpdateInteraction) {
+    ++interactionUpdateCount_;
+  }
   recordPhase(Phase::UpdateRecursive, updateRecursiveStart, root ? 1 : 0);
 
   // NOTE:
@@ -1254,7 +1257,7 @@ void BoidSimulation::recordParallelTimings(int phase,
 
 void BoidSimulation::beginLocalitySample() {
   localitySamplingEnabled_.store(false, std::memory_order_relaxed);
-  for (int kind = 0; kind < 2; ++kind) {
+  for (int kind = 0; kind < kLocalityKindCount; ++kind) {
     localityDistanceSum_[kind].store(0, std::memory_order_relaxed);
     localitySamples_[kind].store(0, std::memory_order_relaxed);
     for (int bucket = 0; bucket < 6; ++bucket) {
@@ -1266,7 +1269,7 @@ void BoidSimulation::beginLocalitySample() {
 
 BoidSimulation::LocalityStats BoidSimulation::getLocalityStats() const {
   LocalityStats result{};
-  for (int kind = 0; kind < 2; ++kind) {
+  for (int kind = 0; kind < kLocalityKindCount; ++kind) {
     result.distanceSum[kind] =
         localityDistanceSum_[kind].load(std::memory_order_relaxed);
     result.samples[kind] =
@@ -1279,9 +1282,12 @@ BoidSimulation::LocalityStats BoidSimulation::getLocalityStats() const {
   return result;
 }
 
-void BoidSimulation::recordNeighborIndexDistance(bool external, int selfIndex,
+void BoidSimulation::recordNeighborIndexDistance(int kind, int selfIndex,
                                                  int neighborIndex) {
   if (!localitySamplingEnabled_.load(std::memory_order_relaxed)) {
+    return;
+  }
+  if (kind < 0 || kind >= kLocalityKindCount) {
     return;
   }
   const uint64_t distance = static_cast<uint64_t>(
@@ -1299,7 +1305,6 @@ void BoidSimulation::recordNeighborIndexDistance(bool external, int selfIndex,
   } else if (distance <= 256) {
     bucket = 4;
   }
-  const int kind = external ? 1 : 0;
   localityBuckets_[kind][bucket].fetch_add(1, std::memory_order_relaxed);
   localityDistanceSum_[kind].fetch_add(distance, std::memory_order_relaxed);
   localitySamples_[kind].fetch_add(1, std::memory_order_relaxed);
@@ -1346,6 +1351,7 @@ void BoidSimulation::initializeBoids(
   clusterUpdateDtAccumulator_ = 0.0f;
   interactionDtAccumulator_ = 0.0f;
   interactionFrameCounter_ = 0;
+  interactionUpdateCount_ = 0;
   simulationDtAccumulator_ = 0.0f;
   auto &globalSpeciesParams = speciesParams_;
   // globalSpeciesParams を更新

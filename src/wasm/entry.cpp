@@ -202,7 +202,7 @@ void beginLocalitySample() { BoidSimulation::instance().beginLocalitySample(); }
 void endLocalitySample() { BoidSimulation::instance().endLocalitySample(); }
 
 double localityValue(int kind, int metric) {
-  if (kind < 0 || kind > 1) {
+  if (kind < 0 || kind >= BoidSimulation::kLocalityKindCount) {
     return 0.0;
   }
   const auto stats = BoidSimulation::instance().getLocalityStats();
